@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zee — 不安から、備えへ。</title>
+<meta name="description" content="Zeeは、高度AI時代に防御準備が追いついていない組織と個人が、最初の一歩を踏み出すためのオープンプロジェクト。MIT・全部この場でオープン。" />
+
+<!-- Favicon (SVG inline, no extra file needed) -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3Ctext x='16' y='22' font-size='20' font-family='monospace' font-weight='700' fill='%23f0b97a' text-anchor='middle'%3EZ%3C/text%3E%3C/svg%3E" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Zee — 不安から、備えへ。" />
+<meta property="og:description" content="高度AI時代に防御準備が追いついていない組織と個人が、最初の一歩を踏み出すためのオープンプロジェクト。MIT・全部この場でオープン。" />
+<meta property="og:url" content="https://kamanoi.github.io/zee/" />
+<meta property="og:image" content="https://kamanoi.github.io/zee/og_card.png" />
+<meta property="og:image:width" content="2400" />
+<meta property="og:image:height" content="1350" />
+<meta property="og:site_name" content="Zee" />
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Zee — 不安から、備えへ。" />
+<meta name="twitter:description" content="高度AI時代に防御準備が追いついていない組織と個人が、最初の一歩を踏み出すためのオープンプロジェクト。MIT・全部この場でオープン。" />
+<meta name="twitter:image" content="https://kamanoi.github.io/zee/og_card.png" />
+
+<style>
+  :root{
+    --bg:#0a0b0e; --surface:#111318; --surface2:#0e1014;
+    --border:#1e232b; --text:#e7e9ec; --muted:#9aa2ad; --faint:#6b7280;
+    --accent:#22d3ee; --accent-dim:rgba(34,211,238,.10); --accent-bd:rgba(34,211,238,.35);
+    --danger:#f87171; --ok:#34d399; --warn:#fbbf24;
+    --mono:ui-monospace,SFMono-Regular,Menlo,"Roboto Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",Meiryo,sans-serif;
+    --maxw:1080px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);color:var(--text);font-family:var(--sans);
+    line-height:1.7;-webkit-font-smoothing:antialiased;letter-spacing:.01em;
+    overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--mono)}
+  .accent{color:var(--accent)}
+  section{padding:96px 0;border-top:1px solid var(--border)}
+  h2{font-size:clamp(24px,4vw,34px);font-weight:700;letter-spacing:-.02em;line-height:1.25;margin-bottom:18px}
+  h3{font-size:15px;font-weight:600;letter-spacing:.04em;color:var(--muted);text-transform:uppercase;margin-bottom:28px;font-family:var(--mono)}
+  p{color:var(--muted);font-size:16px}
+  .lead{color:var(--text);font-size:clamp(16px,2.2vw,19px)}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase;margin-bottom:18px}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:50;background:rgba(10,11,14,.72);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px}
+  .brand{font-family:var(--mono);font-weight:700;font-size:18px;letter-spacing:.16em}
+  .brand b{color:var(--accent)}
+  .nav-cta{font-family:var(--mono);font-size:13px;color:var(--muted);border:1px solid var(--border);padding:7px 14px;border-radius:7px;transition:.18s}
+  .nav-cta:hover{color:var(--text);border-color:var(--accent-bd)}
+
+  /* hero */
+  .hero{position:relative;padding:120px 0 100px;border-top:none;overflow:hidden}
+  .hero::before{content:"";position:absolute;inset:0;z-index:0;
+    background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);
+    background-size:46px 46px;opacity:.30;
+    mask-image:radial-gradient(circle at 50% 35%,#000 0%,transparent 72%);
+    -webkit-mask-image:radial-gradient(circle at 50% 35%,#000 0%,transparent 72%);}
+  .hero .wrap{position:relative;z-index:1}
+  .hero h1{font-size:clamp(34px,6.2vw,60px);font-weight:800;letter-spacing:-.03em;line-height:1.15;margin-bottom:26px}
+  .hero h1 .dim{color:var(--faint)}
+  .hero .lead{max-width:680px;margin-bottom:36px}
+  .btns{display:flex;gap:14px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:14px;font-weight:600;padding:13px 22px;border-radius:9px;transition:.18s;border:1px solid transparent;display:inline-flex;align-items:center;gap:9px}
+  .btn-primary{background:var(--accent);color:#04181c}
+  .btn-primary:hover{box-shadow:0 0 0 4px var(--accent-dim);transform:translateY(-1px)}
+  .btn-ghost{border-color:var(--border);color:var(--text)}
+  .btn-ghost:hover{border-color:var(--accent-bd)}
+  .note{margin-top:22px;font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+
+  /* project status banner */
+  .status{
+    margin-top:34px;background:var(--surface);border:1px solid var(--border);
+    border-left:3px solid var(--warn);border-radius:10px;
+    padding:20px 24px;font-family:var(--mono);font-size:13.5px;color:var(--muted);
+    line-height:1.7;
+  }
+  .status b{color:var(--warn);font-weight:600;letter-spacing:.08em}
+
+  /* stats */
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin:34px 0 26px}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px}
+  .stat .num{font-family:var(--mono);font-size:clamp(26px,4vw,36px);font-weight:700;color:var(--accent);line-height:1;margin-bottom:10px}
+  .stat .desc{font-size:14px;color:var(--muted);line-height:1.6}
+  .src{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:6px}
+  .callout{border-left:2px solid var(--accent-bd);background:var(--accent-dim);padding:16px 20px;border-radius:0 10px 10px 0;margin:24px 0;font-size:15px;color:var(--text)}
+
+  /* offer cards */
+  .acts{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:8px}
+  .act{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:26px}
+  .act .k{font-family:var(--mono);font-size:13px;color:var(--accent);margin-bottom:12px}
+  .act h4{font-size:19px;font-weight:700;margin-bottom:8px;letter-spacing:-.01em}
+  .act p{font-size:14.5px}
+  .act .lnk{margin-top:12px;font-family:var(--mono);font-size:13px;color:var(--accent)}
+
+  /* layers */
+  .layers{display:grid;gap:1px;background:var(--border);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  .layer{background:var(--surface);padding:22px 24px;display:grid;grid-template-columns:54px 1fr 110px;gap:18px;align-items:start}
+  .layer .n{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--accent)}
+  .layer h4{font-size:17px;font-weight:700;margin-bottom:5px}
+  .layer p{font-size:14.5px}
+  .layer .st{font-family:var(--mono);font-size:11.5px;color:var(--muted);text-align:right;letter-spacing:.05em;padding-top:6px}
+  .layer .st.done{color:var(--ok)}
+  .layer .st.partial{color:var(--warn)}
+  .layer .st.research{color:var(--faint)}
+
+  /* coverage */
+  .cov{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .cov .col{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:26px}
+  .cov .col.no{border-color:rgba(248,113,113,.22)}
+  .cov .lbl{font-family:var(--mono);font-size:13px;letter-spacing:.04em;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+  .cov .yes .lbl{color:var(--ok)}
+  .cov .no .lbl{color:var(--danger)}
+  .cov li{list-style:none;font-size:14.5px;color:var(--muted);padding:7px 0 7px 22px;position:relative;border-top:1px solid var(--border)}
+  .cov li:first-of-type{border-top:none}
+  .cov .yes li::before{content:"+";position:absolute;left:0;color:var(--ok);font-family:var(--mono);font-weight:700}
+  .cov .no li::before{content:"\2212";position:absolute;left:0;color:var(--danger);font-family:var(--mono)}
+  .cov .col.no li small{display:block;color:var(--faint);font-size:12.5px}
+  .nopct{font-family:var(--mono);font-size:13px;color:var(--faint);margin-bottom:20px}
+
+  /* matrix */
+  .matrix{margin-top:18px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--surface)}
+  .matrix table{width:100%;border-collapse:collapse;font-size:14px}
+  .matrix th,.matrix td{padding:12px 14px;text-align:left;border-top:1px solid var(--border);color:var(--muted)}
+  .matrix th{background:var(--surface2);color:var(--text);font-weight:600;font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;border-top:none}
+  .matrix td.os{color:var(--text);font-weight:600;font-family:var(--mono);font-size:13px}
+  .matrix td.yes{color:var(--ok);font-family:var(--mono);font-size:12.5px}
+  .matrix td.no{color:var(--faint);font-family:var(--mono);font-size:12.5px}
+  .matrix td.note{font-size:13px}
+
+  /* generic two-col feature */
+  .feat{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:start}
+  .feat ul{margin-top:6px}
+  .feat li{list-style:none;font-size:15px;color:var(--muted);padding:9px 0 9px 20px;position:relative}
+  .feat li::before{content:"\203A";position:absolute;left:0;color:var(--accent);font-family:var(--mono)}
+  .lim li::before{content:"\2212";color:var(--warn)}
+
+  /* code block */
+  .code{background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:16px 18px;font-family:var(--mono);font-size:13.5px;color:var(--muted);margin-top:18px;white-space:pre-wrap;line-height:1.7}
+  .code .c{color:var(--faint)}
+  .code .b{color:var(--accent)}
+
+  /* footer */
+  footer{padding:60px 0 80px;border-top:1px solid var(--border)}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:24px;justify-content:space-between;align-items:center}
+  .fbrand{font-family:var(--mono);font-weight:700;letter-spacing:.16em;font-size:16px}
+  .flinks{display:flex;flex-wrap:wrap;gap:22px;font-family:var(--mono);font-size:13.5px;color:var(--muted)}
+  .flinks a:hover{color:var(--accent)}
+  .copyright{font-family:var(--mono);font-size:12px;color:var(--faint);margin-top:14px;width:100%}
+
+  @media (max-width:760px){
+    section{padding:64px 0}
+    .stats,.acts,.cov,.feat{grid-template-columns:1fr}
+    .layer{grid-template-columns:40px 1fr;gap:14px}
+    .layer .st{grid-column:1 / -1;text-align:left;padding-top:0}
+    .matrix table{font-size:12.5px}
+    .matrix th,.matrix td{padding:9px 8px}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand">ZEE<b>.</b></div>
+    <a class="nav-cta" href="#get">GitHubで入手 ↗</a>
+  </div>
+</nav>
+
+<!-- 1. HERO -->
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">OPEN PROJECT — POST-INTRUSION PREP</div>
+    <h1>不安から、備えへ。<br /><span class="dim">高度AI時代の、</span>最初の一歩。</h1>
+    <p class="lead">Zee は、高度AI時代に防御準備が追いついていない組織と個人が、最初の一歩を踏み出すためのオープンプロジェクトです。侵入を防ぐ道具ではなく、<span class="accent">盗まれにくくし、時間を稼ぐ</span>ことを設計目標にしています。</p>
+    <div class="btns">
+      <a class="btn btn-primary" href="#get">GitHubで入手する</a>
+      <a class="btn btn-ghost" href="#mvp">使い方を見る</a>
+    </div>
+    <div class="note">無料・オープンソース（MIT）／全資料はこのリポジトリで公開</div>
+
+    <div class="status">
+      <b>PROJECT STATUS</b> — Early Public / Research Project<br />
+      Zee is not a production-ready security product.<br />
+      Zee does not currently guarantee protection, containment, prevention of data theft, or detection effectiveness.<br />
+      This repository currently provides architecture, research direction, preparation guidance, and experimental concepts under active development.
+    </div>
+  </div>
+</header>
+
+<!-- 2. WHY -->
+<section id="why">
+  <div class="wrap">
+    <div class="eyebrow">なぜ Zee があるのか</div>
+    <h2>社会の不安を、少しでも減らしたい。</h2>
+    <p class="lead" style="max-width:760px">AIは素晴らしい技術です。しかし攻撃側もそれを使えます。問題はAIそのものではなく、社会の準備が追いついていないこと。Zeeが向き合うのは、攻撃能力の進化速度と、防御準備の普及速度の差です。</p>
+    <p style="margin-top:14px;max-width:760px">Zeeが有名になることが成功ではありません。社会が安定すれば成功です。誰かがより良い方法を作るなら、それでも良いと考えています。</p>
+  </div>
+</section>
+
+<!-- 3. MYTHOS PREP -->
+<section id="mythos">
+  <div class="wrap">
+    <div class="eyebrow">Mythos 時代の備え</div>
+    <h2>機械の速度で動く攻撃が現れた。</h2>
+    <p class="lead" style="margin-bottom:6px">脆弱性の「発見」と「武器化」が、安く・速く・大量になっています。以下はいずれも、AIを開発するAnthropic自身が公表した数字です。</p>
+    <div class="stats">
+      <div class="stat">
+        <div class="num">181<span style="font-size:.5em;color:var(--muted)"> 回</span></div>
+        <div class="desc">旧世代モデルが数百回中2回しか作れなかった攻撃コードを、新世代は動作する形で生成（FirefoxのJSエンジン検証）</div>
+      </div>
+      <div class="stat">
+        <div class="num">27<span style="font-size:.5em;color:var(--muted)"> 年</span></div>
+        <div class="desc">専門家監査と自動テストを生き延びたOpenBSDの欠陥を、約1,000回の試行・総額2万ドル未満で発見</div>
+      </div>
+      <div class="stat">
+        <div class="num">23,000<span style="font-size:.5em;color:var(--muted)">+</span></div>
+        <div class="desc">横断調査で見つかった脆弱性候補。約50億台に影響する暗号ライブラリ欠陥（CVE-2026-5194）もこの流れで発見</div>
+      </div>
+    </div>
+    <div class="src">出典：Anthropic Red Team（red.anthropic.com）／ Project Glasswing</div>
+    <div class="callout">これらは<b>攻撃側の能力</b>を示す数字です。Zeeはそれを止める道具ではありません。Zeeが向き合うのは、攻撃能力の進化速度と防御準備の普及速度の<b>差</b>です。</div>
+  </div>
+</section>
+
+<!-- 4. WHAT ZEE OFFERS -->
+<section id="what">
+  <div class="wrap">
+    <div class="eyebrow">Zee でできること</div>
+    <h2>準備・設計・研究方向と、動く軽量 MVP。</h2>
+    <p class="lead" style="margin-bottom:24px">現段階の Zee が提供するのは、以下です。</p>
+    <div class="acts">
+      <div class="act">
+        <div class="k">01 / DOC</div>
+        <h4>Starter Guide</h4>
+        <p>何から考え始めればよいかの最初の一歩。不安の整理・「絶対盗まれたくない情報」の棚卸し・検知体制の現在地確認・復旧手順の言語化など、6つの起点。</p>
+        <div class="lnk">→ STARTER_GUIDE.md</div>
+      </div>
+      <div class="act">
+        <div class="k">02 / DOC</div>
+        <h4>Architecture 概要</h4>
+        <p>設計の意図と各構成要素の役割。実装の現在地（どの層が動き、どの層が研究段階か）も併せて公開。</p>
+        <div class="lnk">→ ARCHITECTURE.md</div>
+      </div>
+      <div class="act">
+        <div class="k">03 / DOC</div>
+        <h4>Research note</h4>
+        <p>研究方向としての CDS とアフィンコラッツ研究。暗号学的保証ではなく、罠多様化（trap diversification）のオープンクエスチョンとして扱う。</p>
+        <div class="lnk">→ RESEARCH.md</div>
+      </div>
+      <div class="act">
+        <div class="k">04 / CODE</div>
+        <h4>MVP 実装</h4>
+        <p>軽量な囮トリップワイヤ＋自動封じ込め。クロスOS（Linux／macOS／Windows）対応・<span class="accent">既定 dry_run</span>。実遮断は資産プロファイルで明示昇格して初めて動く。</p>
+        <div class="lnk">→ src/zee/</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 5. MVP -->
+<section id="mvp">
+  <div class="wrap">
+    <div class="eyebrow">MVP — 動く囮トリップワイヤ</div>
+    <h2>既定 dry_run。明示昇格まで実遮断はしない。</h2>
+    <p class="lead" style="margin-bottom:6px">Zee は侵入を防ぐ層ではなく、侵入後に<b>狭く高信頼な検知信号（囮への接触）</b>を1本足す層です。「あなたの検知体制全般」を肩代わりするものではありません。</p>
+    <div class="code"><span class="c"># 1. インストール</span>
+git clone https://github.com/KAMANOI/zee.git
+cd zee
+pip install -e .
+
+<span class="c"># 2. 資産プロファイルを作成</span>
+cp examples/assets.example.yaml ./assets.yaml
+<span class="c"># 編集して decoy_paths を自組織のパスに置き換える</span>
+
+<span class="c"># 3. 監視開始（既定は dry_run、実遮断なし）</span>
+zee watch -c ./assets.yaml
+
+<span class="c"># 4. 別ウィンドウで攻撃者として囮を読んでみる</span>
+cat ~/.aws/credentials.decoy   <span class="c"># この瞬間 zee が高信頼イベントを記録</span></div>
+
+    <h3 style="margin-top:36px">検知能力マトリクス</h3>
+    <div class="matrix">
+      <table>
+        <thead>
+          <tr><th>OS</th><th>Backend</th><th>open</th><th>read</th><th>modify</th><th>canary fallback</th><th>status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="os">Linux</td><td class="note">inotify</td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td><td class="no">no</td><td class="note">implemented</td></tr>
+          <tr><td class="os">macOS</td><td class="note">kqueue + canary</td><td class="no">no</td><td class="no">no</td><td class="yes">yes</td><td class="yes">yes</td><td class="note">implemented</td></tr>
+          <tr><td class="os">Windows</td><td class="note">ReadDirectoryChangesW + canary</td><td class="no">no</td><td class="no">no</td><td class="yes">yes</td><td class="yes">yes</td><td class="note">implemented<br /><small style="color:var(--faint)">(Windows 実機未検証)</small></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px;font-size:13.5px;color:var(--faint)">macOS・Windows は OS の制約で「読み取り検知」が直接できないため、囮ファイル内に埋め込んだ canary URL（外部発火）で補います。</p>
+  </div>
+</section>
+
+<!-- 6. ARCHITECTURE / LAYERS -->
+<section id="how">
+  <div class="wrap">
+    <div class="eyebrow">仕組み</div>
+    <h2>意図する5つの層と、実装の現在地。</h2>
+    <p class="lead" style="margin-bottom:28px">それぞれが単独でも働く設計を意図しています。実装状況はそれぞれ正直に表示します。</p>
+    <div class="layers">
+      <div class="layer">
+        <div class="n">01</div>
+        <div><h4>ふるまい観察（囮トリップワイヤ）</h4>
+        <p>選ばれた囮ファイルへの接触を観察。Linux は read 含む直接観察、macOS・Windows は変更観察＋canary フォールバック。</p></div>
+        <div class="st done">IMPLEMENTED</div>
+      </div>
+      <div class="layer">
+        <div class="n">02</div>
+        <div><h4>番人（安全装置）</h4>
+        <p>正規プロセスを罠に巻き込まないための確定的ゲート。allowlist データ構造は実装済み。responder への連結は次フェーズ。</p></div>
+        <div class="st partial">PARTIAL</div>
+      </div>
+      <div class="layer">
+        <div class="n">03</div>
+        <div><h4>偽データへのリダイレクト</h4>
+        <p>特定の構成において、選ばれたアクセス試行を目印つきの偽データへリダイレクトまたは置換できる。</p></div>
+        <div class="st research">RESEARCH</div>
+      </div>
+      <div class="layer">
+        <div class="n">04</div>
+        <div><h4>偽内部ネットワーク</h4>
+        <p>本物そっくりの偽環境で探索のコストと時間を引き上げることを目指す。</p></div>
+        <div class="st research">RESEARCH</div>
+      </div>
+      <div class="layer">
+        <div class="n">05</div>
+        <div><h4>長期相関</h4>
+        <p>数ヶ月スパンの潜伏型攻撃を時間をまたいで結びつけて検知する研究方向。</p></div>
+        <div class="st research">RESEARCH</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 7. COVERAGE -->
+<section id="coverage">
+  <div class="wrap">
+    <div class="eyebrow">カバレッジ</div>
+    <h2>何を守り、何を守らないか。</h2>
+    <p class="nopct">※「防御率○%」のような数字は出しません。実環境はそれほど単純でなく、誇張は信頼を損なうためです。</p>
+    <div class="cov">
+      <div class="col yes">
+        <div class="lbl">対応する</div>
+        <ul>
+          <li>侵入後の異常検知（囮への接触＝高信頼イベント）</li>
+          <li>OS別の自動封じ込め（full / egress・既定 dry_run）</li>
+          <li>レイテンシ・誤検知マーカーの計測</li>
+          <li>誤作動の最小化（正規プロセス保護のための allowlist データ構造）</li>
+          <li>能力マトリクスでの正直な OS 別開示</li>
+        </ul>
+      </div>
+      <div class="col no">
+        <div class="lbl">対応しない（正直に）</div>
+        <ul>
+          <li>侵入そのものの阻止<small>入口防御（ファイアウォール・EDR・パッチ）の役割。Zeeは置き換えではなく補完</small></li>
+          <li>あなたの検知体制全般の肩代わり<small>Zeeは「狭く高信頼な信号」を1本足す層</small></li>
+          <li>ネットワーク層での攻め返し（C2汚染）<small>現時点では未実装</small></li>
+          <li>脆弱性の修正・パッチ適用<small>Zeeは検知と無力化の層。修正は別途必要</small></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8. SAFETY -->
+<section id="safety">
+  <div class="wrap">
+    <div class="eyebrow">誤作動を防ぐ設計</div>
+    <div class="feat">
+      <div>
+        <h2>正規の社員を“攻撃者扱い”しないことを最優先に。</h2>
+        <p>侵入後で作動する層の最大のリスクは、正規のプロセスや社員を誤って罠に引き込んでしまうことです。Zeeはこのリスクを<b>最小化</b>することを目指します（「ゼロ」は約束しません）。</p>
+      </div>
+      <div>
+        <ul>
+          <li>検知と引き込みの間に二重の安全装置を置く。</li>
+          <li>「誤作動の最小化」と「重大な攻撃の検知」という相反する要件を、1つの仕組みに詰め込まず役割を分けて両立。</li>
+          <li>判定は AI の裁量ではなく確定的なルールで行う。</li>
+          <li>初期は全資産 dry_run。誤検知ゼロを観測してから資産ごとに昇格する運用を Starter Guide で案内。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 9. PRIVACY -->
+<section id="privacy">
+  <div class="wrap">
+    <div class="eyebrow">プライバシー</div>
+    <h2>残さない設計。</h2>
+    <ul class="feat" style="display:block">
+      <li>生のIP・個人を特定できる情報は、ログのどの欄にも平文で残さない（保存直前に秘匿・ハッシュ化）。</li>
+      <li>蓄積データは期限を過ぎると自動的に削除する設計目標。</li>
+      <li>相関は「個人」ではなく「セッション」を軸に行うため、正規ユーザーは分析対象に入らない。</li>
+    </ul>
+    <p style="margin-top:14px;font-size:13.5px;color:var(--faint)">これらは設計目標として書いています。実装の各段階で同じ原則が守られているかは、実装側のドキュメントで確認できます。</p>
+  </div>
+</section>
+
+<!-- 10. LIMITATIONS -->
+<section id="limitations">
+  <div class="wrap">
+    <div class="eyebrow">Limitations — Zee がやらないこと</div>
+    <h2>失敗条件を先に書いておきます。</h2>
+    <ul class="feat lim" style="display:block;max-width:760px">
+      <li><b style="color:var(--text)">侵入そのものは防がない</b> — 入口防御（ファイアウォール・EDR・パッチ）の役割を置き換えるものではありません。</li>
+      <li><b style="color:var(--text)">検知中心</b> — 自動の封じ込め機構は資産プロファイルで明示昇格して初めて動きます。既定は dry_run。</li>
+      <li><b style="color:var(--text)">限界がある</b> — 機械の速度で動く相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。</li>
+      <li><b style="color:var(--text)">未測定</b> — 効果はまだ独立に検証されていません。本番運用の前に、ご自身の環境で必ず確認してください。</li>
+    </ul>
+    <p style="margin-top:14px;font-size:14px;color:var(--muted)">これは床であって天井ではありません。安全だと言う前に、失敗条件を先に書きました。</p>
+  </div>
+</section>
+
+<!-- 11. GET -->
+<section id="get">
+  <div class="wrap">
+    <div class="eyebrow">入手</div>
+    <h2>全部この場で、オープン。</h2>
+    <p class="lead" style="max-width:680px">Zee は MIT ライセンスのもとで、すべての文書とコードを GitHub で公開しています。クラウド契約や外部サービス登録は不要です。</p>
+    <div class="btns" style="margin-top:28px">
+      <a class="btn btn-primary" href="https://github.com/KAMANOI/zee">GitHub で入手する</a>
+      <a class="btn btn-ghost" href="https://github.com/KAMANOI/zee/blob/main/STARTER_GUIDE.md">Starter Guide を読む</a>
+    </div>
+  </div>
+</section>
+
+<!-- 12. DISCLAIMER -->
+<section id="disclaimer">
+  <div class="wrap">
+    <div class="eyebrow">免責 — 正直にお伝えすること</div>
+    <h2 style="max-width:760px">万能ではありません。Zee は“もう一層”です。</h2>
+    <div class="feat">
+      <ul>
+        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b> の段階です。本番導入の前に、ご自身の環境での検証を推奨します。</li>
+        <li>侵入そのものを防ぐものでも、すべての攻撃を検知できるものでもありません。</li>
+      </ul>
+      <ul>
+        <li>機械速度の攻撃能力は進化を続けます。新世代モデルが広く使える局面では、Zee 自体の脆弱性チェックとパッチ適用が必要になります。</li>
+        <li>入口防御・修正運用を置き換えるものではなく、補完する一層です。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 13. SPONSOR -->
+<section id="support">
+  <div class="wrap" style="text-align:center">
+    <div class="eyebrow" style="justify-content:center">支援</div>
+    <h2>無料で使えます。応援は任意です。</h2>
+    <p class="lead" style="max-width:560px;margin:0 auto 28px">Zee は無料です。もし役に立ったら、GitHub Sponsors からの支援を歓迎します。</p>
+    <div class="btns" style="justify-content:center">
+      <a class="btn btn-ghost" href="https://github.com/sponsors/KAMANOI">♡ GitHub Sponsors</a>
+    </div>
+  </div>
+</section>
+
+<!-- 14. FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="fbrand">ZEE<span class="accent">.</span></div>
+    <div class="flinks">
+      <a href="https://github.com/KAMANOI/zee">GitHub</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/STARTER_GUIDE.md">Starter Guide</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/ARCHITECTURE.md">Architecture</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/RESEARCH.md">Research</a>
+      <a href="https://github.com/KAMANOI/collatz-prime-survival/blob/main/paper/prime_survival_affine_collatz_v20.pdf">論文 (v20)</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/LICENSE">MIT License</a>
+    </div>
+    <div class="copyright">© 2026 Hiroki Kamanoi · Zee is an Early Public / Research Project. Provided "as is", without warranty.</div>
+  </div>
+</footer>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Zee
 
-> 🌐 日本語: [README.md](./README.md)
+> 🌐 日本語: [README.md](./README.md) ｜ 🌐 LP: https://kamanoi.github.io/zee/
 
 > Zee is an open project that helps organizations and individuals move from concern to preparedness in the age of advanced AI.
 
@@ -134,7 +134,7 @@ Verified on macOS. Linux backend complete in code, continuous-run verification o
 Zee draws its boundary honestly.
 
 - **It does not prevent intrusion itself** — perimeter defenses (firewall, EDR, patching) are not replaced by Zee
-- **It is detection-centered** — the automated containment mechanism (MVP) is to be released separately and is not yet documented
+- **It is detection-centered** — automated containment runs only when an asset profile is promoted to `response_mode: auto` AND `dry_run: false`. Default is dry_run (observe only)
 - **It has limits** — against machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range
 - **It is not measured** — effectiveness has not been independently validated. Verify in your own environment before any production use
 

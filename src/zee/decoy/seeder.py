@@ -17,29 +17,35 @@ from ..errors import ZeeError, Z201_DECOY_PATH_NOT_WRITABLE
 # keys, and hostnames below are fabricated and do not authenticate to
 # anything real. They exist solely to bait reads.
 #
-# Marker strings are split across adjacent string literals so that
-# pre-commit and CI secret scanners do not flag this file. Python
-# concatenates adjacent string literals at parse time, so the output
-# content (after seeding) is unchanged.
-_AWS_KEY_PREFIX = "A" "KIA"  # noqa: E501  AWS access-key-id prefix, split for scanners
-_AWS_KEY = _AWS_KEY_PREFIX + "00000000DECOY000"
-_AWS_SECRET = "decoy" + "DECOY" * 7
-_STRIPE_KEY = "s" "k_" "live_" + "DECOY" * 5
+# Marker strings deliberately include underscores so they do NOT match
+# the actual production regular expressions used by Stripe/AWS/GitHub
+# secret scanners:
+#   - AWS access keys:   AKIA[0-9A-Z]{16}            (no underscores)
+#   - Stripe live keys:  sk_live_[A-Za-z0-9]{24,}    (no underscores after prefix)
+# An attacker doing surface inspection still sees credential-shaped strings,
+# but no real scanner will fire a false positive on the decoy contents
+# (which would cascade into the operator's own AWS / Stripe / GitHub).
+# Adjacent-literal splitting is kept to also keep this source file itself
+# scanner-clean for pre-commit hooks.
+_AWS_KEY_PREFIX = "A" "KIA"  # split so this source isn't itself flagged
+_AWS_KEY = _AWS_KEY_PREFIX + "_DECOY_NOT_REAL"          # has _, breaks AWS regex
+_AWS_SECRET = "zee_decoy_not_real_aws_secret_xxxxxxxxxx"
+_STRIPE_KEY = "s" "k_" "live_" + "ZEE_DECOY_NOT_REAL_dummy_value"  # has _, breaks Stripe regex
 _PEM_BEGIN = "-----" "BEGIN " "OPENSSH PRIVATE KEY" "-----"
 _PEM_END = "-----" "END " "OPENSSH PRIVATE KEY" "-----"
 
 _TEMPLATES: dict[str, str] = {
     "credentials": (
-        "# DO NOT COMMIT\n"
+        "# DO NOT COMMIT — zee decoy file, not real credentials\n"
         "# rotated quarterly, last touched {ts}\n"
         "[default]\n"
         f"aws_access_key_id = {_AWS_KEY}\n"
         f"aws_secret_access_key = {_AWS_SECRET}\n"
     ),
     "env": (
-        "# local overrides, do not check in\n"
+        "# local overrides, do not check in — zee decoy file\n"
         "DATABASE_URL=postgres://decoy:decoy@db.internal:5432/app\n"
-        "JWT_SECRET=decoy-not-a-real-secret\n"
+        "JWT_SECRET=zee_decoy_not_a_real_secret\n"
         f"STRIPE_SECRET_KEY={_STRIPE_KEY}\n"
     ),
     "ssh_key": (
