@@ -1,73 +1,101 @@
 # Zee — Architecture Overview
 
-> 日本語: [ARCHITECTURE.md](./ARCHITECTURE.md)
-
-> This document is a **high-level design overview**. It does not contain the specific trap activation conditions, thresholds, or anything that directly enables evasion (those are disclosed only to verified applicants).
-
-## Positioning
-
-Zee is a **post-intrusion defense** layer.
-It does not replace perimeter defenses (firewalls, EDR, patching); it activates against an adversary who has already slipped past them and is inside.
-
-The design philosophy shifts from "build it so it can't break" to **"design it assuming it will be broken."**
-Rather than preventing intrusion itself, Zee makes sure **an intrusion never turns into a result.**
-
-## End-to-end flow
+> 🌐 日本語: [ARCHITECTURE.md](./ARCHITECTURE.md)
 
 ```
-              ┌─────────────────────────────────────────────┐
-              │  Legitimate business traffic (never ensnared) │
-              └─────────────────────────────────────────────┘
-                              │
-   Intruder ──▶ 1. Behavior detection ──▶ 2. Gatekeepers ──▶ Luring
-                                            │ (deterministically prevents false positives)
-                                            ▼
-                          ┌─────────────────────────────┐
-                          │  Trap environment            │
-                          │   3. Data poisoning          │
-                          │   4. Fake internal network   │
-                          └─────────────────────────────┘
-                                            │
-                                            ▼
-                                 5. Long-term correlation (low-and-slow APT)
+Project Status:
+Early Architecture / Research Preview
+
+This document describes the intended architecture of Zee.
+
+It should not be interpreted as proof that every component is production-ready, independently validated, or suitable for deployment without expert review.
 ```
-
-## Role of each layer
-
-| Layer | Role | Disclosure |
-|---|---|---|
-| 1. Behavior detection | Learns the normal behavior of every process and detects deviation — a general-purpose anomaly detector | Mechanism public |
-| 2. Gatekeepers | Stand between detection and luring, deterministically deciding so that legitimate processes and staff are not ensnared | Mechanism public / conditions restricted |
-| 3. Data poisoning | Swaps stolen data for marked decoys that reveal the source the moment they are used | Mechanism public / generation & marking rules restricted |
-| 4. Fake internal network | A convincing fake environment that raises the cost and time of reconnaissance | Mechanism public / configuration rules restricted |
-| 5. Long-term correlation | Connects stealthy attacks spanning months | Mechanism public / detection thresholds restricted |
-
-## Safety principles (preventing false positives)
-
-The biggest risk of post-intrusion defense is **mistakenly ensnaring legitimate processes or staff.** Zee is designed around the following principles.
-
-- Place **dual gatekeepers** between detection and luring.
-- Satisfy the conflicting requirements of "zero false positives" and "detecting serious attacks" not by cramming them into one mechanism, but by **separating responsibilities.**
-- Decisions are made by **deterministic rules**, not at the AI's discretion (the specific activation conditions are disclosed only to verified applicants).
-
-## Privacy principles
-
-- Raw IP addresses and personally identifiable information are never stored in plaintext in any log field (redacted/hashed just before storage).
-- Accumulated data is automatically deleted once it expires.
-- Correlation is keyed on the "session" (acting subject), not the individual, so legitimate users are never part of the analysis.
-
-## Dependencies and distribution
-
-- Runs on the Python standard library only (fewer dependencies = smaller attack surface).
-- Public: the overall mechanism, this document, and the paper.
-- Applicant-restricted: the specific trap activation rules, conditions, and thresholds (identity verified via corporate registration number, etc.; national ID / My Number is never collected).
-
-## Mathematical basis
-
-The undecidability at the core of the trap is based on prime survival in affine Collatz dynamics.
-**Prime survival in affine Collatz dynamics (v20)**
-→ https://github.com/KAMANOI/collatz-prime-survival/blob/main/paper/prime_survival_affine_collatz_v20.pdf
 
 ---
 
-<sub>Additional per-layer explanations are in progress.</sub>
+## Positioning
+
+Zee is intended as a layer that operates **post-intrusion**.
+It does not replace perimeter defenses (firewalls, EDR, patching). It is designed to reduce the chance that an intrusion immediately turns into data theft, operational damage, or undetected persistence, in cases where an adversary has already slipped past the perimeter.
+
+The underlying shift is from "build it so it can't break" to **"design it assuming it will be broken."** This is not a thesis Zee invented; it aligns with where current security practice is broadly heading.
+
+---
+
+## Intended end-to-end flow
+
+```
+              ┌─────────────────────────────────────────────────┐
+              │  Legitimate traffic (intended not to be ensnared) │
+              └─────────────────────────────────────────────────┘
+                              │
+   Intruder ──▶ 1. Behavior observation ──▶ 2. Gatekeepers ──▶ Luring
+                                              │ (deterministic gates to reduce false-positive risk)
+                                              ▼
+                            ┌────────────────────────────────────┐
+                            │  Experimental trap environment      │
+                            │    (research-stage)                 │
+                            │   3. Redirection to decoy data      │
+                            │   4. Fake internal network          │
+                            └────────────────────────────────────┘
+                                              │
+                                              ▼
+                                  5. Long-term correlation
+                                      (low-and-slow APT research)
+```
+
+---
+
+## Role of each layer
+
+| Layer | Role | Status |
+|---|---|---|
+| 1. Behavior observation | Observes selected process, file, and network behaviors to identify suspicious deviations | Mechanism public |
+| 2. Gatekeepers | Sit between detection and luring; uses deterministic gates to reduce the risk of false positives | Mechanism public |
+| 3. Decoy redirection | In controlled configurations, may redirect or replace selected access attempts toward marked decoy data | Research-stage |
+| 4. Fake internal network | Aims to raise the cost and time of reconnaissance with a convincing fake environment | Research-stage |
+| 5. Long-term correlation | Research direction for connecting stealthy attacks spanning months | Research-stage |
+
+Each research-stage item has not been independently validated for effectiveness.
+
+---
+
+## Safety principles (minimizing false positives)
+
+The biggest risk of a post-intrusion layer is **mistakenly ensnaring legitimate processes or staff**. Zee aims to **minimize** that risk; it does not promise zero.
+
+- Place **dual gatekeepers** between detection and luring
+- Satisfy the conflicting requirements of "minimizing false positives" and "detecting serious attacks" not by cramming them into one mechanism, but by **separating responsibilities**
+- Decisions are made by **deterministic rules**, not at the AI's discretion
+
+Concrete activation conditions and thresholds are parameters refined during implementation, and some are still under research.
+
+---
+
+## Privacy principles
+
+- Raw IP addresses and personally identifiable information are never stored in plaintext in any log field (redacted/hashed just before storage)
+- Accumulated data is automatically deleted once it expires
+- Correlation is keyed on the "session" (acting subject), not the individual, so legitimate users are never part of the analysis
+
+These are design goals. Whether each implementation stage actually honors them should be checked in the implementation-side documentation.
+
+---
+
+## Dependencies and distribution
+
+- Designed to run on the Python standard library only (fewer dependencies = smaller attack surface)
+- Everything in this repository is open under the MIT License
+
+---
+
+## Research direction
+
+The research direction around trap diversification is discussed separately:
+→ [RESEARCH.en.md](./RESEARCH.en.md)
+
+The affine Collatz research referenced there is described as a **research direction**, not as a cryptographic or containment guarantee.
+
+---
+
+<sub>Detailed per-layer notes, implementation guidance, and MVP release will follow.</sub>

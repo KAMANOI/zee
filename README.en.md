@@ -2,97 +2,98 @@
 
 > 🌐 日本語: [README.md](./README.md)
 
-**Intrusion can no longer be stopped 100%. So Zee defends what happens *after* the breach.**
+> Zee is an open project that helps organizations and individuals move from concern to preparedness in the age of advanced AI.
 
-Zee is a free, open-source **post-intrusion defense layer** that activates *after* an attacker is already inside.
-It does not replace perimeter defenses (firewalls, EDR, patching). Instead, against an adversary who has slipped past them, Zee **lets them steal, neutralizes what they take, and exposes them** — so that a breach never pays off.
+```
+Project Status:
+Early Public / Research Project
 
-> ⚠️ This repository is a proof-of-concept (PoC). Validate in your own environment before any production use. See [Disclaimer](#disclaimer).
+Zee is not a production-ready security product.
+
+Zee does not currently guarantee protection, containment, prevention of data theft, or detection effectiveness.
+
+This repository currently provides architecture, research direction, preparation guidance, and experimental concepts under active development.
+```
 
 ---
 
-## Why now — attacks at machine speed
+## Why Zee exists
 
-Finding and weaponizing vulnerabilities has become cheap, fast, and high-volume. The figures below were all published by Anthropic, the company that builds the AI models.
+The starting point is simple: to reduce social anxiety.
+
+AI is a remarkable technology. Adversaries can use it too. The problem is not AI itself; it is that society's preparedness has not kept up.
+
+What we want to protect is everyday safety, trust between people, the honest effort of legitimate businesses, and the value of good intentions. Zee becoming well-known is not the goal. Society staying stable is. If someone builds a better way, that is fine too.
+
+---
+
+## Preparedness in the Mythos era
+
+Attacks now move at machine speed. Finding and weaponizing vulnerabilities has become cheap, fast, and high-volume.
+
+The figures below were all published by Anthropic, the company that builds the AI models.
 
 - A browser vulnerability (Firefox's JavaScript engine) that an older model could turn into working exploit code only twice in several hundred attempts was weaponized **181 times** by a newer model.
 - A flaw in OpenBSD that had survived **27 years** of expert audits and automated testing was discovered in **about 1,000 automated attempts for under USD 20,000**.
 - A broad sweep surfaced **23,000+** vulnerabilities, including a critical flaw in a cryptographic library affecting roughly **5 billion** devices (CVE-2026-5194).
 
-Sources: Anthropic Red Team ([red.anthropic.com](https://red.anthropic.com/)) / Project Glasswing
+Sources: Anthropic Red Team ([red.anthropic.com](https://red.anthropic.com/)) / Project Glasswing.
 
-> These figures describe **offensive (research-side) capability**. Zee operates on **post-intrusion defense** — a different layer. The two cannot be compared directly.
-
-Once discovery and weaponization are this cheap, fast, and abundant, attackers find the next way in before humans can patch every hole. Stopping every intrusion at the perimeter is no longer possible.
-Security is shifting from "build it so it can't break" to **"design it assuming it will be broken."** Zee takes responsibility for that "after."
+These describe **offensive capability**. Zee is not a tool to stop that capability.
+What Zee actually addresses is **the gap between the speed at which attack capability evolves and the speed at which defensive preparedness spreads**. Zee aims to narrow that gap a little.
 
 ---
 
-## How it works — five layers
+## What Zee is
 
-| Layer | What it does |
-|---|---|
-| 1. Behavior detection | Learns the normal behavior of every process and detects deviation. Reacts even to unknown techniques. |
-| 2. Luring (with gatekeepers) | Routes suspicious activity into a convincing trap — designed never to ensnare legitimate staff or processes. |
-| 3. Data poisoning | Swaps stolen data for marked decoys; the moment they're used, the attacker's infrastructure is revealed. |
-| 4. Fake internal network | Makes the real network hard to distinguish, sharply raising the cost and time of reconnaissance. |
-| 5. Long-term correlation | Connects slow, stealthy attacks (low-and-slow APTs) that unfold over months. |
+Zee starts not from "do not get breached" but from **"do not get robbed"**. Even more precisely, **"buy time"** — extend the window before specialized response and remediation arrive.
 
----
+This is a **design goal** at this stage, not a measured or validated performance claim.
 
-## Coverage — what it does and doesn't protect
+**Zee is not:**
+- A project to defeat AI
+- A national cyber weapon
+- A complete defense system
+- An affine Collatz advocacy project
 
-We do not publish numbers like "X% defense rate." Real environments aren't that simple, and exaggeration erodes trust. Instead, we state plainly what is and isn't covered.
-
-**Covered:** post-intrusion anomaly detection / neutralizing data theft / exposing attacker infrastructure / nullifying reconnaissance / detecting stealthy long-term attacks / suppressing false positives.
-
-**Not covered (honestly):**
-- Preventing the intrusion itself (the role of perimeter defense — Zee complements, not replaces it).
-- Network-layer counter-offense (C2 poisoning — not implemented yet; feasibility under review).
-- Fixing/patching vulnerabilities (Zee is the detection-and-neutralization layer).
+**Zee's purpose:** to reduce the number of "zero defense" situations.
 
 ---
 
-## Getting started
+## What Zee currently offers
 
-- No additional cloud subscriptions or external APIs required.
-- Runs on the Python standard library only (fewer dependencies = smaller attack surface).
-- Start with a detection-only "watch mode" in a few steps.
+At this stage Zee provides the following materials:
 
-```bash
-# Detection-only "watch mode" first
-$ ./zee --watch
-# Detailed steps coming soon
-```
+- **Starter Guide** — the first step in figuring out what to think about ([STARTER_GUIDE.en.md](./STARTER_GUIDE.en.md))
+- **Architecture overview** — design intent and the role of each component ([ARCHITECTURE.en.md](./ARCHITECTURE.en.md))
+- **Research note** — CDS and affine Collatz research as a research direction ([RESEARCH.en.md](./RESEARCH.en.md))
+
+A working lightweight MVP (decoy tripwire + automated containment) will be released separately. For now, the **preparation, design, and research direction** layers are what is public.
 
 ---
 
-## Disclosure policy (hybrid)
+## Limitations — what Zee does not do
 
-We publish what can be public and protect what could be abused.
+Zee draws its boundary honestly.
 
-- **Public (this repository, MIT):** the overall mechanism, an architecture overview, and the underlying paper.
-- **Applicant-restricted:** the full implementation, including the specific trap rules and conditions. Publishing these would let attackers evade them, so they go only to verified applicants.
+- **It does not prevent intrusion itself** — perimeter defenses (firewall, EDR, patching) are not replaced by Zee
+- **It is detection-centered** — the automated containment mechanism (MVP) is to be released separately and is not yet documented
+- **It has limits** — against machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range
+- **It is not measured** — effectiveness has not been independently validated. Verify in your own environment before any production use
 
-Identity verification for the restricted part uses **a corporate registration number, employee ID, or company email address.**
-**We never collect national ID numbers (My Number).**
-
-How to apply: coming soon.
+This is a floor, not a ceiling. We state the failure conditions before claiming safety.
 
 ---
 
-## Disclaimer
+## License
 
-- Zee is currently a **proof-of-concept (PoC)**.
-- Zee is **not a silver bullet.** It neither prevents intrusions nor detects every attack.
-- Machine-speed offensive capability keeps advancing. As newer models become widely available, Zee itself will need vulnerability review and patching.
-- Zee does not replace perimeter defense or patching operations — it is **one additional layer**.
+[MIT License](./LICENSE). Everything in this repository is open.
 
 ---
 
 ## Paper
 
-The mathematical basis of the design:
+The mathematical background of the design:
 **Prime survival in affine Collatz dynamics (v20)**
 → https://github.com/KAMANOI/collatz-prime-survival/blob/main/paper/prime_survival_affine_collatz_v20.pdf
 
@@ -100,14 +101,13 @@ The mathematical basis of the design:
 
 ## Support
 
-Zee is free. If it helps you, support via GitHub Sponsors is welcome (optional, zero platform fee).
+Zee is free. If it helps you, support via GitHub Sponsors is welcome.
 
 ---
 
-## License
+## Disclaimer
 
-[MIT License](./LICENSE)
-
----
-
-<sub>Japanese: [README.md](./README.md) · Installation, application process, and more coming soon.</sub>
+- Zee is currently at the **Early Public / Research Project** stage
+- Zee is **not a silver bullet** — it does not prevent intrusions and does not detect every attack
+- Machine-speed offensive capability keeps advancing. As newer models become widely available, **Zee itself will need vulnerability review and patching**
+- Zee does not replace perimeter defense or patching operations — it is **one additional layer that complements them**
