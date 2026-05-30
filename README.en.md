@@ -62,13 +62,70 @@ This is a **design goal** at this stage, not a measured or validated performance
 
 ## What Zee currently offers
 
-At this stage Zee provides the following materials:
+At this stage Zee provides:
 
 - **Starter Guide** — the first step in figuring out what to think about ([STARTER_GUIDE.en.md](./STARTER_GUIDE.en.md))
 - **Architecture overview** — design intent and the role of each component ([ARCHITECTURE.en.md](./ARCHITECTURE.en.md))
 - **Research note** — CDS and affine Collatz research as a research direction ([RESEARCH.en.md](./RESEARCH.en.md))
+- **MVP implementation** — a lightweight decoy tripwire with automated containment (`src/zee/` — **dry_run by default**)
 
-A working lightweight MVP (decoy tripwire + automated containment) will be released separately. For now, the **preparation, design, and research direction** layers are what is public.
+---
+
+## MVP — a working decoy tripwire
+
+The MVP lives under `src/zee/`. **It runs dry_run by default and does not actually cut connections.** Automated containment runs only when an asset profile is promoted to `response_mode: auto` AND `dry_run: false`.
+
+### Install
+
+```bash
+git clone https://github.com/KAMANOI/zee.git
+cd zee
+pip install -e .
+```
+
+### Run
+
+```bash
+# 1. Create an asset profile
+cp examples/assets.example.yaml ./assets.yaml
+# Edit decoy_paths to point at your own paths
+
+# 2. Start monitoring (default dry_run — no real cut)
+zee watch -c ./assets.yaml
+
+# 3. In another window, act as an attacker
+cat ~/.aws/credentials.decoy   # Zee records a high-confidence event
+```
+
+### What this MVP does / does not do
+
+**Does**:
+- Seeds and registers decoy files
+- Detects decoy contact (open / read / modify, subject to OS capability) as a high-confidence event
+- Sends a local notification and (optionally) a webhook
+- For assets with `response_mode: auto`, performs automated containment only when `dry_run: false`
+- Measures everything (detection latency, cut completion time, false-positive markers)
+
+**Does not**:
+- Prevent intrusion itself (that is perimeter defense; Zee does not replace it)
+- Trigger automated containment on heuristic anomalies (decoy contact only)
+- Auto-reconnect (recovery is manual: `zee restore <asset_id>`)
+
+### Detection capability matrix
+
+`zee capability` prints this. Current implementation status:
+
+| OS | Backend | open | read | modify | canary fallback | status |
+|---|---|---|---|---|---|---|
+| Linux | inotify | yes | yes | yes | no | implemented |
+| macOS | kqueue + canary | no | no | yes | yes | implemented |
+| Windows | ReadDirectoryChangesW + canary | no | no | yes | yes | implemented (untested on Windows hardware) |
+
+- **Linux** — `inotify` observes open / read / modify directly (standard library only, via ctypes).
+- **macOS** — `kqueue/EVFILT_VNODE` observes change events only. Read detection is not available without the Endpoint Security framework entitlement; instead, Zee embeds canary URLs in decoys and fires out-of-band when those URLs are dereferenced.
+- **Windows** — `ReadDirectoryChangesW` observes change events on the parent directory. Read auditing requires Object Access auditing (SACL + Event Log), which is out of scope for v1; canary URLs cover the read path.
+
+Verified on macOS. Linux backend complete in code, continuous-run verification on Linux hardware not yet done. Windows backend implemented, not yet verified on Windows hardware.
 
 ---
 

@@ -98,4 +98,22 @@ The affine Collatz research referenced there is described as a **research direct
 
 ---
 
-<sub>Detailed per-layer notes, implementation guidance, and MVP release will follow.</sub>
+## Implementation status
+
+| Component | Status | Location and notes |
+|---|---|---|
+| 1. Behavior observation (decoy tripwire) | ✅ Implemented | `src/zee/watcher/` — Linux inotify (open/read/modify), macOS kqueue (change-only) + canary fallback, Windows ReadDirectoryChangesW + canary (Windows hardware untested) |
+| 2. Gatekeepers | Partial | `src/zee/policy/` — allowlist data structure done; wiring into the responder (downgrading contain when allowlist matches) and the multi-signal trap gate are next |
+| 3. Decoy redirection | Research-stage | Design only |
+| 4. Fake internal network | Research-stage | Design only |
+| 5. Long-term correlation | Research-stage | See RESEARCH.en.md (CDS / affine Collatz) |
+| Response (automated containment) | ✅ Implemented | `src/zee/responder/` — per-OS full / egress cuts, **dry_run by default** |
+| Notification | ✅ Implemented | `src/zee/notifier/` — local required, webhook optional |
+| Recovery | ✅ Implemented | `src/zee/recovery/` — `zee restore <asset_id>` (manual only) |
+| Telemetry | ✅ Implemented | `src/zee/telemetry/` — JSON Lines, latency, false-positive markers |
+
+Installation and commands → [README.en.md MVP section](./README.en.md#mvp--a-working-decoy-tripwire)
+
+---
+
+<sub>Detailed per-layer notes and later phases will follow.</sub>

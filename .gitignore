@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Zee local state (event logs from local runs)
+*.jsonl

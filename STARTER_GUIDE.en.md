@@ -81,7 +81,23 @@ After finishing this guide, what you have is not "whether to deploy Zee," but **
 
 From there, paths diverge by organization. Zee aims to walk alongside that very first step.
 
-A working MVP (lightweight decoy tripwire and automated containment) will be released separately. After release, concrete examples will be added back into this Starter Guide.
+The working MVP (lightweight decoy tripwire with automated containment) lives under `src/zee/`. See [README.en.md](./README.en.md#mvp--a-working-decoy-tripwire) for install steps.
+
+---
+
+## 7. Try dry_run
+
+The MVP runs **dry_run** by default. It does not actually cut connections; it records "when the cut would have happened" into the metrics log. This is the safe window for measuring decoy precision and false-positive rate.
+
+Strongly recommended order for the first run:
+
+1. Copy `examples/assets.example.yaml` to `./assets.yaml`.
+2. Edit `decoy_paths` to point at dummy paths shaped like your real sensitive files (e.g. `~/.aws/credentials.decoy`).
+3. Leave `response_mode: notify` (no cut, no would-have-cut path).
+4. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
+5. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
+
+**Jumping straight to `auto` is not recommended.** Zee is a layer that loses trust the moment it ensnares your own work. Promoting only after observing zero false positives is the precondition for using Zee long-term.
 
 ---
 
