@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Zee 事業者向けガイド — 次世代AIの脅威に不安を感じる事業者へ</title>
+<meta name="description" content="次世代AIの脅威に不安は感じているが何をしたら良いかわからない事業者向け。Zeeの使い方と、併用すべき防御策、公的な相談窓口まで、専門用語を最小化して案内します。" />
+
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23000'/%3E%3Ctext x='16' y='22' font-size='20' font-family='monospace' font-weight='700' fill='%23f0b97a' text-anchor='middle'%3EZ%3C/text%3E%3C/svg%3E" />
+
+<meta property="og:type" content="article" />
+<meta property="og:title" content="Zee 事業者向けガイド — 次世代AIの脅威に不安を感じる事業者へ" />
+<meta property="og:description" content="次世代AIの脅威に不安は感じているが何をしたら良いかわからない事業者向け。Zeeの使い方と、併用すべき防御策、公的な相談窓口まで案内します。" />
+<meta property="og:url" content="https://kamanoi.github.io/zee/business_guide.html" />
+<meta property="og:image" content="https://kamanoi.github.io/zee/og_card.png" />
+<meta property="og:site_name" content="Zee" />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Zee 事業者向けガイド" />
+<meta name="twitter:description" content="次世代AIの脅威に不安は感じているが何をしたら良いかわからない事業者向け。Zeeの使い方と、併用すべき防御策、公的な相談窓口まで案内します。" />
+<meta name="twitter:image" content="https://kamanoi.github.io/zee/og_card.png" />
+
+<style>
+  :root{
+    --bg:#0a0b0e; --surface:#111318; --surface2:#0e1014;
+    --border:#1e232b; --text:#e7e9ec; --muted:#9aa2ad; --faint:#6b7280;
+    --accent:#22d3ee; --accent-dim:rgba(34,211,238,.10); --accent-bd:rgba(34,211,238,.35);
+    --ok:#34d399; --warn:#fbbf24; --danger:#f87171;
+    --mono:ui-monospace,SFMono-Regular,Menlo,"Roboto Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans","Noto Sans JP",Meiryo,sans-serif;
+    --maxw:880px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg);color:var(--text);font-family:var(--sans);
+    line-height:1.85;-webkit-font-smoothing:antialiased;letter-spacing:.01em;
+  }
+  a{color:var(--accent);text-decoration:none;border-bottom:1px dashed var(--accent-bd)}
+  a:hover{border-bottom-style:solid}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  .mono{font-family:var(--mono)}
+  .accent{color:var(--accent)}
+
+  nav{position:sticky;top:0;z-index:50;background:rgba(10,11,14,.84);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:60px;max-width:var(--maxw)}
+  .brand{font-family:var(--mono);font-weight:700;font-size:18px;letter-spacing:.16em}
+  .brand b{color:var(--accent)}
+  .nav-cta{font-family:var(--mono);font-size:13px;color:var(--muted);border:1px solid var(--border);padding:7px 14px;border-radius:7px}
+  .nav-cta:hover{color:var(--text);border-color:var(--accent-bd)}
+
+  header.hero{padding:90px 0 60px;border-bottom:1px solid var(--border)}
+  .eyebrow{font-family:var(--mono);font-size:12.5px;letter-spacing:.18em;color:var(--accent);text-transform:uppercase;margin-bottom:18px}
+  h1{font-size:clamp(28px,5vw,40px);font-weight:800;letter-spacing:-.02em;line-height:1.25;margin-bottom:18px}
+  .lead{color:var(--text);font-size:clamp(16px,2.2vw,18px);max-width:720px}
+
+  section{padding:64px 0;border-top:1px solid var(--border)}
+  section:first-of-type{border-top:none}
+  h2{font-size:clamp(22px,3.4vw,28px);font-weight:700;letter-spacing:-.02em;line-height:1.35;margin-bottom:18px;display:flex;align-items:baseline;gap:14px}
+  h2 .num{font-family:var(--mono);font-size:.7em;color:var(--accent);font-weight:600}
+  h3{font-size:18px;font-weight:700;margin:28px 0 10px;color:var(--text)}
+  p{margin-bottom:14px;color:var(--muted);font-size:16px}
+  p strong, li strong{color:var(--text);font-weight:600}
+
+  .toc{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 26px;margin:0 0 24px}
+  .toc h4{font-family:var(--mono);font-size:12.5px;letter-spacing:.16em;color:var(--muted);text-transform:uppercase;margin-bottom:12px}
+  .toc ol{margin-left:22px}
+  .toc li{font-size:15px;color:var(--text);padding:4px 0}
+  .toc a{border:none;color:var(--text)}
+  .toc a:hover{color:var(--accent)}
+
+  ul, ol{margin:0 0 16px 22px}
+  li{margin:8px 0;color:var(--muted);font-size:16px;line-height:1.85}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 26px;margin:18px 0}
+  .card-warn{border-left:3px solid var(--warn)}
+  .card-ok{border-left:3px solid var(--ok)}
+  .card-info{border-left:3px solid var(--accent-bd)}
+  .card h4{font-size:15px;font-weight:700;color:var(--text);margin-bottom:8px}
+  .card p:last-child{margin-bottom:0}
+
+  .example-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:18px}
+  .example{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 20px}
+  .example .tag{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--accent);text-transform:uppercase;margin-bottom:8px;display:block}
+  .example p{font-size:14.5px;margin:0;color:var(--muted);line-height:1.75}
+
+  .layer-grid{display:grid;gap:14px;margin-top:18px}
+  .layer-row{display:grid;grid-template-columns:96px 1fr;gap:18px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 22px;align-items:start}
+  .layer-row .lvl{font-family:var(--mono);font-size:12px;letter-spacing:.1em;color:var(--accent);padding-top:4px}
+  .layer-row h4{font-size:16px;font-weight:700;margin-bottom:6px;color:var(--text)}
+  .layer-row p{font-size:14.5px;margin:0;color:var(--muted)}
+  .layer-row.is-zee{border-color:var(--accent-bd);background:linear-gradient(180deg,var(--accent-dim) 0%,var(--surface) 100%)}
+  .layer-row.is-zee .lvl{color:var(--accent)}
+
+  .qa{border-top:1px solid var(--border);padding:18px 0}
+  .qa:first-of-type{border-top:none}
+  .qa .q{font-weight:600;color:var(--text);margin-bottom:8px}
+  .qa .q::before{content:"Q. ";font-family:var(--mono);color:var(--accent)}
+  .qa .a{color:var(--muted);font-size:15.5px;line-height:1.85}
+  .qa .a::before{content:"A. ";font-family:var(--mono);color:var(--ok);font-weight:700}
+
+  .contacts{display:grid;gap:12px;margin-top:18px}
+  .contact{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px}
+  .contact h4{font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px}
+  .contact .desc{font-size:14px;color:var(--muted);margin-bottom:6px;line-height:1.7}
+  .contact .meta{font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+  .contact a{font-size:14px}
+
+  footer{padding:60px 0 80px;border-top:1px solid var(--border);margin-top:48px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:20px;justify-content:space-between;align-items:center}
+  .fbrand{font-family:var(--mono);font-weight:700;letter-spacing:.16em;font-size:15px}
+  .flinks{display:flex;flex-wrap:wrap;gap:22px;font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .flinks a{color:var(--muted);border:none}
+  .flinks a:hover{color:var(--accent)}
+  .copyright{font-family:var(--mono);font-size:12px;color:var(--faint);width:100%;margin-top:8px}
+
+  @media (max-width:720px){
+    section{padding:52px 0}
+    .example-grid{grid-template-columns:1fr}
+    .layer-row{grid-template-columns:1fr;gap:8px}
+    .layer-row .lvl{padding-top:0}
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="brand">ZEE<b>.</b></div>
+    <a class="nav-cta" href="./index.html">LP に戻る ←</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">事業者向けガイド</div>
+    <h1>「次世代AIの脅威に不安は感じているが、<br />何をしたら良いかわからない」<br />そんなあなたへ。</h1>
+    <p class="lead">このガイドは、IT に専門的な知識がなくても、自分の事業を守るために何をどう始めればいいかを、できるだけ難しい言葉を使わずに、順番に案内するものです。読み終わるのに30分くらいです。</p>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="toc">
+      <h4>目次</h4>
+      <ol>
+        <li><a href="#who">このガイドは誰のためのものか</a></li>
+        <li><a href="#what">今、何が起きているのか</a></li>
+        <li><a href="#first5">Zee の前に、まず確認してほしい 5 つのこと</a></li>
+        <li><a href="#what-zee">Zee を使うと何が変わるのか</a></li>
+        <li><a href="#how-start">Zee の始め方（2 通り）</a></li>
+        <li><a href="#layers">Zee と一緒に使う 4 つの層</a></li>
+        <li><a href="#help">困ったとき・侵入された時の相談先</a></li>
+        <li><a href="#faq">よくある質問</a></li>
+        <li><a href="#limits">Zee がやらないこと（限界）</a></li>
+        <li><a href="#last">最後に</a></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<!-- 1 -->
+<section id="who">
+  <div class="wrap">
+    <h2><span class="num">01</span>このガイドは誰のためのものか</h2>
+    <p>あなたが次のような立場なら、このガイドは役に立つはずです。</p>
+    <ul>
+      <li><strong>個人事業主</strong>（士業・カウンセラー・整体・写真家など）</li>
+      <li><strong>小さな店舗のオーナー</strong>（美容室・カフェ・小売店など）</li>
+      <li><strong>小規模な会社の経営者・総務担当</strong>（数人〜数十人規模）</li>
+      <li><strong>顧客情報を扱う仕事をしている人</strong>（業種を問わず）</li>
+    </ul>
+    <p>共通点は <strong>「次世代 AI の脅威に不安は感じているが、何から手をつければいいかわからない」</strong>こと。あるいは「IT の専門家ではないけれど、顧客の情報や事業のデータを守る責任を負っている」こと。このガイドは、その立場の人が <strong>最初の 30 分で何をすればいいか</strong> を伝えるためのものです。</p>
+    <div class="card card-info">
+      <h4>このガイドが約束しないこと</h4>
+      <p>「これを読めば100%安全になります」とは絶対に言いません。完璧に守れる方法は、世の中に存在しません。代わりに、<strong>「今より少しでも、確実に、安全になる」</strong> 道筋を示します。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="what">
+  <div class="wrap">
+    <h2><span class="num">02</span>今、何が起きているのか</h2>
+    <p>難しい話は省きます。事業者として知っておいてほしいのは、次の 3 行です。</p>
+    <ol>
+      <li>サイバー攻撃が、<strong>AI を使って自動化・大量化</strong>している。</li>
+      <li>狙われるのは大企業だけでなく、<strong>「狙いやすい中小事業者・個人事業主」も含まれる</strong>。</li>
+      <li>「うちは小さいから関係ない」は、もう通用しない時代になりつつある。</li>
+    </ol>
+    <p>とはいえ、必要以上に恐れる必要はありません。やるべきことは決まっています。<strong>順番に、無理なく、できるところから手をつける</strong> ことです。このガイドはその順番を示すために書かれています。</p>
+
+    <h3>あなたの業種だと、たとえばこんな影響が起きえます</h3>
+    <div class="example-grid">
+      <div class="example">
+        <span class="tag">美容室・整体・カウンセリング</span>
+        <p>顧客カルテ・LINE のやり取り・予約システムの情報が流出。「○○さんが××で通っている」が外部に漏れる。一度の信頼喪失で、口コミで広がる。</p>
+      </div>
+      <div class="example">
+        <span class="tag">税理士・行政書士・社労士</span>
+        <p>顧問先企業の決算書・社員の個人情報・マイナンバーが流出。賠償と業務停止、士業としての信用喪失。</p>
+      </div>
+      <div class="example">
+        <span class="tag">小規模 EC・ネットショップ</span>
+        <p>顧客のクレジット番号・住所が流出。決済代行会社から契約打ち切り。返金対応で資金繰り悪化。</p>
+      </div>
+      <div class="example">
+        <span class="tag">町工場・小規模製造業</span>
+        <p>設計図・取引先リスト・見積もりが流出。ライバル社や海外への流出で、長年積んだ技術的優位を一夜で失う。</p>
+      </div>
+    </div>
+    <p style="margin-top:18px;font-size:14.5px;color:var(--faint)">※ いずれも実際に起きうるパターンです。「自分だけは大丈夫」と思わず、「自分のところだとどう起きるか」を 1 分だけ想像してみてください。</p>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="first5">
+  <div class="wrap">
+    <h2><span class="num">03</span>Zee の前に、まず確認してほしい 5 つのこと</h2>
+    <p><strong>Zee を入れるよりも先に</strong>、もっと優先度が高い、基本中の基本が 5 つあります。これらが抜けていると、Zee を入れても効果が薄れます。</p>
+
+    <div class="card card-warn">
+      <h4>① パスワードを強くする</h4>
+      <p>同じパスワードを使い回している／生年月日を使っている／12 文字未満になっている、のいずれかに当てはまれば、まずここから直してください。
+        <br /><strong>具体的には：</strong>「パスワード管理アプリ」を 1 つ導入すると、強いパスワードを自動で作って覚えてくれます。代表例：1Password、Bitwarden（無料プランあり）、Apple の「パスワード」アプリ（Mac/iPhone 標準）など。</p>
+    </div>
+
+    <div class="card card-warn">
+      <h4>② 二段階認証（2要素認証）を入れる</h4>
+      <p>メール・銀行・クラウドサービス・SNS など、「ログインに使う重要なもの」すべてに 2 段階認証を入れる。これだけで、たとえパスワードが盗まれても侵入されにくくなります。
+        <br /><strong>具体的には：</strong>各サービスの設定で「二段階認証」を ON にする。確認アプリの代表例：Google Authenticator、Authy、Microsoft Authenticator（いずれも無料）など。</p>
+    </div>
+
+    <div class="card card-warn">
+      <h4>③ OS・アプリを最新の状態に保つ</h4>
+      <p>パソコン・スマートフォン・タブレットの OS や、よく使うアプリを「自動更新」に設定する。古いソフトに残っている「穴」が攻撃の入り口になりがちです。
+        <br /><strong>具体的には：</strong>Mac は「システム設定 → 一般 → ソフトウェアアップデート → 自動アップデート」、Windows は「設定 → Windows Update → 詳細オプション」、iPhone は「設定 → 一般 → ソフトウェアアップデート → 自動アップデート」。</p>
+    </div>
+
+    <div class="card card-warn">
+      <h4>④ 重要なデータをバックアップする</h4>
+      <p>顧客リスト・取引データ・設計図など、「失ったら事業が止まるもの」を、<strong>本体とは別の場所</strong> に定期的にコピーする。
+        <br /><strong>具体的には：</strong>Mac は「Time Machine」＋外付け SSD で自動バックアップ。Windows は「ファイル履歴」。<strong>物理的に別の場所</strong> に 1 つは持つことを推奨。クラウドの代表例（バックアップ向き）：Backblaze、Arq など。
+        <br /><span style="color:var(--faint);font-size:14px">※ Dropbox・Google Drive・iCloud Drive は「同期サービス」で、誤って削除すると他端末でも消えます。バックアップ用途としては、上記の専用バックアップサービスまたは Time Machine 等の別系統が必要です。</span></p>
+    </div>
+
+    <div class="card card-warn">
+      <h4>⑤ 怪しいメール・SMS を開かない訓練</h4>
+      <p>「請求書の確認」「アカウントが停止されました」「○○からのご連絡」のような、急かしてリンクをクリックさせるメールが、今の攻撃の入り口の大半です。<strong>急かされたら、立ち止まる</strong>。
+        <br /><strong>具体的には：</strong>知らない差出人のリンクは絶対にクリックしない／添付ファイルを開かない／不安なら必ず別のルート（電話・公式サイトで自分から検索）で確認する。家族・従業員にもこのルールを共有する。</p>
+    </div>
+
+    <div class="card card-ok" style="margin-top:24px">
+      <h4>この 5 つを整えると、攻撃の入り口を大きく狭められます</h4>
+      <p>自動化された攻撃の多くは、ここで足を止まる傾向があります（ただし「完全に防げる」とは言えません）。Zee は、この 5 つを <strong>すり抜けて中に入られた</strong> ときに作動する追加の層です。順番が大事なので、まず 5 つを点検してください。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="what-zee">
+  <div class="wrap">
+    <h2><span class="num">04</span>Zee を使うと何が変わるのか</h2>
+    <p>Zee がすることを、専門用語なしで説明します。</p>
+
+    <h3>1. 「囮（おとり）ファイル」を仕掛けます</h3>
+    <p>本物そっくりの「ニセの大事なファイル」を、パソコンの中の決まった場所に置きます。たとえば「顧客リスト.xlsx」「請求書フォルダ」「パスワードメモ」などです。中身はすべて偽物で、誰が見ても本物の情報は一切含まれていません。</p>
+
+    <h3>2. 誰かがその囮に触ると、すぐに気づきます</h3>
+    <p>正規の業務でこの囮を触ることは、まずありません。だから <strong>「囮を触った＝怪しい人が中にいる」</strong> という強い信号になります。Zee はその瞬間にあなた（または管理者）に通知します。</p>
+
+    <h3>3. 設定を上げれば、自動的にネットを切ります</h3>
+    <p>「囮に触られた → ネット接続を即座に切る」という自動対応ができます。これで、たとえ侵入されても <strong>情報を外に持ち出される時間を稼げます</strong>。
+      <br />ただし、これは <strong>あなたが「ON にする」と決めて初めて作動</strong> します。最初は通知だけのモード（dry_run と呼びます）で様子を見るのが推奨されます。</p>
+
+    <div class="card card-info">
+      <h4>Zee は「侵入を防ぐ」ものではありません</h4>
+      <p>入口を守るのは、上の §03 で挙げた 5 つの基本（パスワード・2 段階認証・更新・バックアップ・フィッシング対策）の役割です。Zee は <strong>それらをすり抜けて中に入られたときに作動する、もう一層</strong> です。両方そろって初めて、層として機能します。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="how-start">
+  <div class="wrap">
+    <h2><span class="num">05</span>Zee の始め方（2 通り）</h2>
+    <p>Zee を導入する方法は大きく 2 つあります。<strong>多くの事業者にとっては A が現実的</strong> です。</p>
+
+    <h3>方法 A：IT に詳しい知り合い・業者に頼む（推奨）</h3>
+    <p>これが一番ラクで、確実です。次のことを伝えるだけで、おそらく 1〜2 時間で済みます。</p>
+    <div class="card">
+      <h4>業者・知り合いに渡す依頼内容（コピペで使えます）</h4>
+      <p style="font-family:var(--mono);font-size:13.5px;color:var(--text);background:var(--surface2);padding:14px 16px;border-radius:8px;line-height:1.85">
+        Zee（github.com/KAMANOI/zee）を私の Mac/Windows に入れて、<br />
+        「絶対に盗まれたくない情報」と似た形のニセのファイル（囮）を仕掛けてください。<br />
+        最初は dry_run（通知だけのモード）でお願いします。<br />
+        異常があったら通知が来るように設定してください<br />
+        （Zee 自身は Webhook を送るだけなので、そこから先のメール・Slack・LINE Notify などへの転送設定もお願いします）。
+      </p>
+    </div>
+    <p>業者代金の目安：単発の作業（インストール＋囮設置＋通知設定）として数千円〜数万円程度。<strong>地域・業者・付帯サービスにより大きく変動</strong> するので、複数の業者から見積もりを取ることを推奨します。継続的な保守を頼む場合は別途月額が発生します。「セキュリティ診断」「マネージドセキュリティ」を扱う地元の IT 業者・商工会議所の紹介で探せます。</p>
+
+    <h3>方法 B：自分でやる（IT が好きな人向け）</h3>
+    <p>パソコンの黒い画面（ターミナル）が触れる人なら、自分で入れることもできます。手順は <a href="./index.html#mvp">LP の MVP セクション</a> と <a href="https://github.com/KAMANOI/zee/blob/main/STARTER_GUIDE.md">STARTER_GUIDE</a> に書いてあります。</p>
+
+    <div class="card card-ok">
+      <h4>どちらの方法でも、最初は必ず「dry_run（通知だけ）」で始めてください</h4>
+      <p>いきなり「ネット切断」を ON にすると、誤って自分の業務を止めてしまう可能性があります。<strong>数日〜1 週間、通知だけのモードで様子を見て</strong>、誤検知（自分の正規操作で警告が出ること）がゼロだと確認してから、自動切断を ON にするのが安全な順序です。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="layers">
+  <div class="wrap">
+    <h2><span class="num">06</span>Zee と一緒に使う 4 つの層</h2>
+    <p>Zee 単体では事業は守れません。次の 4 層が組み合わさって初めて、「層」としての防御が成立します。<strong>Zee は層 3 の一部</strong> に入ります。</p>
+
+    <div class="layer-grid">
+      <div class="layer-row">
+        <div class="lvl">層 1<br />入口防御</div>
+        <div>
+          <h4>パスワード・2 段階認証・更新・フィッシング対策</h4>
+          <p>§03 の 5 つの基本がここに該当します。攻撃の大半はここで止まります。<strong>最初に・全員が・必ずやるべき層</strong>。</p>
+        </div>
+      </div>
+      <div class="layer-row">
+        <div class="lvl">層 2<br />データ保護</div>
+        <div>
+          <h4>バックアップ・暗号化・アクセス権の最小化</h4>
+          <p>万一の流出・破壊に備える。<strong>バックアップは「自動で・本体と物理的に別の場所に・複数世代」</strong>がコツ。代表例：Time Machine + 外付け SSD、Backblaze、クラウドの世代スナップショット。クラウド契約は「全員管理者」になっていないか、必ず点検。</p>
+        </div>
+      </div>
+      <div class="layer-row is-zee">
+        <div class="lvl">層 3<br />検知</div>
+        <div>
+          <h4>異常に気づく仕組み（Zee はここ）</h4>
+          <p><strong>侵入後に作動する層。Zee は囮接触という「狭くて高い信頼の信号」を 1 本足す役割</strong>。あなたの検知体制全体を肩代わりするわけではなく、特定の信号を 1 本確実に立てる。より広い意味の監視ツール（事業規模が大きくなった場合）は別途、規模に応じて専門家と相談。</p>
+        </div>
+      </div>
+      <div class="layer-row">
+        <div class="lvl">層 4<br />対応</div>
+        <div>
+          <h4>侵入されたときの人と手順</h4>
+          <p>「気づいた誰が・何時間以内に・誰に連絡し・何を止めるか」を 1 枚の紙に書いておく。<strong>サイバー保険</strong> も検討の価値あり（中小事業者向けプランは月額数千円〜）。代表例：東京海上日動・損保ジャパン・あいおいニッセイ等。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card card-info" style="margin-top:24px">
+      <h4>4 層のうち、まずどれから？</h4>
+      <p><strong>必ず層 1 から</strong>。次が層 2 のバックアップ。Zee（層 3）は、層 1・2 が回り出してから足してください。層 4 の手順書は、紙 1 枚から始めれば十分です（電話番号 3 つ・止める対象 3 つを書くだけ）。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="help">
+  <div class="wrap">
+    <h2><span class="num">07</span>困ったとき・侵入された時の相談先</h2>
+    <p>「もしかして侵入されたかも」と思った時、一人で抱え込まず、まず公的な窓口に相談してください。<strong>多くは無料</strong> で、業者選びの相談もできます。</p>
+
+    <div class="contacts">
+      <div class="contact">
+        <h4>IPA（情報処理推進機構）— 中小企業向け窓口</h4>
+        <p class="desc">日本の公的機関。中小企業向けの「情報セキュリティ安心相談窓口」を運営しています。電話・メールで無料相談可。</p>
+        <p class="meta">→ <a href="https://www.ipa.go.jp/security/anshin/">https://www.ipa.go.jp/security/anshin/</a></p>
+      </div>
+      <div class="contact">
+        <h4>警察庁サイバー警察局／各都道府県警サイバー犯罪相談窓口</h4>
+        <p class="desc">明らかに犯罪に巻き込まれた・脅迫された場合の相談先。各都道府県警に窓口があります。</p>
+        <p class="meta">→ <a href="https://www.npa.go.jp/bureau/cyber/soudan.html">https://www.npa.go.jp/bureau/cyber/soudan.html</a></p>
+      </div>
+      <div class="contact">
+        <h4>商工会議所・商工会</h4>
+        <p class="desc">地元の IT 業者の紹介、補助金（IT 導入補助金等）の情報、研修案内など。<strong>事業者として最初に頼るべき場所</strong>。</p>
+        <p class="meta">→ <a href="https://www.jcci.or.jp/">https://www.jcci.or.jp/</a>（日本商工会議所）／地元の商工会議所を検索</p>
+      </div>
+      <div class="contact">
+        <h4>サイバー保険（民間）</h4>
+        <p class="desc">侵入された時の損害賠償・復旧費用・営業停止損失をカバーする保険。代表例：東京海上日動「サイバーリスク保険」、損保ジャパン「サイバー保険」、あいおいニッセイ同和「サイバーセキュリティ保険」など。月額数千円〜数万円のプランが中小事業者向けに用意されています。</p>
+        <p class="meta">→ 加入中の損保代理店に「中小事業者向けのサイバー保険プラン」と相談</p>
+      </div>
+      <div class="contact">
+        <h4>JPCERT/CC（一般社団法人 JPCERT コーディネーションセンター）</h4>
+        <p class="desc">セキュリティインシデント発生時の調整窓口。技術的な助言や、攻撃元・被害範囲の特定支援を受けられます。</p>
+        <p class="meta">→ <a href="https://www.jpcert.or.jp/">https://www.jpcert.or.jp/</a></p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="faq">
+  <div class="wrap">
+    <h2><span class="num">08</span>よくある質問</h2>
+
+    <div class="qa">
+      <p class="q">Zee は無料ですか？</p>
+      <p class="a">はい、完全に無料です（MIT ライセンス）。商用利用も問題ありません。ソースコードもすべて公開されています。</p>
+    </div>
+    <div class="qa">
+      <p class="q">入れたら、自分の業務にトラブルが起きないか心配です。</p>
+      <p class="a">そのために <strong>「dry_run（通知だけのモード）」</strong> が既定値になっています。最初の数日〜1 週間は何も切断せず、通知だけ来ます。誤検知（自分の業務で警告が出ること）がゼロだと確認してから、自動切断を ON にすれば安全です。</p>
+    </div>
+    <div class="qa">
+      <p class="q">業者にお願いするとどのくらいかかりますか？</p>
+      <p class="a">単発作業（インストール＋囮設置＋初期設定）で数千円〜数万円程度が目安ですが、<strong>地域・業者・付帯サービスにより大きく変動</strong>します。必ず複数業者から見積もりを取ってください。継続保守を頼む場合は別途月額。地元の IT 業者・商工会議所の紹介で探せます。「IT 導入補助金」等の公的支援が使える場合もあります。</p>
+    </div>
+    <div class="qa">
+      <p class="q">個人事業主・自宅で仕事している人でも使えますか？</p>
+      <p class="a">使えます。Zee は規模に関係なく、「絶対に盗まれたくない情報」が PC の中にあれば誰でも対象です。ただし、まず §03 の 5 つの基本が先です。</p>
+    </div>
+    <div class="qa">
+      <p class="q">Mac でも Windows でも動きますか？</p>
+      <p class="a">Linux・macOS・Windows の 3 つに対応しています。<strong>ただし Windows は実装はあるものの実機での連続検証が未完了</strong> の段階です（2026 年 5 月時点）。Windows でお使いの場合は、必ず業者に「Windows 実機での動作確認」を依頼してください。検知の精度は OS によって少し違います（詳しくは <a href="./index.html#mvp">LP の能力マトリクス</a>）。</p>
+    </div>
+    <div class="qa">
+      <p class="q">「dry_run」って何ですか？</p>
+      <p class="a">英語で「カラ走り」のような意味です。Zee の場合は、<strong>「もし自動切断するならいつ・何が起きたか」を記録だけして、実際には何もしないモード</strong> を指します。誤検知の確認に使う、安全な観察モードです。</p>
+    </div>
+    <div class="qa">
+      <p class="q">Zee を入れれば、もう安心ですか？</p>
+      <p class="a">いいえ。Zee はあくまで「もう一層」です。§03 の 5 つの基本と §06 の 4 つの層がそろって、初めて意味があります。Zee 単体で「安心」と思うのは、施錠していない家に防犯ブザーだけ付けるようなものです。</p>
+    </div>
+    <div class="qa">
+      <p class="q">怪しい挙動があった時、自分で対応できるか不安です。</p>
+      <p class="a">事前に「侵入かもしれない時の連絡先」を 3 つ書いておいてください。① 自分（または信頼できる IT 担当）の携帯、② 顧問の業者・IT 業者、③ §07 の公的窓口。何かあった時に <strong>「誰に最初に電話するか」</strong> を決めておくことが、最大の備えです。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section id="limits">
+  <div class="wrap">
+    <h2><span class="num">09</span>Zee がやらないこと（限界）</h2>
+    <p>誠実にお伝えします。Zee は次のことを <strong>やらない・できない</strong> ツールです。</p>
+    <ul>
+      <li><strong>侵入そのものは防ぎません</strong>。入口の防御は §03 の 5 つの基本の仕事です。</li>
+      <li><strong>すべての攻撃を検知できるわけではありません</strong>。Zee は「囮に触る」という特定の動きだけを高い精度で捉えます。それ以外の攻撃手段は別の仕組みが必要です。</li>
+      <li><strong>侵入された後の修復はしません</strong>。バックアップからの復旧、関係者への通知、警察への届け出などは、人と手順の仕事です（§06 の層 4）。</li>
+      <li><strong>更新が必要です</strong>。新しい攻撃手法が出てくれば、Zee 自体も改善が必要になります。GitHub の更新を時々確認してください。</li>
+      <li><strong>効果はまだ完全には測定されていません</strong>。Zee は研究段階の若いプロジェクトです。本番運用の前に、自分の環境で必ず確認してください（業者に依頼する場合も、業者にこれを伝えてください）。</li>
+    </ul>
+    <div class="card card-info">
+      <h4>これは床であって天井ではありません</h4>
+      <p>「Zee を入れたから安全」ではなく、<strong>「Zee を入れたから、最初の一歩を踏み出した」</strong>。そこから先は、定期的な見直しと、§06 の 4 層を 1 つずつ厚くしていく作業です。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="last">
+  <div class="wrap">
+    <h2><span class="num">10</span>最後に</h2>
+    <p>完璧に守れる方法は、世の中に存在しません。大企業ですら、毎年どこかが侵入されています。だから、目指すべきは <strong>「100% の安全」</strong> ではなく、<strong>「攻撃された時に、自分と顧客と取引先のダメージを最小限に抑える準備」</strong> です。</p>
+    <p>そのために必要なのは、難しいツールでも、高額な投資でもなく、<strong>「順番通りに、できるところから手をつける」</strong> ことです。</p>
+    <ol>
+      <li>§03 の 5 つの基本を点検する（1 日でできる）</li>
+      <li>§06 の層 2（バックアップ）を整える（1 日でできる）</li>
+      <li>§07 の連絡先を紙 1 枚に書き出す（30 分でできる）</li>
+      <li>Zee を業者または自分で導入し、dry_run で観察する（1〜2 時間）</li>
+      <li>1 週間後、誤検知ゼロなら自動切断を ON にする</li>
+    </ol>
+    <p>ここまでで、おそらく <strong>多くの事業者の現状よりかなり前に出ます</strong>。完璧ではなくても、「攻撃側からすると、わざわざ狙う動機が薄い」状態を作れます。</p>
+    <p>不安から、備えへ。最初の一歩を、ここから踏み出してください。</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="fbrand">ZEE<span class="accent">.</span></div>
+    <div class="flinks">
+      <a href="./index.html">LP</a>
+      <a href="https://github.com/KAMANOI/zee">GitHub</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/STARTER_GUIDE.md">Starter Guide</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/ARCHITECTURE.md">Architecture</a>
+      <a href="https://github.com/KAMANOI/zee/blob/main/SECURITY.md">Security</a>
+    </div>
+    <div class="copyright">© 2026 Hiroki Kamanoi · Zee is an Early Public / Research Project. Provided "as is", without warranty.</div>
+  </div>
+</footer>
+</body>
+</html>
