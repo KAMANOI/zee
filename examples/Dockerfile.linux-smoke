@@ -1,0 +1,40 @@
+# Linux smoke image for Zee.
+#
+# Purpose: confirm that `pip install -e .`, `zee --version`,
+# `zee capability`, `pytest`, and `zee init-restore-token` all work
+# on a clean Linux user under Python 3.13. The maintainer does not run
+# Linux daily; this image stands in for an apt-managed user account.
+#
+# Usage:
+#     docker build -f examples/Dockerfile.linux-smoke -t zee-smoke .
+#     docker run --rm zee-smoke
+#
+# CI uses the matrix in .github/workflows/test.yml for the per-OS
+# checks. This Dockerfile is for hands-on local verification.
+
+FROM python:3.13-slim
+
+# A non-root user, so HOME / parent-dir 0700 chmod paths exercise the
+# same code that an end user hits.
+RUN useradd --create-home --shell /bin/bash zeeuser
+USER zeeuser
+WORKDIR /home/zeeuser/zee
+
+# Bake the package contents into the image.
+COPY --chown=zeeuser:zeeuser . /home/zeeuser/zee/
+
+RUN pip install --no-cache-dir --user -e ".[test]"
+ENV PATH="/home/zeeuser/.local/bin:${PATH}"
+
+# Run the standard suite, then the CLI smoke steps.
+CMD set -e \
+    && echo "=== pytest ===" \
+    && pytest tests/ -q \
+    && echo "=== zee --version ===" \
+    && zee --version \
+    && echo "=== zee capability ===" \
+    && zee capability \
+    && echo "=== zee init-restore-token ===" \
+    && zee init-restore-token > /dev/null \
+    && test -f /home/zeeuser/.zee/restore_token \
+    && echo "all checks passed"

@@ -81,8 +81,12 @@ honestly-published boundaries of what Zee is and is not:
   multi-user production deployments, wrap `zee restore` in `sudo` or
   run Zee under a dedicated user — `restore_token` is a complement,
   not a replacement, for OS-level access control.
-- **Windows hardware is not yet tested by the maintainer.** The
-  Windows watcher and cut/restore paths are implemented and unit-
-  tested with PowerShell / netsh stubs, but the maintainer does not
-  own a Windows machine. Continuous-run verification on Windows is
-  pending CI integration.
+- **Windows hardware is not yet hands-on tested by the maintainer.**
+  The Windows watcher and cut/restore paths are implemented and
+  exercised on every push by the GitHub Actions matrix
+  ([test.yml](.github/workflows/test.yml)) on
+  `windows-latest` with Python 3.11 / 3.12 / 3.13, including pytest,
+  CLI smoke (`zee --version`, `zee capability`,
+  `zee init-restore-token`), and PowerShell / netsh enumeration
+  parsers. Continuous-run verification on Japanese / German / French
+  Windows hosts is still pending — the CI runner is en-US.

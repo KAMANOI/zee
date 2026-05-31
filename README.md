@@ -1,5 +1,9 @@
 # Zee
 
+[![Tests](https://github.com/KAMANOI/zee/actions/workflows/test.yml/badge.svg)](https://github.com/KAMANOI/zee/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg)](./pyproject.toml)
+
 > 🌐 English: [README.en.md](./README.en.md) ｜ 🌐 LP: https://kamanoi.github.io/zee/
 
 > Zee は、高度AI時代において、防御準備が追いついていない組織や個人が、最初の一歩を踏み出すためのオープンプロジェクトです。

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zee"
-version = "0.3.0"
+version = "0.4.0"
 description = "Lightweight decoy tripwire and post-intrusion containment layer."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,8 +31,13 @@ test = ["pytest>=7.0"]
 zee = "zee.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/KAMANOI/zee"
+Homepage = "https://kamanoi.github.io/zee/"
 Repository = "https://github.com/KAMANOI/zee"
+Issues = "https://github.com/KAMANOI/zee/issues"
+Changelog = "https://github.com/KAMANOI/zee/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/KAMANOI/zee#readme"
+Sponsor = "https://github.com/sponsors/KAMANOI"
+"Security Advisories" = "https://github.com/KAMANOI/zee/security/advisories"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

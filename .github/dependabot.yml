@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Keep GitHub Actions SHAs current. Dependabot updates the
+  # `uses: actions/...@<SHA>  # vX.Y.Z` lines and bumps both the
+  # SHA and the trailing version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci

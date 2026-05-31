@@ -5,6 +5,45 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.4.0] — 2026-05-31
+
+The 78-test suite from v0.3 now runs on every push across the full
+support matrix. The v0.3 "Windows hardware is not yet tested by the
+maintainer" entry in `SECURITY.md` is replaced with the CI link.
+
+### Added
+- **GitHub Actions test matrix**
+  (`.github/workflows/test.yml`): Ubuntu / macOS / Windows ×
+  Python 3.11 / 3.12 / 3.13 = 9 jobs, plus a dedicated
+  `canary-configured` job that runs the suite under
+  `ZEE_CANARY_BASE_URL`. Each job runs `pytest`, then smoke-tests
+  the CLI (`zee --version`, `zee capability`,
+  `zee init-restore-token`). Action versions are pinned by SHA.
+- **Dependabot** (`.github/dependabot.yml`): weekly bumps for the
+  pinned GitHub Actions SHAs.
+- **README CI badge** (ja / en): live build status link to the
+  Actions runs.
+- **`examples/seed_demo_decoys.py`**: one-shot script that drops
+  three example decoys under `~/Documents/zee-decoys/`, prints the
+  paste-able `[[assets]]` stanza, and optionally takes
+  `--canary-base-url` to exercise the v0.2 canary path locally.
+- **`examples/Dockerfile.linux-smoke`**: minimal Python 3.13 image
+  that runs `pytest` and the CLI smoke under a non-root user. Stands
+  in for a maintainer Linux machine when verifying a release.
+- **`tests/__init__.py`**: empty file so IDE indexers and `pytest`
+  plug-ins that walk `__init__.py` chains discover the test package
+  without surprises.
+- **pyproject.toml `[project.urls]`**: Issues / Changelog /
+  Documentation / Sponsor / Security Advisories entries.
+
+### Changed
+- `SECURITY.md`'s "Honesty boundaries" entry on Windows hardware now
+  points to the CI matrix instead of saying "untested".
+
+### Tests
+- 78 unit tests passing (same suite as v0.3.0), now exercised across
+  the full OS / Python matrix on every push.
+
 ## [0.3.0] — 2026-05-31
 
 Closes every "Known limitation" listed in v0.2's `SECURITY.md`. The
