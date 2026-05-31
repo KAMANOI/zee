@@ -35,6 +35,15 @@ class TrapEvent:
     detected_at: datetime
     detail: str
     op_class: OpClass
+    # v0.3 (spec L4): `decoy_ref` is the value persisted in events.jsonl
+    # in place of the absolute `decoy_path`, so a root attacker reading
+    # the log cannot enumerate every decoy's location in one file.
+    # Format: "<asset_id>#<index>" where <index> is the 0-based offset
+    # in the asset's decoy_paths list. Operators correlate back to the
+    # full path via assets.toml. `decoy_path` is kept as an internal
+    # field used by the watcher and responder, but is never written to
+    # the event log.
+    decoy_ref: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.source == "decoy_touch" and self.confidence != "high":
@@ -52,6 +61,7 @@ class TrapEvent:
         detail: str,
         op_class: OpClass,
         detected_at: Optional[datetime] = None,
+        decoy_ref: Optional[str] = None,
     ) -> "TrapEvent":
         return cls(
             source=source,
@@ -61,4 +71,5 @@ class TrapEvent:
             detected_at=detected_at or datetime.now(timezone.utc),
             detail=detail,
             op_class=op_class,
+            decoy_ref=decoy_ref,
         )

@@ -99,6 +99,18 @@ Strongly recommended order for the first run:
 
 **Jumping straight to `auto` is not recommended.** Zee is a layer that loses trust the moment it ensnares your own work. Promoting only after observing zero false positives is the precondition for using Zee long-term.
 
+### Before you promote — `zee init-restore-token`
+
+Once `response_mode: auto` has cut the network, the only way to put it back is `zee restore`. From v0.3, that command requires a **restore token** (so an accidental invocation from a second shell of the same user cannot revert containment).
+
+Run this **once, before** promoting any asset to `auto`, and store the printed token somewhere safe (a password manager, a sealed note, etc.):
+
+```bash
+zee init-restore-token
+```
+
+To recover, pass the token via `zee restore <asset_id> --token <TOKEN>` or `ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>`. The token file at `~/.zee/restore_token` is created with mode `0600`. For multi-user production deployments, wrap `zee restore` in `sudo` or run Zee under a dedicated user — a root-equivalent attacker who can read the token file still bypasses this layer.
+
 ### Auto-cut trigger conditions (v4 — required reading)
 
 Even after you promote an asset to `response_mode: auto` + `dry_run: false`, **auto-cut fires only on change-class touches** (write / delete / rename / extend). **Read-class touches** (open / read / attribute inspection) **notify only and never auto-cut**.

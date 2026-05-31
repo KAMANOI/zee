@@ -101,16 +101,24 @@ cp examples/assets.example.toml ./assets.toml
 #    攻撃は観測されません（Linux は inotify で直接観察）。
 export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 
-# 3. 監視開始（既定は dry_run、実遮断なし）
+# 3. 復旧トークンを 1 回だけ生成（v0.3 以降必須）
+zee init-restore-token   # 表示されたトークンを安全な場所に控える
+
+# 4. 監視開始（既定は dry_run、実遮断なし）
 zee watch -c ./assets.toml
 
-# 4. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換えてみる
+# 5. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換えてみる
 echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
 #  → 変更系の接触（modify）として高信頼イベントを 3 OS 共通で記録します。
 #  Linux では `cat <decoy>` のような読み取りだけでも記録します（inotify が
 #  open/read を直接観察するため）。
 #  macOS / Windows での読み取り検知は、ZEE_CANARY_BASE_URL を設定した
 #  ときだけ機能します（決して Zee 本体には戻らず、外部受信器で発火）。
+
+# 6. （遮断が走った後）復旧
+zee restore <asset_id> --token <TOKEN>
+# または環境変数経由：
+ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>
 ```
 
 ### このフェーズの Zee がすること／しないこと
@@ -190,12 +198,28 @@ Zee は誠実に範囲を区切ります。
 - **自動遮断は「変更系の接触」のみ** — open / read / 属性参照 など読み取り系の接触は自動遮断しません。通知で人間に判断材料を渡し、必要なら `zee cut <asset_id>` で手動遮断する設計です。理由：プロセス特定ができない現バックエンドでは、正規ソフト（バックアップ・AV・インデクサ）が普通やらない操作だけを自動遮断の根拠にするのが構造的に安全だからです
 - **macOS / Windows の読み取り検知は `ZEE_CANARY_BASE_URL` が設定されているときだけ機能** — kqueue / ReadDirectoryChangesW は読み取り通知を出しません。`ZEE_CANARY_BASE_URL` を設定すると seeder が囮ファイルに canary URL を埋め込み、攻撃者がその URL を辿った瞬間に operator が指定した外部エンドポイントで発火します（Zee 本体には戻りません）。未設定では canary URL は埋め込まれず、macOS / Windows で「読むだけ」の攻撃は観測されません。Linux は inotify が読み取りを直接観察するので canary 不要です
 - **プロセス allowlist は現バックエンドでは効かない** — 誤検知制御は許可リストの照合ではなく、「囮を正規ソフトの走査対象外に置く配置ガイド」と「変更系トリガーへの限定」で行います。詳しくは上の「誤検知対策」節
-- **`zee restore` に認証はない** — ホスト上でシェルを取れる攻撃者は遮断を巻き戻せます。MVP は単一 operator 前提で意図的に簡素化しています
-- **イベントログには `decoy_path` が平文で記録される** — owner-only（0700/0600）で保護していますが、root 相当の攻撃者には読まれます
+- **`zee restore` には `restore_token` が必要** — v0.3 から、`zee init-restore-token` で生成したトークンを `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できません。同一ユーザーで動作するシェルから誤って遮断を巻き戻す事故は防げますが、`~/.zee/restore_token` を読める root 相当の攻撃者にはバイパスされます。マルチユーザー本番では `zee restore` を `sudo` で囲うか、専用ユーザーで運用してください
+- **イベントログは `decoy_ref`（asset_id#index）で記録** — v0.3 から、events.jsonl には絶対パスではなく `decoy_ref` を書きます。ログを読めた攻撃者が囮の位置を一覧化することはできなくなりました（対応関係は `assets.toml` 経由）
 - **限界がある** — 機械の速度で完全自動完結する相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。Zee が時間を稼げる対象は「人間〜半自動の侵入後活動」（侵入が成功した後、攻撃者が偵察・横移動・データ持ち出しに進む段階）です
 - **未測定** — 効果はまだ独立に検証されていません。本番運用の前に、ご自身の環境で必ず確認してください
 
 これは床であって天井ではありません。安全だと言う前に、失敗条件を先に書きました。
+
+---
+
+## v0.2 から v0.3 へのアップグレード
+
+v0.3 で `zee restore` がトークン認証必須になりました。アップグレード後の最初の `zee restore` を実行する前に **一度だけ** 次を実行してください：
+
+```bash
+zee init-restore-token
+```
+
+表示されたトークンを安全な場所に控えてください。以降の `zee restore` では `--token <TOKEN>` または `ZEE_RESTORE_TOKEN=<TOKEN>` 環境変数を渡します。
+
+また v0.3 から `events.jsonl` の各 trap_event レコードに含まれるパス情報は `decoy_path`（旧）から `decoy_ref`（`<asset_id>#<index>` 形式）に変わりました。下流の解析スクリプトを使っている場合は両キーを受け付けるよう更新してください（移行期間中は v0.2 以前の既存ログに旧キーが残ります）。
+
+詳細は [CHANGELOG.md](./CHANGELOG.md) の [0.3.0] エントリ参照。
 
 ---
 

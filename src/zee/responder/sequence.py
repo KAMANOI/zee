@@ -36,6 +36,7 @@ from ..errors import ZeeError, Z403_INVALID_CONFIDENCE_FOR_CONTAIN
 from ..events import TrapEvent
 from ..notifier.local import notify_local
 from ..policy.asset_profile import resolve
+from ..telemetry.cut_state import CutStateLog
 from ..telemetry.events_log import EventLog
 from .cut_egress import cut_egress
 from .cut_full import cut_full
@@ -85,21 +86,29 @@ def handle(
     dry_run: bool,
     event_log: EventLog,
     webhook_sender: Optional[WebhookSender] = None,
+    cut_state: Optional[CutStateLog] = None,
 ) -> ResponderResult:
     """Run the fixed sequence for one trap event."""
     event_log.record_event(event)
 
     # Step 1 — local notification (always, must happen before any cut).
+    # v0.3 L4: surface decoy_ref instead of the absolute decoy_path so
+    # the OS notification history (Notification Center / notify-send /
+    # Toast) does not retain the full filesystem location.
     hint = _hint_for(event.op_class, event.asset_id)
     title = f"Zee tripwire ({event.op_class}): {event.asset_id}"
     body = (
-        f"{event.detail} | decoy={event.decoy_path or '-'}\n"
+        f"{event.detail} | decoy_ref={event.decoy_ref or '-'}\n"
         f"{hint}"
     )
     notified_locally = notify_local(title, body)
     alert_sent_at = datetime.now(timezone.utc)
 
     # Step 2 — remote alert, fire-and-forget.
+    # v0.3 L4: webhook payload carries decoy_ref (asset_id#index), NOT
+    # the absolute decoy_path. The operator's webhook receiver (Slack,
+    # Discord, etc.) thus also cannot collect a full inventory of
+    # decoy filesystem locations.
     notified_remote: Optional[bool] = None
     if webhook_sender is not None:
         payload = {
@@ -107,7 +116,7 @@ def handle(
             "source": event.source,
             "confidence": event.confidence,
             "op_class": event.op_class,
-            "decoy_path": event.decoy_path,
+            "decoy_ref": event.decoy_ref,
             "detected_at": event.detected_at.isoformat(),
             "detail": event.detail,
             "hint": hint,
@@ -162,16 +171,20 @@ def handle(
                     f"cut_method={resolution.cut_method} (no real cut performed)",
                 )
             else:
-                ok, detail = cut_fn()
+                ok, detail = cut_fn(
+                    asset_id=event.asset_id,
+                    cut_state=cut_state,
+                )
                 cut_executed = ok
                 cut_done_at = datetime.now(timezone.utc)
                 cut_detail = detail
                 # Post-cut notification (network may be down for remote channels).
+                # decoy_ref keeps the path off the OS notification history.
                 notify_local(
                     f"Zee cut applied: {event.asset_id}",
                     (
                         f"reason: {event.detail}\n"
-                        f"decoy: {event.decoy_path or '-'}\n"
+                        f"decoy_ref: {event.decoy_ref or '-'}\n"
                         f"recover with: zee restore {event.asset_id}"
                     ),
                 )

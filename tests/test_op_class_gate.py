@@ -50,11 +50,11 @@ def test_read_op_class_does_not_cut_even_in_contain_mode(monkeypatch):
     """Spec v4 core: read touches never auto-cut, even with auto + no-dry-run."""
     cut_calls = {"egress": 0, "full": 0}
 
-    def stub_egress():
+    def stub_egress(**kwargs):
         cut_calls["egress"] += 1
         return True, "should not be called"
 
-    def stub_full():
+    def stub_full(**kwargs):
         cut_calls["full"] += 1
         return True, "should not be called"
 
@@ -83,7 +83,7 @@ def test_change_op_class_does_cut(monkeypatch):
     """change + contain + high + not dry_run → cut runs."""
     cut_calls = {"egress": 0}
 
-    def stub_egress():
+    def stub_egress(**kwargs):
         cut_calls["egress"] += 1
         return True, "ok"
 
@@ -108,7 +108,7 @@ def test_change_op_class_dry_run_records_would_have_cut(monkeypatch):
     """dry_run + change + contain → cut is NOT actually run, but recorded."""
     cut_calls = {"egress": 0}
 
-    def stub_egress():
+    def stub_egress(**kwargs):
         cut_calls["egress"] += 1
         return True, "should not be called under dry_run"
 
@@ -134,7 +134,7 @@ def test_read_op_class_with_notify_mode_still_notifies(monkeypatch):
     """notify mode never cuts (existing behavior), regardless of op_class."""
     cut_calls = {"any": 0}
 
-    def stub_any():
+    def stub_any(**kwargs):
         cut_calls["any"] += 1
         return True, "should not be called"
 
@@ -177,7 +177,7 @@ def test_decision_is_on_structured_field_not_detail_string(monkeypatch):
     word 'change' must still be treated as read (no cut)."""
     cut_calls = {"any": 0}
 
-    def stub_any():
+    def stub_any(**kwargs):
         cut_calls["any"] += 1
         return True, "should not be called"
 

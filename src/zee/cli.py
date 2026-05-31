@@ -18,11 +18,19 @@ from . import __version__
 from .config.schema import Config
 from .decoy.canary_token import CanaryTokenRegistry
 from .decoy.seeder import seed_all
-from .errors import ZeeError, Z102_UNKNOWN_ASSET_ID
+from .errors import (
+    ZeeError,
+    Z102_UNKNOWN_ASSET_ID,
+    Z602_RESTORE_TOKEN_REQUIRED,
+    Z603_RESTORE_TOKEN_NOT_INITIALIZED,
+    Z604_RESTORE_TOKEN_INVALID,
+)
 from .notifier.webhook import from_env as webhook_from_env
 from .responder.sequence import handle
+from .recovery.auth import init_token, load_token, verify_token
 from .recovery.restore import restore
 from .telemetry.capability_report import render_text as capability_text
+from .telemetry.cut_state import CutStateLog
 from .telemetry.events_log import EventLog
 
 
@@ -64,6 +72,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
             seen[key] = asset.id
 
     event_log = EventLog()
+    cut_state = CutStateLog()
     log_dir = event_log.log_dir
     sender = webhook_from_env()
     try:
@@ -114,6 +123,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
                         dry_run=config.dry_run,
                         event_log=event_log,
                         webhook_sender=sender,
+                        cut_state=cut_state,
                     )
                     print(
                         f"[event] {event.detail} → mode={result.mode} "
@@ -144,9 +154,71 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     config = Config.load(args.config)
     if config.find(args.asset_id) is None:
         raise ZeeError(Z102_UNKNOWN_ASSET_ID, args.asset_id)
+
+    # v0.3 (spec L3): restore requires an operator-supplied token so a
+    # casual same-user attacker cannot revert containment from another
+    # shell session. The token file is created with `zee init-restore-token`.
+    provided = (args.token or os.environ.get("ZEE_RESTORE_TOKEN", "")).strip()
+    if not provided:
+        raise ZeeError(
+            Z602_RESTORE_TOKEN_REQUIRED,
+            "use --token <TOKEN> or set ZEE_RESTORE_TOKEN. "
+            "Run `zee init-restore-token` once to generate the token.",
+        )
+    if not verify_token(provided):
+        # Distinguish "not initialised yet" (no file at all) from "file
+        # present but unreadable" (loose perms or wrong token). Without
+        # this split, a 0644 token file would be reported as Z603 and
+        # re-running init-restore-token would silently rotate the token
+        # without alerting the operator to the permission problem.
+        from .recovery.auth import default_token_path
+        token_path = default_token_path()
+        if not token_path.exists():
+            raise ZeeError(
+                Z603_RESTORE_TOKEN_NOT_INITIALIZED,
+                "no restore_token file at ~/.zee/restore_token. "
+                "Run `zee init-restore-token` first.",
+            )
+        # File exists. Either perms are loose (load_token returned None)
+        # or the operator supplied the wrong token. Both are Z604; the
+        # detail string tells them which one to fix.
+        if load_token() is None:
+            raise ZeeError(
+                Z604_RESTORE_TOKEN_INVALID,
+                f"restore_token file at {token_path} has loose permissions "
+                f"and was refused. `chmod 600 {token_path}` and retry.",
+            )
+        raise ZeeError(Z604_RESTORE_TOKEN_INVALID, "supplied token does not match")
+
     ok, detail = restore(args.asset_id)
     print(detail, file=sys.stderr)
     return 0 if ok else 1
+
+
+def _cmd_init_restore_token(args: argparse.Namespace) -> int:
+    """Generate (or rotate) the restore_token at ~/.zee/restore_token.
+
+    The token is printed to stderr exactly once. Capture it now and
+    store it where you keep operational secrets (a password manager,
+    sealed envelope, etc.); the file on disk is 0600 owner-only, but
+    that is a complement to — not a replacement for — keeping the
+    string out of shared chat logs.
+    """
+    token = init_token()
+    print(
+        "# Zee restore token (do not paste in shared chats):",
+        file=sys.stderr,
+    )
+    print(token, file=sys.stderr)
+    print(
+        "# Use it via:  zee restore <asset_id> --token <TOKEN>",
+        file=sys.stderr,
+    )
+    print(
+        "# Or:          ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>",
+        file=sys.stderr,
+    )
+    return 0
 
 
 def _cmd_cut(args: argparse.Namespace) -> int:
@@ -165,8 +237,9 @@ def _cmd_cut(args: argparse.Namespace) -> int:
     from .responder.cut_egress import cut_egress
     from .responder.cut_full import cut_full
     cut_fn = cut_egress if method == "egress" else cut_full
+    cut_state = CutStateLog()
     print(f"[zee cut] asset={args.asset_id} method={method}", file=sys.stderr)
-    ok, detail = cut_fn()
+    ok, detail = cut_fn(asset_id=args.asset_id, cut_state=cut_state)
     print(detail, file=sys.stderr)
     if ok:
         print(
@@ -230,7 +303,19 @@ def build_parser() -> argparse.ArgumentParser:
         "restore", help="manually restore an asset after containment"
     )
     p_restore.add_argument("asset_id")
+    p_restore.add_argument(
+        "--token",
+        default=None,
+        help="restore_token (alternatively set ZEE_RESTORE_TOKEN). "
+             "Generate one with `zee init-restore-token`.",
+    )
     p_restore.set_defaults(func=_cmd_restore)
+
+    p_init_token = sub.add_parser(
+        "init-restore-token",
+        help="generate (or rotate) the local restore_token at ~/.zee/restore_token",
+    )
+    p_init_token.set_defaults(func=_cmd_init_restore_token)
 
     p_cut = sub.add_parser(
         "cut",

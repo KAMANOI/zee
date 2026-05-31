@@ -5,6 +5,70 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.3.0] — 2026-05-31
+
+Closes every "Known limitation" listed in v0.2's `SECURITY.md`. The
+"Known limitations (current release)" section is now empty and has
+been removed.
+
+### Added
+- **`zee init-restore-token`** (spec L3). Generates a 256-bit
+  restore_token at `~/.zee/restore_token` (0600, parent 0700) and
+  prints it once. `zee restore` now requires `--token <TOKEN>` or
+  `ZEE_RESTORE_TOKEN=<TOKEN>`. Standard library only; constant-time
+  comparison via `hmac.compare_digest`. A `restore_token` file with
+  loose permissions (group/world read or write) is refused at load
+  time. Stops a casual same-user attacker from reverting containment
+  from a second shell session; root-equivalent attackers still
+  bypass it (the README recommends wrapping `zee restore` in `sudo`
+  or running Zee under a dedicated user for multi-user deployments).
+- **Cut-state log** (`src/zee/telemetry/cut_state.py`, spec L2).
+  Each cut writes a `cut` record to
+  `~/.local/state/zee/cut_state.jsonl` (0600 / parent 0700) listing
+  the specific interfaces, services, or firewall-rule names Zee
+  modified. `zee restore` reads the latest unresolved record and
+  reverses only those changes; the v0.2 "enable everything" side
+  effect (re-enabling interfaces that another tool had disabled at
+  the same time) is gone. Missing or absent records fall back to
+  the v0.2 behaviour with a stderr warning.
+- **PowerShell `Get-NetAdapter`** for Windows interface enumeration
+  (spec L1). Locale-independent — works on Japanese / German /
+  French / etc. Windows where the legacy `netsh interface show
+  interface` parser returned zero results. The netsh parser is
+  retained as a fallback for environments where PowerShell is
+  unavailable.
+- **Error codes**: `Z602` (restore token required), `Z603` (restore
+  token not initialised), `Z604` (restore token invalid).
+- New tests: `test_cut_state.py` (7 cases), `test_restore_auth.py`
+  (9 cases), `test_windows_iface_enumeration.py` (4 cases). Total
+  test suite: 78 (was 56 on v0.2.0).
+
+### Changed
+- **`events.jsonl` schema** (spec L4): `decoy_path` is no longer
+  persisted. Each `trap_event` record carries `decoy_ref` of the
+  form `"<asset_id>#<index>"` (0-based index into the asset's
+  `decoy_paths`). A root attacker reading the log alone can no
+  longer enumerate every decoy's filesystem location; correlation
+  back to the full path goes via `assets.toml`. This is a
+  log-format breaking change for downstream analysis tools.
+- **`cut_full()` / `cut_egress()` signatures** gain optional
+  `asset_id=` and `cut_state=` keyword args. The `tuple[bool, str]`
+  return type is unchanged. Internal stubs and the responder pass
+  both so the cut-state record is written.
+- **`restore()`** reads the cut-state log and undoes only the
+  specific changes Zee recorded.
+
+### Tests
+- 78 unit tests passing (`pytest tests/`).
+
+### Migration notes
+- Existing `events.jsonl` files written by v0.1 / v0.2 still contain
+  `decoy_path`. New entries from v0.3 onwards use `decoy_ref`.
+  Downstream parsers must accept both keys for the transition window.
+- Operators upgrading from v0.2 must run `zee init-restore-token`
+  once before they can call `zee restore` again. The token file
+  lives at `~/.zee/restore_token`.
+
 ## [0.2.0] — 2026-05-31
 
 Canary URL wiring: macOS / Windows read detection moves from "planned"

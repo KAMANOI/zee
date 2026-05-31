@@ -56,11 +56,11 @@ def test_decoy_touch_must_be_high_confidence():
 def test_dry_run_never_calls_real_cut(monkeypatch):
     called = {"cut_full": 0, "cut_egress": 0}
 
-    def boom_full():
+    def boom_full(**kwargs):
         called["cut_full"] += 1
         return True, "should not be called"
 
-    def boom_egress():
+    def boom_egress(**kwargs):
         called["cut_egress"] += 1
         return True, "should not be called"
 
@@ -86,7 +86,7 @@ def test_dry_run_never_calls_real_cut(monkeypatch):
 def test_notify_mode_skips_cut_entirely(monkeypatch):
     called = {"cut": 0}
 
-    def boom():
+    def boom(**kwargs):
         called["cut"] += 1
         return True, "should not be called"
 
@@ -123,7 +123,7 @@ def test_contain_with_low_confidence_raises():
 
 def test_latency_recorded(monkeypatch):
     monkeypatch.setattr("zee.responder.sequence.cut_egress",
-                        lambda: (True, "stub"))
+                        lambda **kwargs: (True, "stub"))
     with tempfile.TemporaryDirectory() as td:
         log = EventLog(log_dir=Path(td))
         handle(_make_event(), _make_asset(response_mode="auto", cut_method="egress"),
@@ -141,7 +141,7 @@ def test_latency_recorded(monkeypatch):
 def test_events_jsonl_records_op_class(monkeypatch):
     """spec v4 addendum 2: op_class must be persisted in events.jsonl for audit."""
     monkeypatch.setattr("zee.responder.sequence.cut_egress",
-                        lambda: (True, "stub"))
+                        lambda **kwargs: (True, "stub"))
     with tempfile.TemporaryDirectory() as td:
         log = EventLog(log_dir=Path(td))
         handle(
@@ -164,3 +164,33 @@ def test_events_jsonl_records_op_class(monkeypatch):
         assert rec_change["type"] == "trap_event"
         assert rec_change["op_class"] == "change"
         assert rec_read["op_class"] == "read"
+
+
+def test_events_jsonl_uses_decoy_ref_not_path(monkeypatch):
+    """spec v0.3 L4: events.jsonl persists decoy_ref, never decoy_path.
+
+    Reading the log alone must not let an attacker enumerate every
+    decoy's filesystem location.
+    """
+    monkeypatch.setattr("zee.responder.sequence.cut_egress",
+                        lambda **kwargs: (True, "stub"))
+    with tempfile.TemporaryDirectory() as td:
+        log = EventLog(log_dir=Path(td))
+        from zee.events import TrapEvent
+        evt = TrapEvent.make(
+            source="decoy_touch",
+            confidence="high",
+            asset_id="t-host",
+            decoy_path="/very/sensitive/path/.env",  # must NOT appear in log
+            detail="decoy write",
+            op_class="change",
+            decoy_ref="t-host#0",
+        )
+        handle(evt, _make_asset(response_mode="notify"),
+               dry_run=False, event_log=log)
+        body = log.events_path.read_text()
+        assert "/very/sensitive/path/.env" not in body
+        assert "decoy_ref" in body
+        rec = json.loads(body.strip())
+        assert rec["decoy_ref"] == "t-host#0"
+        assert "decoy_path" not in rec

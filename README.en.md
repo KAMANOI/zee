@@ -100,10 +100,13 @@ cp examples/assets.example.toml ./assets.toml
 #    trip on read-only touches (Linux observes reads directly).
 export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 
-# 3. Start monitoring (default dry_run — no real cut)
+# 3. Generate a restore token once (required from v0.3)
+zee init-restore-token   # capture the printed token somewhere safe
+
+# 4. Start monitoring (default dry_run — no real cut)
 zee watch -c ./assets.toml
 
-# 4. In another window, simulate an attacker tampering with the decoy
+# 5. In another window, simulate an attacker tampering with the decoy
 echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
 #  -> change-class touch (modify); Zee records a high-confidence event
 #     on all three OSes. On Linux, `cat <decoy>` (read-only) also fires
@@ -112,6 +115,11 @@ echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
 #     the canary URL embedded in the decoy is dereferenced and the
 #     operator's external endpoint receives the hit (never re-enters
 #     Zee's local responder).
+
+# 6. After a cut, recover with the token
+zee restore <asset_id> --token <TOKEN>
+# Or via env var:
+ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>
 ```
 
 ### What this MVP does / does not do
@@ -191,12 +199,28 @@ Zee draws its boundary honestly.
 - **Auto-cut fires only on change-class touches** — open / read / attribute-inspection touches never auto-cut. The notification carries an operator-facing hint, and the operator decides whether to invoke `zee cut <asset_id>` manually. Reason: with no process attribution from the current watchers, restricting auto-cut to operations that legitimate bulk readers (backup, AV, indexer) do not perform on decoys is the structurally safer rule
 - **On macOS / Windows, decoy reads fire only when `ZEE_CANARY_BASE_URL` is set** — kqueue and ReadDirectoryChangesW do not emit read notifications. When `ZEE_CANARY_BASE_URL` is configured, the seeder embeds a canary URL in the decoy and the operator's external endpoint fires on dereference (never re-entering Zee's local responder). When `ZEE_CANARY_BASE_URL` is unset, no canary URL is embedded and read-only touches are not observed. Linux observes reads directly via inotify and does not need a canary
 - **The process allowlist does not take effect on the current MVP** — false-positive control relies on placement (keep decoys outside what backup / AV / indexer software walks) and the change-class trigger limit, not on an allowlist match. See the "False-positive control" section above
-- **`zee restore` has no authentication** — an attacker who obtains a shell on the host can roll back containment. The MVP intentionally keeps this simple for a single-operator deployment
-- **Event log records `decoy_path` in plaintext** — files are owner-only (0700/0600), but a root-equivalent attacker can still read them
+- **`zee restore` requires a `restore_token`** — from v0.3, generate it once with `zee init-restore-token` and pass it via `--token` or `ZEE_RESTORE_TOKEN`. This stops accidental restores from another shell session of the same user; a root-equivalent attacker who can read `~/.zee/restore_token` still bypasses it. For multi-user production deployments, wrap `zee restore` in `sudo` or run Zee under a dedicated user
+- **Event log records `decoy_ref` (`asset_id#index`)** — from v0.3, events.jsonl no longer carries the absolute decoy path. An attacker reading the log cannot enumerate every decoy's filesystem location; correlation back to the full path goes through `assets.toml`
 - **It has limits** — against fully autonomous machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range. Zee buys time against human-paced or semi-automated post-intrusion activity — the phase after a breach succeeds, during which an attacker performs reconnaissance, lateral movement, and exfiltration
 - **It is not measured** — effectiveness has not been independently validated. Verify in your own environment before any production use
 
 This is a floor, not a ceiling. We state the failure conditions before claiming safety.
+
+---
+
+## Upgrading from v0.2 to v0.3
+
+`zee restore` now requires a restore_token. Run **once** before your next `zee restore`:
+
+```bash
+zee init-restore-token
+```
+
+Capture the printed token somewhere safe. Subsequent `zee restore` invocations need `--token <TOKEN>` or the `ZEE_RESTORE_TOKEN=<TOKEN>` environment variable.
+
+Also, from v0.3 each trap_event record in `events.jsonl` carries `decoy_ref` (`<asset_id>#<index>`) instead of `decoy_path`. Downstream parsers must accept either key during the transition window (existing v0.2 log entries keep the old key).
+
+See the [CHANGELOG.md](./CHANGELOG.md) [0.3.0] entry for the full migration notes.
 
 ---
 

@@ -296,12 +296,19 @@ zee watch -c ./assets.toml
 <span class="c">#   外部 webhook 受信器（Canarytokens.org / 自前 / Lambda 等）の URL を渡す</span>
 export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 
-<span class="c"># 5. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
+<span class="c"># 5. 復旧トークンを 1 回だけ生成（v0.3 以降必須）</span>
+zee init-restore-token   <span class="c"># 表示されたトークンを安全な場所に控える</span>
+
+<span class="c"># 6. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
 echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
 <span class="c">#   → 変更系の接触として 3 OS 共通で高信頼イベントを記録します。</span>
 <span class="c">#   Linux では `cat &lt;decoy&gt;` の読み取りだけでも記録します。</span>
 <span class="c">#   macOS / Windows の読み取りは ZEE_CANARY_BASE_URL 設定時のみ</span>
-<span class="c">#   観測されます（埋め込んだ canary URL が外部受信器で発火）。</span></div>
+<span class="c">#   観測されます（埋め込んだ canary URL が外部受信器で発火）。</span>
+
+<span class="c"># 7.（遮断が走った後）復旧</span>
+zee restore &lt;asset_id&gt; --token &lt;TOKEN&gt;
+<span class="c"># または環境変数経由：ZEE_RESTORE_TOKEN=&lt;TOKEN&gt; zee restore &lt;asset_id&gt;</span></div>
 
     <h3 style="margin-top:36px">検知能力マトリクス</h3>
     <div class="matrix">
@@ -373,7 +380,7 @@ echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
         <ul>
           <li>侵入後の異常検知（囮への接触＝高信頼イベント）</li>
           <li>OS別の自動封じ込め（full / egress・既定 dry_run）</li>
-          <li>レイテンシ・op_class（read / change）・誤検知マーカーの計測</li>
+          <li>レイテンシ・op_class（read / change）・誤検知マーカーの計測（decoy_ref で位置匿名化）</li>
           <li>誤作動の最小化（配置ガイド ＋ 変更系操作のみ自動遮断）</li>
           <li>能力マトリクスでの正直な OS 別開示</li>
         </ul>
@@ -438,8 +445,8 @@ echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
       <li><b style="color:var(--text)">自動遮断は「変更系の接触」のみ</b> — open / read / 属性参照などの読み取り系は自動遮断しません。通知のみで、必要なら <code>zee cut &lt;asset_id&gt;</code> で手動遮断します。プロセス特定ができない現バックエンドでは、正規ソフトが普通やらない操作だけを自動遮断の根拠にするのが構造的に安全だからです。</li>
       <li><b style="color:var(--text)">macOS / Windows の読み取り検知は <code>ZEE_CANARY_BASE_URL</code> 設定時のみ</b> — kqueue / ReadDirectoryChangesW は read を通知しません。環境変数を設定すると seeder が canary URL を decoy に自動埋め込みし、外部受信器で発火します（Zee 本体には戻りません）。未設定では canary URL は埋め込まれず、macOS / Windows での「読むだけ」の攻撃は観測されません。Linux は inotify で read を直接観察するので canary 不要です。</li>
       <li><b style="color:var(--text)">プロセス allowlist は現バックエンドでは効かない</b> — 誤検知制御は「配置ガイド」＋「変更系トリガー限定」で行います。allowlist 路線は v4 で撤回しました（v2 で同梱した既定 allowlist と auto+dry_run:false ハードブロックも撤回）。</li>
-      <li><b style="color:var(--text)"><code>zee restore</code> に認証はない</b> — ホスト上でシェルを取れる攻撃者は遮断を巻き戻せます。MVP は単一 operator 前提で意図的に簡素化しています。</li>
-      <li><b style="color:var(--text)">イベントログには <code>decoy_path</code> が平文で記録される</b> — owner-only（0700 / 0600）で保護していますが、root 相当の攻撃者には読まれます。</li>
+      <li><b style="color:var(--text)"><code>zee restore</code> には <code>restore_token</code> が必要（v0.3 から）</b> — <code>zee init-restore-token</code> で生成したトークンを <code>--token</code> または <code>ZEE_RESTORE_TOKEN</code> で渡します。同一ユーザーで動作する別シェルからの誤った巻き戻しは塞げますが、<code>~/.zee/restore_token</code>（0600）を読める root 相当の攻撃者にはバイパスされます。マルチユーザー本番では <code>sudo</code> で囲うか専用ユーザーで運用してください。</li>
+      <li><b style="color:var(--text)">イベントログは <code>decoy_ref</code>（asset_id#index）で記録（v0.3 から）</b> — 絶対パスは記録されないため、ログを読まれても囮位置は一括列挙できません。対応関係は <code>assets.toml</code> 経由でのみ復元できます。</li>
       <li><b style="color:var(--text)">限界がある</b> — 機械の速度で動く相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。</li>
       <li><b style="color:var(--text)">未測定</b> — 効果はまだ独立に検証されていません。本番運用の前に、ご自身の環境で必ず確認してください。</li>
     </ul>

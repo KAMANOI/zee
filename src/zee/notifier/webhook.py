@@ -52,9 +52,12 @@ def from_env() -> Optional[WebhookSender]:
     """Return a webhook sender bound to ZEE_WEBHOOK_URL, or None.
 
     A single environment variable enables remote alerts; no config file
-    edit is required. The URL must use HTTPS — the webhook payload carries
-    decoy contact details (asset_id, decoy_path, detected_at, detail) and
-    Zee's threat model assumes the attacker may be on the local network.
+    edit is required. The URL must use HTTPS — the webhook payload
+    carries decoy contact details (asset_id, decoy_ref, detected_at,
+    detail) and Zee's threat model assumes the attacker may be on the
+    local network. From v0.3 the payload no longer contains the
+    absolute ``decoy_path``; the receiver gets ``decoy_ref``
+    (``asset_id#index``) and correlates back via ``assets.toml``.
     """
     url = os.environ.get("ZEE_WEBHOOK_URL", "").strip()
     if not url:

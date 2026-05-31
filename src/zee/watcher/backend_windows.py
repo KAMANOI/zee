@@ -74,6 +74,8 @@ class WindowsWatcher:
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self._handles: dict[str, wt.HANDLE] = {}  # dir_path -> handle
         self._watch_files: dict[str, set[str]] = {}  # dir_path -> { filenames }
+        # (dir_path, filename) -> "asset_id#index" for the v0.3 decoy_ref payload.
+        self._file_to_ref: dict[tuple[str, str], str] = {}
         self._threads: list[threading.Thread] = []
         self._stop_event = threading.Event()
         self._canary_configured = canary_configured
@@ -114,11 +116,12 @@ class WindowsWatcher:
 
         # Group decoys by parent directory.
         by_dir: dict[str, set[str]] = {}
-        for raw in decoy_paths:
+        for index, raw in enumerate(decoy_paths):
             p = Path(raw).expanduser().resolve()
             if not p.exists():
                 raise ZeeError(Z302_DECOY_PATH_NOT_FOUND, str(p))
             by_dir.setdefault(str(p.parent), set()).add(p.name)
+            self._file_to_ref[(str(p.parent), p.name)] = f"{asset_id}#{index}"
 
         for dir_path, filenames in by_dir.items():
             handle = self._open_dir(dir_path)
@@ -206,6 +209,7 @@ class WindowsWatcher:
                     decoy_path=full,
                     detail=detail,
                     op_class="change",
+                    decoy_ref=self._file_to_ref.get((dir_path, filename)),
                 )
                 try:
                     on_event(trap)
@@ -227,6 +231,7 @@ class WindowsWatcher:
             t.join(timeout=2.0)
         self._handles.clear()
         self._watch_files.clear()
+        self._file_to_ref.clear()
         self._threads.clear()
 
 

@@ -64,12 +64,19 @@ class EventLog:
         self.metrics_path = self.log_dir / "metrics.jsonl"
 
     def record_event(self, event: TrapEvent) -> None:
+        # v0.3 (spec L4): we record `decoy_ref` (asset_id#index) instead
+        # of the absolute `decoy_path`, so a root attacker reading the
+        # log cannot enumerate every decoy's location in one file.
+        # `decoy_ref` falls back to `asset_id#?` if the watcher did not
+        # supply it (e.g. a behavior_anomaly event), so the column stays
+        # populated.
+        decoy_ref = event.decoy_ref or f"{event.asset_id}#?"
         record = {
             "type": "trap_event",
             "source": event.source,
             "confidence": event.confidence,
             "asset_id": event.asset_id,
-            "decoy_path": event.decoy_path,
+            "decoy_ref": decoy_ref,
             "detected_at": event.detected_at.isoformat(),
             "detail": event.detail,
             "op_class": event.op_class,

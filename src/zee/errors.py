@@ -40,6 +40,9 @@ Z503_WEBHOOK_HTTP_ERROR = ("Z503", "Webhook のレスポンスがエラーでし
 
 # Z6xx
 Z601_RESTORE_FAILED = ("Z601", "復旧コマンドの実行に失敗しました")
+Z602_RESTORE_TOKEN_REQUIRED = ("Z602", "復旧トークンが必要です。--token または ZEE_RESTORE_TOKEN を指定してください")
+Z603_RESTORE_TOKEN_NOT_INITIALIZED = ("Z603", "復旧トークンが未初期化です。`zee init-restore-token` を最初に実行してください")
+Z604_RESTORE_TOKEN_INVALID = ("Z604", "復旧トークンが一致しません")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")

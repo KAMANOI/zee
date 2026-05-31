@@ -48,6 +48,8 @@ class MacOSKqueueWatcher:
             )
         self._kq: Optional[select.kqueue] = None
         self._fds: dict[int, str] = {}
+        # fd -> "asset_id#index" for the v0.3 decoy_ref payload.
+        self._fd_to_ref: dict[int, str] = {}
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._canary_configured = canary_configured
@@ -87,12 +89,13 @@ class MacOSKqueueWatcher:
         self._stop_event.clear()
 
         try:
-            for raw in decoy_paths:
+            for index, raw in enumerate(decoy_paths):
                 p = Path(raw).expanduser().resolve()
                 if not p.exists():
                     raise ZeeError(Z302_DECOY_PATH_NOT_FOUND, str(p))
                 fd = os.open(str(p), os.O_RDONLY)
                 self._fds[fd] = str(p)
+                self._fd_to_ref[fd] = f"{asset_id}#{index}"
 
             kevents = [
                 select.kevent(
@@ -130,6 +133,7 @@ class MacOSKqueueWatcher:
             except OSError:
                 pass
         self._fds.clear()
+        self._fd_to_ref.clear()
         if self._kq is not None:
             try:
                 self._kq.close()
@@ -156,6 +160,7 @@ class MacOSKqueueWatcher:
                     decoy_path=path,
                     detail=detail,
                     op_class=op_class,
+                    decoy_ref=self._fd_to_ref.get(ev.ident),
                 )
                 try:
                     on_event(trap)

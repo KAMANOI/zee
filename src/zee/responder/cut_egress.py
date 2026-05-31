@@ -14,6 +14,14 @@ import logging
 import shutil
 import subprocess
 import sys
+from typing import Optional
+
+from ..telemetry.cut_state import CutStateLog
+from .cut_full import (
+    SENTINEL_LINUX_IPTABLES_EGRESS,
+    SENTINEL_LINUX_NFT_EGRESS,
+    SENTINEL_MACOS_PFCTL_EGRESS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +29,33 @@ logger = logging.getLogger(__name__)
 ZEE_RULE_TAG = "zee-egress-cut"
 
 
-def cut_egress() -> tuple[bool, str]:
+def cut_egress(
+    *,
+    asset_id: Optional[str] = None,
+    cut_state: Optional[CutStateLog] = None,
+) -> tuple[bool, str]:
+    ok, detail, modified = _cut_egress_dispatch()
+    if ok and asset_id and cut_state is not None and modified:
+        cut_state.record_cut(
+            asset_id=asset_id,
+            method="egress",
+            platform=sys.platform,
+            modified=modified,
+        )
+    return ok, detail
+
+
+def _cut_egress_dispatch() -> tuple[bool, str, list[str]]:
     if sys.platform.startswith("linux"):
         return _cut_egress_linux()
     if sys.platform == "darwin":
         return _cut_egress_macos()
     if sys.platform == "win32":
         return _cut_egress_windows()
-    return False, f"unsupported platform: {sys.platform}"
+    return False, f"unsupported platform: {sys.platform}", []
 
 
-def _cut_egress_linux() -> tuple[bool, str]:
+def _cut_egress_linux() -> tuple[bool, str, list[str]]:
     # Prefer nftables when available; fall back to iptables.
     if shutil.which("nft"):
         script = (
@@ -52,10 +76,10 @@ def _cut_egress_linux() -> tuple[bool, str]:
                 timeout=10,
             )
         except (subprocess.SubprocessError, OSError) as e:
-            return False, f"nft failed: {e}"
+            return False, f"nft failed: {e}", []
         if cp.returncode != 0:
-            return False, (cp.stderr or cp.stdout).strip()
-        return True, "nftables zee_egress table installed"
+            return False, (cp.stderr or cp.stdout).strip(), []
+        return True, "nftables zee_egress table installed", [SENTINEL_LINUX_NFT_EGRESS]
 
     if shutil.which("iptables"):
         commands = [
@@ -70,15 +94,15 @@ def _cut_egress_linux() -> tuple[bool, str]:
         for cmd in commands:
             ok, msg = _run(cmd)
             if not ok:
-                return False, f"{' '.join(cmd)}: {msg}"
-        return True, "iptables ZEE_EGRESS chain installed"
+                return False, f"{' '.join(cmd)}: {msg}", []
+        return True, "iptables ZEE_EGRESS chain installed", [SENTINEL_LINUX_IPTABLES_EGRESS]
 
-    return False, "no supported backend (need nft or iptables)"
+    return False, "no supported backend (need nft or iptables)", []
 
 
-def _cut_egress_macos() -> tuple[bool, str]:
+def _cut_egress_macos() -> tuple[bool, str, list[str]]:
     if not shutil.which("pfctl"):
-        return False, "pfctl not available"
+        return False, "pfctl not available", []
     rules = (
         "block drop out all\n"
         "pass out on lo0 all\n"
@@ -95,17 +119,17 @@ def _cut_egress_macos() -> tuple[bool, str]:
             timeout=10,
         )
     except (subprocess.SubprocessError, OSError) as e:
-        return False, f"pfctl failed: {e}"
+        return False, f"pfctl failed: {e}", []
     if cp.returncode != 0:
-        return False, (cp.stderr or cp.stdout).strip()
+        return False, (cp.stderr or cp.stdout).strip(), []
     # Enable pf if it isn't already.
     _run(["pfctl", "-e"])
-    return True, f"pfctl anchor {ZEE_RULE_TAG} loaded"
+    return True, f"pfctl anchor {ZEE_RULE_TAG} loaded", [SENTINEL_MACOS_PFCTL_EGRESS]
 
 
-def _cut_egress_windows() -> tuple[bool, str]:
+def _cut_egress_windows() -> tuple[bool, str, list[str]]:
     if not shutil.which("netsh"):
-        return False, "netsh not available"
+        return False, "netsh not available", []
     # Block all outbound by default; allow local subnets.
     commands = [
         [
@@ -124,8 +148,8 @@ def _cut_egress_windows() -> tuple[bool, str]:
     for cmd in commands:
         ok, msg = _run(cmd)
         if not ok:
-            return False, f"{cmd[3:6]}: {msg}"
-    return True, "netsh advfirewall rules installed"
+            return False, f"{cmd[3:6]}: {msg}", []
+    return True, "netsh advfirewall rules installed", [f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local"]
 
 
 def _run(cmd: list[str]) -> tuple[bool, str]:

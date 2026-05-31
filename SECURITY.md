@@ -62,39 +62,27 @@ subject of legal action by the maintainer. Please:
 - Do not use vulnerabilities you discover to access data beyond what is
   necessary to demonstrate the issue.
 
-## Known limitations (current release)
+## Honesty boundaries (current release)
 
-The following are documented limitations of the current release that
-we have not yet fixed. They are not "vulnerabilities" in the sense of
-an unintended weakness — they are honestly-published boundaries of
-the current MVP.
+These are not "known bugs" — the items in the Known-limitations
+section in v0.1 / v0.2 were closed in v0.3. The following are
+honestly-published boundaries of what Zee is and is not:
 
-- **macOS / Windows read detection requires `ZEE_CANARY_BASE_URL`.**
-  Read-only attacker activity against a macOS / Windows decoy is
-  observed only when the operator sets `ZEE_CANARY_BASE_URL` to an
-  external receiver they control (Canarytokens.org, a self-hosted
-  webhook, an AWS Lambda, etc.). Without it, no canary URL is embedded
-  and read-only touches are not observed (safe by default). Linux
-  observes reads directly via `inotify` and does not need a canary.
-- **Windows interface enumeration is English-locale-dependent.**
-  `list_windows_interfaces()` in `src/zee/responder/cut_full.py` parses
-  the English-locale output of `netsh interface show interface`
-  (filtering on `cols[0].lower() == "enabled"`). On non-English Windows
-  the header text differs and enumeration may return zero entries.
-  Locale-independent enumeration (e.g. via `Get-NetAdapter`) is a
-  follow-up.
-- **`zee restore` on Windows re-enables every interface it can see.**
-  The recovery path enumerates all interfaces (not just the ones Zee
-  cut) and re-enables them, because Zee does not currently record the
-  exact set of interfaces it disabled. If another tool had disabled an
-  interface at the same time, `zee restore` will re-enable it as a
-  side-effect. Tracking the cut-state per asset is a follow-up.
-- **`zee restore` has no authentication.** The MVP is single-operator;
-  anyone who can run the CLI can revert containment. See README
-  "Limitations" for the threat-model implications.
-- **Event log records `decoy_path` in plaintext.** Files are owner-only
-  (0700 / 0600), but a root-equivalent attacker can still read them and
-  enumerate decoy locations.
-
-These are tracked publicly so that anyone running the current release
-can plan around them.
+- **Read detection on macOS / Windows requires the operator to set
+  `ZEE_CANARY_BASE_URL`** to an external receiver they control
+  (Canarytokens.org, a self-hosted webhook, an AWS Lambda, etc.).
+  Without it, no canary URL is embedded and read-only touches against
+  a macOS / Windows decoy are not observed (safe by default; Linux
+  needs no canary because `inotify` reports reads directly).
+- **`restore_token` does not stop a root-equivalent attacker.** The
+  token file at `~/.zee/restore_token` is 0600; a same-user attacker
+  with shell access can read it. The token blocks accidental restores
+  from another shell session and casual non-root attackers. For
+  multi-user production deployments, wrap `zee restore` in `sudo` or
+  run Zee under a dedicated user — `restore_token` is a complement,
+  not a replacement, for OS-level access control.
+- **Windows hardware is not yet tested by the maintainer.** The
+  Windows watcher and cut/restore paths are implemented and unit-
+  tested with PowerShell / netsh stubs, but the maintainer does not
+  own a Windows machine. Continuous-run verification on Windows is
+  pending CI integration.

@@ -57,6 +57,8 @@ class LinuxInotifyWatcher:
         self._libc = self._load_libc()
         self._fd: int = -1
         self._wd_to_path: dict[int, str] = {}
+        # path -> "asset_id#index" for the v0.3 decoy_ref payload.
+        self._wd_to_ref: dict[int, str] = {}
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -104,7 +106,7 @@ class LinuxInotifyWatcher:
         self._fd = fd
         self._stop_event.clear()
 
-        for raw in decoy_paths:
+        for index, raw in enumerate(decoy_paths):
             p = Path(raw).expanduser().resolve()
             if not p.exists():
                 raise ZeeError(Z302_DECOY_PATH_NOT_FOUND, str(p))
@@ -116,6 +118,7 @@ class LinuxInotifyWatcher:
                     f"inotify_add_watch({p}) failed: {os.strerror(err)}",
                 )
             self._wd_to_path[wd] = str(p)
+            self._wd_to_ref[wd] = f"{asset_id}#{index}"
 
         self._thread = threading.Thread(
             target=self._loop,
@@ -168,6 +171,7 @@ class LinuxInotifyWatcher:
                     decoy_path=path,
                     detail=detail,
                     op_class=op_class,
+                    decoy_ref=self._wd_to_ref.get(wd),
                 )
                 try:
                     on_event(event)
@@ -185,6 +189,7 @@ class LinuxInotifyWatcher:
             except OSError:
                 pass
         self._wd_to_path.clear()
+        self._wd_to_ref.clear()
         if self._fd >= 0:
             try:
                 os.close(self._fd)
