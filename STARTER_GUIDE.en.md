@@ -107,7 +107,7 @@ The reasoning is structural: legitimate bulk readers (backup tools, AV/EDR, file
 
 If you receive a read-class alert and have no explanation for it, invoke `zee cut <asset_id>` manually to cut (and `zee restore <asset_id>` to recover). Zee does not emit hints that say "ignore safely"; the final call is always yours.
 
-Note for v0.1: **read-only attacker activity against a macOS / Windows decoy is NOT observed** in this release. kqueue / ReadDirectoryChangesW do not emit read events, and the planned canary-URL path is not wired in v0.1. Linux observes reads directly via inotify.
+To observe read-only attacker activity on macOS / Windows, set the `ZEE_CANARY_BASE_URL` environment variable to an external endpoint you control (your own webhook receiver, [Canarytokens.org](https://canarytokens.org), an AWS Lambda, etc.) before running `zee watch`. The seeder will then embed canary URLs into the decoy content; when the attacker dereferences one, the operator's external endpoint fires (out-of-band, never re-entering Zee's local responder). If `ZEE_CANARY_BASE_URL` is unset, no canary URL is embedded and read-only touches against a macOS / Windows decoy are not observed (safe by default). Linux observes reads directly via inotify and needs no canary.
 
 ---
 

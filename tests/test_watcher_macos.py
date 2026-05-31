@@ -18,9 +18,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_capability_declares_modify_only():
-    """v0.1: macOS backend observes change only. The canary URL path is
-    planned but NOT wired in v0.1, so uses_canary_fallback is False."""
+def test_capability_unconfigured_declares_modify_only():
+    """v0.2 default: no ZEE_CANARY_BASE_URL → canary fallback is False
+    and the notes string carries the configuration hint."""
     from zee.watcher.backend_macos import MacOSKqueueWatcher
     w = MacOSKqueueWatcher()
     cap = w.capability()
@@ -28,7 +28,18 @@ def test_capability_declares_modify_only():
     assert cap.detects_open is False
     assert cap.detects_read is False
     assert cap.uses_canary_fallback is False
-    assert "NOT wired in v0.1" in cap.notes
+    assert "ZEE_CANARY_BASE_URL" in cap.notes
+
+
+def test_capability_with_canary_declares_canary_fallback():
+    """v0.2 wired: canary_configured=True → canary fallback is True
+    and read detection is described as 'delegated to canary URLs'."""
+    from zee.watcher.backend_macos import MacOSKqueueWatcher
+    w = MacOSKqueueWatcher(canary_configured=True)
+    cap = w.capability()
+    assert cap.detects_modify is True
+    assert cap.uses_canary_fallback is True
+    assert "canary URLs" in cap.notes
 
 
 def test_modify_fires_event(tmp_path):

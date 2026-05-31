@@ -127,15 +127,21 @@ privacy policy of whoever runs that endpoint. The token_id itself is
 generated with `secrets.token_urlsafe` and carries no operator
 identifier inside Zee.
 
-**Canary wiring status in v0.1.** `CanaryTokenRegistry`
-(`src/zee/decoy/canary_token.py`) provides **only the data structure**
-for issuing and registering tokens. In v0.1 the seeder does NOT call
-the registry and the decoy files do NOT contain canary URLs
-automatically. Read-only attacker activity against a macOS / Windows
-decoy is therefore not observed in v0.1 (kqueue / ReadDirectoryChangesW
-do not emit read events, and there is no canary URL in the decoy to
-fire out-of-band). An operator can hand-embed canary URLs in decoys
-today; the seeder-side automation is planned as a separate task.
+**Canary wiring status in v0.2.** `CanaryTokenRegistry`
+(`src/zee/decoy/canary_token.py`) is called from the seeder. When
+`ZEE_CANARY_BASE_URL` is set, the seeder embeds a canary URL into the
+env / credentials / notes templates; ssh_key is left alone because
+the OpenSSH armor format does not survive a foreign URL. When
+`ZEE_CANARY_BASE_URL` is unset, no canary URL is embedded and the
+macOS / Windows read path is not observed (safe by default). The
+embedded line carries no Zee-origin markers (no ``canary`` /
+``tripwire`` / ``zee`` / ``decoy`` words; the line reads as a natural
+``# rotation policy: <URL>``, ``MONITORING_ENDPOINT=<URL>``, or
+``- partner integration credentials in <URL>``). Issued tokens persist to
+``~/.local/state/zee/canary_tokens.jsonl`` (0600); a restart with the
+same base_url rebinds the same URL to each decoy_path (idempotent).
+The pre-0.2 ``about:zee/c/...`` fallback was removed: minting without
+a configured base_url now raises `RuntimeError`.
 
 `policy/allowlist.py`'s `ip_cidrs` / `is_protected(ip=...)` are **not
 called by any current watcher backend**. They are a placeholder for a
@@ -230,7 +236,7 @@ The affine Collatz research referenced there is described as a **research direct
 
 | Component | Status | Location and notes |
 |---|---|---|
-| 1. Behavior observation (decoy tripwire) | ✅ Implemented (change-only on macOS / Windows) | `src/zee/watcher/` — Linux inotify (open/read/modify), macOS kqueue (change-only), Windows ReadDirectoryChangesW (change-only). **Canary-URL read detection is NOT wired in v0.1** (read-only attacker activity against a macOS / Windows decoy is not observed). Windows hardware untested |
+| 1. Behavior observation (decoy tripwire) | ✅ Implemented | `src/zee/watcher/` — Linux inotify observes open/read/modify directly. macOS kqueue and Windows ReadDirectoryChangesW observe change events; when `ZEE_CANARY_BASE_URL` is set, the seeder embeds canary URLs in the decoy content and the operator's external endpoint fires on read (out-of-band; never re-enters Zee's local responder). Windows hardware untested |
 | 2. Gatekeepers | Partial | `src/zee/policy/` — allowlist data structure done; wiring into the responder (downgrading contain when allowlist matches) and the multi-signal trap gate are next |
 | 3. Decoy redirection | Research-stage | Design only |
 | 4. Fake internal network | Research-stage | Design only |

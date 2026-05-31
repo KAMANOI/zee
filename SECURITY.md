@@ -62,21 +62,20 @@ subject of legal action by the maintainer. Please:
 - Do not use vulnerabilities you discover to access data beyond what is
   necessary to demonstrate the issue.
 
-## Known issues (v0.1)
+## Known limitations (current release)
 
-The following are documented limitations of the v0.1 release that we
-have not yet fixed. They are not "vulnerabilities" in the sense of an
-unintended weakness — they are honestly-published boundaries of the
-current MVP.
+The following are documented limitations of the current release that
+we have not yet fixed. They are not "vulnerabilities" in the sense of
+an unintended weakness — they are honestly-published boundaries of
+the current MVP.
 
-- **Canary URL read detection is not wired.** `CanaryTokenRegistry`
-  (`src/zee/decoy/canary_token.py`) provides the data structure for
-  issuing tokens, but the seeder does not embed canary URLs into the
-  decoy files in v0.1. As a result, **read-only attacker activity
-  against a macOS / Windows decoy is not observed** (kqueue and
-  ReadDirectoryChangesW do not emit read events). Linux observes reads
-  directly via `inotify`. Seeder-side canary automation is tracked as a
-  separate task.
+- **macOS / Windows read detection requires `ZEE_CANARY_BASE_URL`.**
+  Read-only attacker activity against a macOS / Windows decoy is
+  observed only when the operator sets `ZEE_CANARY_BASE_URL` to an
+  external receiver they control (Canarytokens.org, a self-hosted
+  webhook, an AWS Lambda, etc.). Without it, no canary URL is embedded
+  and read-only touches are not observed (safe by default). Linux
+  observes reads directly via `inotify` and does not need a canary.
 - **Windows interface enumeration is English-locale-dependent.**
   `list_windows_interfaces()` in `src/zee/responder/cut_full.py` parses
   the English-locale output of `netsh interface show interface`
@@ -97,5 +96,5 @@ current MVP.
   (0700 / 0600), but a root-equivalent attacker can still read them and
   enumerate decoy locations.
 
-These are tracked publicly so that anyone running Zee in v0.1 can plan
-around them.
+These are tracked publicly so that anyone running the current release
+can plan around them.

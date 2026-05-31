@@ -1,17 +1,18 @@
 """macOS watcher backend — kqueue / EVFILT_VNODE (spec §9).
 
 kqueue observes file-level change events (write, delete, attrib, rename,
-extend). It does NOT observe reads. Read detection on macOS is planned
+extend). It does NOT observe reads. Read detection on macOS is wired
 via canary URLs embedded in decoys (the CanaryTokenRegistry in
-decoy/canary_token.py), but the canary path is NOT wired into the
-seeder in v0.1 — the registry currently has no caller in production
-code. On v0.1, read-only attacker activity against a macOS decoy is
-therefore not observed by Zee. See README "Limitations" for the v0.1
-boundary and decoy/canary_token.py for the registry data structure
-that the future wiring will use.
+decoy/canary_token.py), which fire out-of-band at an operator-controlled
+external endpoint when an attacker dereferences them.
 
-This honest split — change events here, read detection deferred — is
-reflected in the capability declaration.
+The watcher itself does not handle the canary path — the decoy seeder
+embeds the URL, and an external endpoint receives the dereference.
+``canary_configured`` is passed in only so the ``capability()`` output
+honestly reflects whether the operator has wired ZEE_CANARY_BASE_URL.
+
+This honest split — change events here, read detection out-of-band —
+is reflected in the capability declaration.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 class MacOSKqueueWatcher:
     """kqueue/EVFILT_VNODE-based watcher. Change detection only."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, canary_configured: bool = False) -> None:
         if sys.platform != "darwin":
             raise ZeeError(
                 Z301_WATCHER_BACKEND_UNAVAILABLE,
@@ -49,21 +50,31 @@ class MacOSKqueueWatcher:
         self._fds: dict[int, str] = {}
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._canary_configured = canary_configured
 
     def capability(self) -> Capability:
+        if self._canary_configured:
+            notes = (
+                "kqueue/EVFILT_VNODE for change detection. Read detection "
+                "is delegated to canary URLs embedded in decoys by the "
+                "seeder; the operator's external endpoint fires when an "
+                "attacker dereferences a decoy URL (out-of-band — never "
+                "re-enters Zee's local responder)."
+            )
+        else:
+            notes = (
+                "kqueue/EVFILT_VNODE for change detection. Set "
+                "ZEE_CANARY_BASE_URL to wire the canary URL path; "
+                "without it, read-only attacker activity against a "
+                "macOS decoy is not observed."
+            )
         return Capability(
             backend_name="macos_kqueue",
             detects_open=False,
             detects_read=False,
             detects_modify=True,
-            uses_canary_fallback=False,
-            notes=(
-                "kqueue/EVFILT_VNODE for change detection only. Read "
-                "detection on macOS is planned via canary URLs embedded "
-                "in decoys, but the canary path is NOT wired in v0.1; "
-                "read-only attacker activity against a decoy is not "
-                "observed in this release."
-            ),
+            uses_canary_fallback=self._canary_configured,
+            notes=notes,
         )
 
     def start(

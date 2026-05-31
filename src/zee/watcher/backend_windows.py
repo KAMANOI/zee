@@ -3,11 +3,10 @@
 Observes change notifications on the parent directories of decoys.
 Does NOT observe reads — reliable read detection on Windows requires
 Object Access auditing (SACL + Security event log), which is out of
-scope for this MVP. Read detection via canary URLs embedded in decoys
-is planned (see decoy/canary_token.py for the registry data structure),
-but the canary path is NOT wired into the seeder in v0.1; read-only
-attacker activity against a Windows decoy is not observed in this
-release. See README "Limitations".
+scope for this MVP. Read detection is wired via canary URLs embedded
+in decoys (see decoy/canary_token.py); ``canary_configured`` is
+passed in only so capability() honestly reflects whether
+ZEE_CANARY_BASE_URL is set by the operator.
 """
 
 from __future__ import annotations
@@ -66,7 +65,7 @@ BUFFER_SIZE = 8192
 class WindowsWatcher:
     """ReadDirectoryChangesW-based watcher. Change detection only."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, canary_configured: bool = False) -> None:
         if sys.platform != "win32":
             raise ZeeError(
                 Z301_WATCHER_BACKEND_UNAVAILABLE,
@@ -77,21 +76,32 @@ class WindowsWatcher:
         self._watch_files: dict[str, set[str]] = {}  # dir_path -> { filenames }
         self._threads: list[threading.Thread] = []
         self._stop_event = threading.Event()
+        self._canary_configured = canary_configured
 
     def capability(self) -> Capability:
+        if self._canary_configured:
+            notes = (
+                "ReadDirectoryChangesW for change detection on the parent "
+                "directory. Read detection is delegated to canary URLs "
+                "embedded in decoys by the seeder; the operator's "
+                "external endpoint fires when an attacker dereferences "
+                "a decoy URL (out-of-band — never re-enters Zee's local "
+                "responder)."
+            )
+        else:
+            notes = (
+                "ReadDirectoryChangesW for change detection on the parent "
+                "directory. Set ZEE_CANARY_BASE_URL to wire the canary "
+                "URL path; without it, read-only attacker activity "
+                "against a Windows decoy is not observed."
+            )
         return Capability(
             backend_name="windows_readdirectorychangesw",
             detects_open=False,
             detects_read=False,
             detects_modify=True,
-            uses_canary_fallback=False,
-            notes=(
-                "ReadDirectoryChangesW for change detection on the parent "
-                "directory. Read detection on Windows is planned via "
-                "canary URLs embedded in decoys, but the canary path is "
-                "NOT wired in v0.1; read-only attacker activity against "
-                "a decoy is not observed in this release."
-            ),
+            uses_canary_fallback=self._canary_configured,
+            notes=notes,
         )
 
     def start(
@@ -184,10 +194,10 @@ class WindowsWatcher:
                 detail = f"decoy {ACTION_NAMES.get(action, f'action={action}')}"
                 # ReadDirectoryChangesW only fires on change-class
                 # events (added / removed / modified / renamed). Reads
-                # do not generate notifications here at all. The
-                # planned out-of-band canary path (decoy/canary_token.py)
-                # is not wired in v0.1, so read-only activity is not
-                # observed on this release. Therefore every event
+                # do not generate notifications here at all — read
+                # detection on Windows runs out-of-band via canary URLs
+                # in the decoy content (see decoy/canary_token.py) and
+                # never re-enters this responder. Therefore every event
                 # delivered through this path is change-class.
                 trap = TrapEvent.make(
                     source="decoy_touch",

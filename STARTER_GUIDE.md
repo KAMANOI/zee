@@ -107,7 +107,7 @@ MVP は既定で **dry_run** で動きます。実遮断はせず、「もし遮
 
 読み取り通知が来たら、心当たりがない場合は手動で `zee cut <asset_id>` を実行してください（復旧は `zee restore <asset_id>`）。「正規ソフトなので無視してよい」と断定するヒントは Zee 側からは出しません。最終判断は人間に委ねます。
 
-なお現リリース（v0.1）では、**macOS / Windows のデコイへの「読むだけ」の攻撃は観測されません**（kqueue / ReadDirectoryChangesW は read を通知せず、canary URL での read 検知も v0.1 では未配線）。Linux は inotify が read を直接観察します。
+macOS / Windows の「読むだけ」の攻撃を観測するには、`ZEE_CANARY_BASE_URL` 環境変数に外部エンドポイント（自前 webhook 受信器・[Canarytokens.org](https://canarytokens.org)・AWS Lambda 等）の URL を設定して `zee watch` を起動します。設定すると seeder が囮ファイルに canary URL を自動埋め込みし、攻撃者がその URL を辿った瞬間に operator 側で発火します（Zee 本体には戻りません）。未設定では canary URL は埋め込まれず、macOS / Windows での「読むだけ」の攻撃は観測されません（既定で安全側）。Linux は inotify が read を直接観察するので canary 不要です。
 
 ---
 

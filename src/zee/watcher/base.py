@@ -19,11 +19,11 @@ OnEvent = Callable[[TrapEvent], None]
 class Capability:
     """What this watcher backend can detect on the current OS.
 
-    All fields are honest assessments. If a backend has no kernel-level
-    read hook (kqueue, ReadDirectoryChangesW), it should set
-    detects_read=False. The canary path is planned for read detection on
-    those backends but is NOT wired in v0.1 — see decoy/canary_token.py
-    and the v0.1 Limitations in README.
+    All fields are honest assessments. ``uses_canary_fallback`` is True
+    on the macOS / Windows backends when the seeder is configured to
+    embed canary URLs (operator set ZEE_CANARY_BASE_URL). It stays
+    False on Linux because inotify observes reads directly, and on
+    macOS / Windows when no base URL is configured.
     """
 
     backend_name: str

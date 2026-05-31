@@ -292,11 +292,16 @@ cp examples/assets.example.toml ./assets.toml
 <span class="c"># 3. 監視開始（既定は dry_run、実遮断なし）</span>
 zee watch -c ./assets.toml
 
-<span class="c"># 4. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
+<span class="c"># 4.（任意）macOS / Windows での「読み取り検知」を有効化</span>
+<span class="c">#   外部 webhook 受信器（Canarytokens.org / 自前 / Lambda 等）の URL を渡す</span>
+export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
+
+<span class="c"># 5. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
 echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
 <span class="c">#   → 変更系の接触として 3 OS 共通で高信頼イベントを記録します。</span>
 <span class="c">#   Linux では `cat &lt;decoy&gt;` の読み取りだけでも記録します。</span>
-<span class="c">#   macOS / Windows の「読むだけ」操作は v0.1 では観測されません。</span></div>
+<span class="c">#   macOS / Windows の読み取りは ZEE_CANARY_BASE_URL 設定時のみ</span>
+<span class="c">#   観測されます（埋め込んだ canary URL が外部受信器で発火）。</span></div>
 
     <h3 style="margin-top:36px">検知能力マトリクス</h3>
     <div class="matrix">
@@ -306,12 +311,12 @@ echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
         </thead>
         <tbody>
           <tr><td class="os">Linux</td><td class="note">inotify</td><td class="yes">yes</td><td class="yes">yes</td><td class="yes">yes</td><td class="no">no</td><td class="note">implemented</td></tr>
-          <tr><td class="os">macOS</td><td class="note">kqueue</td><td class="no">no</td><td class="no">no</td><td class="yes">yes</td><td class="no">no <small style="color:var(--faint)">(planned)</small></td><td class="note">implemented<br /><small style="color:var(--faint)">(change-only; read は v0.1 未観測)</small></td></tr>
-          <tr><td class="os">Windows</td><td class="note">ReadDirectoryChangesW</td><td class="no">no</td><td class="no">no</td><td class="yes">yes</td><td class="no">no <small style="color:var(--faint)">(planned)</small></td><td class="note">implemented<br /><small style="color:var(--faint)">(change-only; read は v0.1 未観測・Windows 実機未検証)</small></td></tr>
+          <tr><td class="os">macOS</td><td class="note">kqueue<br /><small style="color:var(--faint)">[+ canary if configured]</small></td><td class="no">no</td><td class="no">no</td><td class="yes">yes</td><td class="yes">yes <small style="color:var(--faint)">(when configured)</small></td><td class="note">implemented</td></tr>
+          <tr><td class="os">Windows</td><td class="note">ReadDirectoryChangesW<br /><small style="color:var(--faint)">[+ canary if configured]</small></td><td class="no">no</td><td class="no">no</td><td class="yes">yes</td><td class="yes">yes <small style="color:var(--faint)">(when configured)</small></td><td class="note">implemented<br /><small style="color:var(--faint)">(Windows 実機未検証)</small></td></tr>
         </tbody>
       </table>
     </div>
-    <p style="margin-top:14px;font-size:13.5px;color:var(--faint)">macOS・Windows は OS の制約で「読み取り検知」が直接できません。canary URL での read 検知は将来配線の予定ですが <strong>v0.1 では未配線</strong> で、CanaryTokenRegistry は seeder から呼ばれません。macOS / Windows のデコイへの「読むだけ」の攻撃は v0.1 では観測されません（書き換え・削除等の変更系は 3 OS 共通で観測）。Linux は inotify が読み取りも直接観察します。</p>
+    <p style="margin-top:14px;font-size:13.5px;color:var(--faint)">macOS・Windows は OS の制約で「読み取り検知」が直接できません。<strong>環境変数 <code>ZEE_CANARY_BASE_URL</code> に外部 webhook 受信器の URL を設定すると、seeder が囮ファイルに canary URL を埋め込み、攻撃者がその URL を辿った瞬間に外部受信器で発火します</strong>（Zee 本体には戻りません・out-of-band）。未設定では canary URL は埋め込まれず、macOS / Windows での「読むだけ」の攻撃は観測されません（既定で安全側）。Linux は inotify が読み取りも直接観察するので canary 不要です。<br />受信器の例：<a href="https://canarytokens.org" style="color:var(--accent)">Canarytokens.org</a>（無料・推奨）／自前 Cloudflare Worker・AWS Lambda・Vercel Edge Function 等。</p>
   </div>
 </section>
 
@@ -431,7 +436,7 @@ echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
       <li><b style="color:var(--text)">侵入そのものは防がない</b> — 入口防御（ファイアウォール・EDR・パッチ）の役割を置き換えるものではありません。</li>
       <li><b style="color:var(--text)">検知中心・既定 dry_run</b> — 自動の封じ込め機構は資産プロファイルで <code>response_mode: auto</code> を明示し <code>dry_run: false</code> にしたときだけ動きます。</li>
       <li><b style="color:var(--text)">自動遮断は「変更系の接触」のみ</b> — open / read / 属性参照などの読み取り系は自動遮断しません。通知のみで、必要なら <code>zee cut &lt;asset_id&gt;</code> で手動遮断します。プロセス特定ができない現バックエンドでは、正規ソフトが普通やらない操作だけを自動遮断の根拠にするのが構造的に安全だからです。</li>
-      <li><b style="color:var(--text)">macOS / Windows のデコイ読み取りは v0.1 では観測されません</b> — kqueue / ReadDirectoryChangesW は read を通知せず、canary URL での read 検知は <strong>v0.1 では未配線</strong>（CanaryTokenRegistry は seeder から呼ばれません）。「読むだけ」の攻撃に対しては Zee は無反応です。Linux は inotify で read を直接観察します。</li>
+      <li><b style="color:var(--text)">macOS / Windows の読み取り検知は <code>ZEE_CANARY_BASE_URL</code> 設定時のみ</b> — kqueue / ReadDirectoryChangesW は read を通知しません。環境変数を設定すると seeder が canary URL を decoy に自動埋め込みし、外部受信器で発火します（Zee 本体には戻りません）。未設定では canary URL は埋め込まれず、macOS / Windows での「読むだけ」の攻撃は観測されません。Linux は inotify で read を直接観察するので canary 不要です。</li>
       <li><b style="color:var(--text)">プロセス allowlist は現バックエンドでは効かない</b> — 誤検知制御は「配置ガイド」＋「変更系トリガー限定」で行います。allowlist 路線は v4 で撤回しました（v2 で同梱した既定 allowlist と auto+dry_run:false ハードブロックも撤回）。</li>
       <li><b style="color:var(--text)"><code>zee restore</code> に認証はない</b> — ホスト上でシェルを取れる攻撃者は遮断を巻き戻せます。MVP は単一 operator 前提で意図的に簡素化しています。</li>
       <li><b style="color:var(--text)">イベントログには <code>decoy_path</code> が平文で記録される</b> — owner-only（0700 / 0600）で保護していますが、root 相当の攻撃者には読まれます。</li>

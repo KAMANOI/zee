@@ -7,4 +7,4 @@ Zee does not prevent intrusion. It adds one narrow, high-confidence
 detection signal (decoy contact) and optionally a containment action.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

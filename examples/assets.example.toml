@@ -66,3 +66,21 @@ cut_method = "egress"
 # the change-class trigger limit, plus the operator's manual review
 # of read-class alerts.
 # ----------------------------------------------------------------------
+#
+# Canary URL (optional) — macOS / Windows read detection
+#
+# kqueue (macOS) and ReadDirectoryChangesW (Windows) do NOT emit read
+# notifications. To observe "the attacker only read the decoy" on those
+# OSes, set the ZEE_CANARY_BASE_URL environment variable to an external
+# receiver you control (e.g. Canarytokens.org, a self-hosted webhook,
+# AWS Lambda, Cloudflare Worker). When set, the seeder embeds a canary
+# URL into env / credentials / notes templates; when an attacker
+# dereferences the URL, the external receiver fires (out-of-band; the
+# hit never re-enters Zee's local responder).
+#
+#   export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
+#
+# Linux observes reads directly via inotify and does not need a canary.
+# When ZEE_CANARY_BASE_URL is unset, no canary URL is embedded and the
+# read path on macOS / Windows is not observed (safe by default).
+# ----------------------------------------------------------------------

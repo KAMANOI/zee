@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from . import __version__
 from .config.schema import Config
+from .decoy.canary_token import CanaryTokenRegistry
 from .decoy.seeder import seed_all
 from .errors import ZeeError, Z102_UNKNOWN_ASSET_ID
 from .notifier.webhook import from_env as webhook_from_env
@@ -21,6 +24,14 @@ from .responder.sequence import handle
 from .recovery.restore import restore
 from .telemetry.capability_report import render_text as capability_text
 from .telemetry.events_log import EventLog
+
+
+def _canary_registry_from_env() -> Optional[CanaryTokenRegistry]:
+    """Build a CanaryTokenRegistry from ZEE_CANARY_BASE_URL, or None."""
+    url = os.environ.get("ZEE_CANARY_BASE_URL", "").strip()
+    if not url:
+        return None
+    return CanaryTokenRegistry(base_url=url)
 
 
 def _cmd_watch(args: argparse.Namespace) -> int:
@@ -55,33 +66,43 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     event_log = EventLog()
     log_dir = event_log.log_dir
     sender = webhook_from_env()
+    try:
+        canary_registry = _canary_registry_from_env()
+    except ValueError as e:
+        print(f"[error] {e}", file=sys.stderr)
+        return 1
+    canary_configured = canary_registry is not None and canary_registry.is_configured
     print(
         f"[zee watch] dry_run={config.dry_run} log_dir={log_dir} "
-        f"webhook={'configured' if sender else 'none'}",
+        f"webhook={'configured' if sender else 'none'} "
+        f"canary={'configured' if canary_configured else 'not configured'}",
         file=sys.stderr,
     )
 
     # Lazy import so each platform only loads its own backend module.
     watchers: list[object] = []
+    backend_kwargs: dict = {}
     if sys.platform.startswith("linux"):
         from .watcher.backend_linux import LinuxInotifyWatcher
         backend_cls: type = LinuxInotifyWatcher
     elif sys.platform == "darwin":
         from .watcher.backend_macos import MacOSKqueueWatcher
         backend_cls = MacOSKqueueWatcher
+        backend_kwargs["canary_configured"] = canary_configured
     elif sys.platform == "win32":
         from .watcher.backend_windows import WindowsWatcher
         backend_cls = WindowsWatcher
+        backend_kwargs["canary_configured"] = canary_configured
     else:
         print(f"[zee watch] unsupported platform: {sys.platform}", file=sys.stderr)
         return 2
 
     for asset in config.assets:
-        seeded = seed_all(list(asset.decoy_paths))
+        seeded = seed_all(list(asset.decoy_paths), registry=canary_registry)
         print(f"[seeded] asset={asset.id} paths={[str(p) for p in seeded]}",
               file=sys.stderr)
 
-        watcher = backend_cls()
+        watcher = backend_cls(**backend_kwargs)
         cap = watcher.capability()
         print(f"[capability] {cap}", file=sys.stderr)
 
@@ -156,8 +177,16 @@ def _cmd_cut(args: argparse.Namespace) -> int:
 
 
 def _cmd_capability(args: argparse.Namespace) -> int:
+    canary_url = os.environ.get("ZEE_CANARY_BASE_URL", "").strip()
+    canary_configured = bool(canary_url)
     print("# Zee capability matrix")
     print(f"current platform: {sys.platform}")
+    print(
+        f"canary base_url : {'configured' if canary_configured else 'not configured'}"
+        + (" (read-class detection on macOS / Windows is wired)"
+           if canary_configured else
+           " (set ZEE_CANARY_BASE_URL to wire macOS / Windows read detection)")
+    )
     print(
         "auto-cut trigger : change-class touches only "
         "(write / delete / rename / extend)"
@@ -172,7 +201,7 @@ def _cmd_capability(args: argparse.Namespace) -> int:
         "operations that legitimate bulk readers do not perform."
     )
     print()
-    print(capability_text())
+    print(capability_text(canary_configured=canary_configured))
     return 0
 
 
