@@ -75,12 +75,20 @@ honestly-published boundaries of what Zee is and is not:
   a macOS / Windows decoy are not observed (safe by default; Linux
   needs no canary because `inotify` reports reads directly).
 - **`restore_token` does not stop a root-equivalent attacker.** The
-  token file at `~/.zee/restore_token` is 0600; a same-user attacker
-  with shell access can read it. The token blocks accidental restores
-  from another shell session and casual non-root attackers. For
-  multi-user production deployments, wrap `zee restore` in `sudo` or
-  run Zee under a dedicated user — `restore_token` is a complement,
-  not a replacement, for OS-level access control.
+  token file at `~/.zee/restore_token` is 0600 on POSIX hosts (Linux,
+  macOS); a same-user attacker with shell access can still read it.
+  The token blocks accidental restores from another shell session
+  and casual non-root attackers. For multi-user production
+  deployments, wrap `zee restore` in `sudo` or run Zee under a
+  dedicated user — `restore_token` is a complement, not a
+  replacement, for OS-level access control.
+- **On Windows the POSIX permission check is skipped.** NTFS uses
+  ACLs rather than POSIX bits and `os.stat().st_mode` reports `0666`
+  regardless of the real ACL. Zee therefore does not enforce the
+  group/world-read refusal on win32; the effective protection on
+  Windows is the per-user NTFS ACL that the OS applies to
+  `%USERPROFILE%\.zee` by default. Operators running on shared
+  Windows profiles should review that ACL.
 - **Windows hardware is not yet hands-on tested by the maintainer.**
   The Windows watcher and cut/restore paths are implemented and
   exercised on every push by the GitHub Actions matrix

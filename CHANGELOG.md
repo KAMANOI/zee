@@ -5,6 +5,36 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.4.1] — 2026-05-31
+
+The v0.4.0 CI matrix surfaced two Windows-specific issues that were
+invisible while only the maintainer's macOS shell ran the suite.
+Both fall out of NTFS using ACLs rather than POSIX bits and out of
+Windows using ``\\`` as the path separator. None of v0.3's
+documented invariants change; the fix is to skip the POSIX-only
+behaviour on win32 and update the tests to match.
+
+### Fixed
+- ``recovery/auth.load_token``: skips the POSIX group/world-read
+  refusal on win32 (NTFS ACLs cover the same threat there; the
+  fall-through still reads the token). The check is unchanged on
+  Linux / macOS.
+- ``policy/allowlist._is_path_secure``: skips the POSIX
+  group/world-write refusal on win32 for the same reason; the
+  loader still rejects unreadable / missing files on every OS.
+- ``test_canary_token`` / ``test_cut_state`` / ``test_restore_auth``
+  / ``test_allowlist``: owner-only-mode assertions are guarded by
+  ``pytest.mark.skipif(sys.platform == "win32")``. The path-
+  normalisation test now uses ``tmp_path`` so it exercises real
+  absolute paths on every OS (the previous hard-coded ``/tmp/...``
+  fed Windows a string the loader normalised to ``\tmp\...``).
+
+### Documentation
+- ``SECURITY.md`` "Honesty boundaries" entry on the restore_token
+  now states that on Windows the POSIX bit check is skipped and the
+  effective protection is the per-user NTFS ACL on ``%USERPROFILE%
+  \\.zee``.
+
 ## [0.4.0] — 2026-05-31
 
 The 78-test suite from v0.3 now runs on every push across the full

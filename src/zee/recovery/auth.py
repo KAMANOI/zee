@@ -30,6 +30,7 @@ import logging
 import os
 import secrets
 import stat
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -65,24 +66,34 @@ def init_token(*, path: Optional[Path] = None) -> str:
 def load_token(*, path: Optional[Path] = None) -> Optional[str]:
     """Load the stored token, or None if not initialised / unsafe perms.
 
-    Refuses files whose group/world bits are set (read or write) —
-    a token readable by other users defeats its purpose.
+    On POSIX hosts (Linux / macOS), refuses files whose group/world
+    bits are set (read or write) — a token readable by other users
+    defeats its purpose.
+
+    On Windows, the POSIX permission check is skipped: NTFS uses ACLs
+    rather than POSIX bits, and ``os.stat().st_mode`` reports 0666
+    irrespective of the real ACL. Windows operators should rely on
+    the default per-user ACL on ``%USERPROFILE%\\.zee`` (which covers
+    the same-user-attacker threat model that this check addresses on
+    POSIX) and review their own ACL configuration if they share
+    profiles.
     """
     p = path or default_token_path()
     if not p.exists():
         return None
-    try:
-        mode = stat.S_IMODE(os.stat(p).st_mode)
-    except OSError as e:
-        logger.warning("restore_token stat failed: %s", e)
-        return None
-    if mode & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH):
-        logger.error(
-            "restore_token at %s has loose permissions (mode %o); refusing "
-            "to load. chmod 600 %s, then retry.",
-            p, mode, p,
-        )
-        return None
+    if sys.platform != "win32":
+        try:
+            mode = stat.S_IMODE(os.stat(p).st_mode)
+        except OSError as e:
+            logger.warning("restore_token stat failed: %s", e)
+            return None
+        if mode & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH):
+            logger.error(
+                "restore_token at %s has loose permissions (mode %o); "
+                "refusing to load. chmod 600 %s, then retry.",
+                p, mode, p,
+            )
+            return None
     try:
         return p.read_text(encoding="utf-8").strip()
     except OSError as e:

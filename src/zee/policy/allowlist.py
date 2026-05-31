@@ -114,6 +114,14 @@ class Allowlist:
 
     @staticmethod
     def _is_path_secure(path: Path) -> bool:
+        # NTFS does not surface POSIX permission bits in os.stat() in
+        # a way that matches the chmod we apply on POSIX, so the
+        # group/world-write check is unsafe to enforce on win32.
+        # Windows operators rely on NTFS ACLs instead; the default
+        # per-user ACL on the parent directory covers the same threat.
+        import sys
+        if sys.platform == "win32":
+            return True
         try:
             for target in (path, path.parent):
                 mode = os.stat(target).st_mode

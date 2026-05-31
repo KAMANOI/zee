@@ -4,10 +4,23 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
+
+import pytest
 
 from zee.recovery.auth import init_token, load_token, verify_token
 
+# Windows uses NTFS ACLs rather than POSIX permission bits, so the
+# 0700/0600 chmod that POSIX hosts rely on reports back as 0666 from
+# os.stat(). The owner-only checks are POSIX-only by design and we
+# skip them on win32 to match the documented Windows behaviour.
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits do not survive on NTFS; Windows uses ACLs",
+)
 
+
+@posix_only
 def test_init_creates_owner_only_file(tmp_path):
     p = tmp_path / "restore_token"
     token = init_token(path=p)
@@ -27,6 +40,7 @@ def test_load_token_missing_returns_none(tmp_path):
     assert load_token(path=tmp_path / "absent") is None
 
 
+@posix_only
 def test_load_token_refuses_loose_permissions(tmp_path):
     p = tmp_path / "restore_token"
     init_token(path=p)

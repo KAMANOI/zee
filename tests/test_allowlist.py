@@ -5,8 +5,16 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
+
+import pytest
 
 from zee.policy.allowlist import Allowlist
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits do not survive on NTFS; Windows uses ACLs",
+)
 
 
 def test_in_memory_exe_path_match():
@@ -44,6 +52,7 @@ def test_load_from_secure_file(tmp_path):
     assert a.is_protected(ip="10.1.2.3") is True
 
 
+@posix_only
 def test_load_refuses_world_writable(tmp_path):
     path = tmp_path / "allowlist.json"
     path.write_text(json.dumps({"exe_paths": ["/usr/bin/aws"]}))

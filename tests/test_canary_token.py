@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from zee.decoy.canary_token import CanaryTokenRegistry
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits do not survive on NTFS; Windows uses ACLs",
+)
 
 
 def test_unconfigured_registry_raises_on_issue():
@@ -65,7 +71,7 @@ def test_issue_for_decoy_is_idempotent(tmp_path):
         base_url="https://canary.example.com",
         registry_path=tmp_path / "canary_tokens.jsonl",
     )
-    decoy = "/tmp/decoy.env"
+    decoy = str(tmp_path / "decoy.env")
     t1 = reg.issue_for_decoy(decoy, "decoy_env")
     t2 = reg.issue_for_decoy(decoy, "decoy_env")
     assert t1.token_id == t2.token_id
@@ -74,13 +80,22 @@ def test_issue_for_decoy_is_idempotent(tmp_path):
 
 def test_persist_then_rehydrate(tmp_path):
     """Tokens issued via issue_for_decoy persist; a new registry instance
-    with the same base_url reloads the (decoy_path -> token) map."""
+    with the same base_url reloads the (decoy_path -> token) map.
+
+    Uses tmp_path (which yields a real absolute path under the OS's
+    temp dir) so the test exercises the same path-normalisation code
+    on Linux / macOS / Windows.
+    """
     registry_path = tmp_path / "canary_tokens.jsonl"
     reg1 = CanaryTokenRegistry(
         base_url="https://canary.example.com",
         registry_path=registry_path,
     )
-    decoy = "/tmp/decoy.env"
+    decoy = str(tmp_path / "decoy.env")
+    # issue_for_decoy normalises via Path(decoy).expanduser(); the
+    # persisted key matches that normalisation.
+    expected_persisted = str(Path(decoy).expanduser())
+
     t1 = reg1.issue_for_decoy(decoy, "decoy_env")
     assert registry_path.exists()
     # File contains a single JSONL record.
@@ -88,7 +103,7 @@ def test_persist_then_rehydrate(tmp_path):
     assert len(lines) == 1
     rec = json.loads(lines[0])
     assert rec["token_id"] == t1.token_id
-    assert rec["decoy_path"] == decoy
+    assert rec["decoy_path"] == expected_persisted
 
     # New registry with the SAME base_url rehydrates the binding.
     reg2 = CanaryTokenRegistry(
@@ -106,11 +121,12 @@ def test_persist_then_rehydrate(tmp_path):
 def test_rehydrate_skips_records_with_different_base_url(tmp_path):
     """Records for a previously-used base_url are not loaded under a new one."""
     registry_path = tmp_path / "canary_tokens.jsonl"
+    decoy = str(tmp_path / "decoy.env")
     reg_old = CanaryTokenRegistry(
         base_url="https://old.example.com",
         registry_path=registry_path,
     )
-    reg_old.issue_for_decoy("/tmp/decoy.env", "decoy_env")
+    reg_old.issue_for_decoy(decoy, "decoy_env")
 
     reg_new = CanaryTokenRegistry(
         base_url="https://new.example.com",
@@ -118,9 +134,10 @@ def test_rehydrate_skips_records_with_different_base_url(tmp_path):
     )
     # The decoy was bound under old.example.com; under new.example.com
     # the registry treats it as not yet bound.
-    assert reg_new.lookup_for_decoy("/tmp/decoy.env") is None
+    assert reg_new.lookup_for_decoy(decoy) is None
 
 
+@posix_only
 def test_registry_file_is_owner_only(tmp_path):
     """canary_tokens.jsonl must be 0600 like events.jsonl / metrics.jsonl."""
     import os

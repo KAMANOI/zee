@@ -5,8 +5,16 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
+
+import pytest
 
 from zee.telemetry.cut_state import CutStateLog
+
+posix_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX permission bits do not survive on NTFS; Windows uses ACLs",
+)
 
 
 def test_record_and_latest_round_trip(tmp_path):
@@ -65,6 +73,7 @@ def test_missing_file_returns_none(tmp_path):
     assert log.latest_unresolved_for("host-a") is None
 
 
+@posix_only
 def test_file_is_owner_only(tmp_path):
     log = CutStateLog(path=tmp_path / "state" / "cut_state.jsonl")
     log.record_cut(asset_id="host-a", method="full", platform="darwin",
