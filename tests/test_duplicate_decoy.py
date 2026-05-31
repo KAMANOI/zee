@@ -8,24 +8,24 @@ from zee.cli import build_parser, _cmd_watch
 
 
 def _write_config(tmp_path: Path, body: str) -> Path:
-    p = tmp_path / "assets.yaml"
+    p = tmp_path / "assets.toml"
     p.write_text(body)
     return p
 
 
 def test_duplicate_decoy_path_across_assets_rejected(tmp_path, capsys):
     cfg = _write_config(tmp_path, """
-assets:
-  - id: host-a
-    type: workstation
-    decoy_paths:
-      - /tmp/zee-shared-decoy
-    response_mode: notify
-  - id: host-b
-    type: workstation
-    decoy_paths:
-      - /tmp/zee-shared-decoy
-    response_mode: notify
+[[assets]]
+id = "host-a"
+type = "workstation"
+decoy_paths = ["/tmp/zee-shared-decoy"]
+response_mode = "notify"
+
+[[assets]]
+id = "host-b"
+type = "workstation"
+decoy_paths = ["/tmp/zee-shared-decoy"]
+response_mode = "notify"
 """)
     parser = build_parser()
     args = parser.parse_args(["-c", str(cfg), "watch"])
@@ -43,19 +43,18 @@ def test_same_asset_same_path_is_fine_for_dup_check(tmp_path):
     loop is exercised by examples/demo_dry_run.py and platform-specific
     watcher tests.
     """
-    # Verify the check directly without entering the watch loop.
     from zee.config.schema import Config
     cfg_path = _write_config(tmp_path, """
-assets:
-  - id: host-a
-    type: workstation
-    decoy_paths:
-      - /tmp/zee-same-asset-decoy
-      - /tmp/zee-same-asset-decoy
-    response_mode: notify
+[[assets]]
+id = "host-a"
+type = "workstation"
+decoy_paths = [
+    "/tmp/zee-same-asset-decoy",
+    "/tmp/zee-same-asset-decoy",
+]
+response_mode = "notify"
 """)
     config = Config.load(cfg_path)
-    # Replicate the cli's duplicate check logic.
     seen: dict[str, str] = {}
     cross_asset_dup = False
     for asset in config.assets:

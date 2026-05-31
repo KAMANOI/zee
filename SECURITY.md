@@ -41,8 +41,10 @@ subject prefix `[zee-security]`.
 
 ## What is out of scope
 
-- Vulnerabilities in upstream dependencies (PyYAML, Python itself, the
+- Vulnerabilities in upstream dependencies (Python itself, the
   underlying OS). Please report those to the respective projects.
+  (Zee has no third-party runtime dependency; TOML parsing uses the
+  standard-library `tomllib`.)
 - Misconfiguration in your own environment (allowlist, asset profile,
   webhook URL choice).
 - Theoretical attacks against Zee's stated limitations (Zee does not

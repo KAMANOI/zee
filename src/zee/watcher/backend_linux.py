@@ -155,12 +155,14 @@ class LinuxInotifyWatcher:
                 if not (mask & DECOY_MASK):
                     continue
                 detail = _describe_mask(mask)
+                op_class = _classify_mask(mask)
                 event = TrapEvent.make(
                     source="decoy_touch",
                     confidence="high",
                     asset_id=asset_id,
                     decoy_path=path,
                     detail=detail,
+                    op_class=op_class,
                 )
                 try:
                     on_event(event)
@@ -184,6 +186,18 @@ class LinuxInotifyWatcher:
             except OSError:
                 pass
             self._fd = -1
+
+
+def _classify_mask(mask: int) -> str:
+    """Map an inotify event mask to read/change.
+
+    Read-like: IN_ACCESS, IN_OPEN — what bulk readers do.
+    Change-like: IN_MODIFY, IN_DELETE_SELF, IN_MOVE_SELF — what bulk
+    readers do NOT do on a decoy under normal operation.
+    """
+    if mask & (IN_MODIFY | IN_DELETE_SELF | IN_MOVE_SELF):
+        return "change"
+    return "read"
 
 
 def _describe_mask(mask: int) -> str:

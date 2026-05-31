@@ -1,0 +1,57 @@
+# Zee asset profiles example
+# Copy to ./assets.toml and edit. Zee starts in dry_run by default.
+# Promote response_mode to "auto" only after confirming zero false positives.
+
+dry_run = true
+
+[[assets]]
+id = "front-desk-pc"
+type = "workstation"
+overnight_active = false
+decoy_paths = [
+    "~/.aws/credentials.decoy",
+    "~/Documents/_secrets/.env",
+]
+response_mode = "notify"   # auto / staged / notify  (start with notify)
+cut_method = "full"        # full / egress  (only used when mode != notify)
+
+[[assets]]
+id = "edit-laptop"
+type = "workstation"
+overnight_active = true
+decoy_paths = [
+    "~/Documents/_secrets/id_rsa",
+]
+response_mode = "notify"
+cut_method = "egress"
+
+
+# ----------------------------------------------------------------------
+# About false positives — read this before promoting any asset to auto.
+#
+# Zee's current watcher backends (Linux inotify, macOS kqueue, Windows
+# ReadDirectoryChangesW) do NOT report which process touched the
+# decoy. Therefore Zee cannot consult an allowlist of legitimate
+# processes at detect time. There is no [allowlist] section in this
+# file by design — a setting that the responder would never consult
+# would create a false sense of safety.
+#
+# False positives are controlled in two other ways instead:
+#
+#   1. PLACEMENT: keep decoys outside what your backup tool, AV/EDR,
+#      and OS file indexer walk by default. See the README "decoy
+#      placement" section for OS-specific exclusion steps (Spotlight
+#      privacy, Time Machine exclusions, Windows search exclusions,
+#      and your backup / AV tool's exclusion list).
+#
+#   2. TRIGGER LIMIT: auto-cut fires only on change-class touches
+#      (write / delete / rename / extend). Read-class touches notify
+#      only and require manual `zee cut <asset_id>` if hostile.
+#      Legitimate bulk readers (backup, AV, indexer) read decoys; they
+#      do not write to them under normal operation.
+#
+# Note: the security boundary against intruders is NOT process-name
+# matching (which can be spoofed). It is the placement guidance plus
+# the change-class trigger limit, plus the operator's manual review
+# of read-class alerts.
+# ----------------------------------------------------------------------

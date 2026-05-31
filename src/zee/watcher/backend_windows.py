@@ -177,12 +177,19 @@ class WindowsWatcher:
                     continue
                 full = str(Path(dir_path) / filename)
                 detail = f"decoy {ACTION_NAMES.get(action, f'action={action}')}"
+                # ReadDirectoryChangesW only fires on change-class
+                # events (added / removed / modified / renamed). Reads
+                # do not generate notifications here at all — those are
+                # picked up out-of-band by the canary token, which
+                # never re-enters this responder. Therefore every event
+                # delivered through this path is change-class.
                 trap = TrapEvent.make(
                     source="decoy_touch",
                     confidence="high",
                     asset_id=asset_id,
                     decoy_path=full,
                     detail=detail,
+                    op_class="change",
                 )
                 try:
                     on_event(trap)

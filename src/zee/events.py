@@ -2,6 +2,17 @@
 
 decoy_touch events must carry confidence='high' (spec §4).
 Only confidence='high' is allowed to trigger automatic containment.
+
+op_class distinguishes "read-like" touches (open, read, attribute
+inspection — what bulk readers such as backup tools, AV scanners and
+file indexers also do) from "change-like" touches (write, delete,
+rename, extend — which legitimate bulk readers do not perform on a
+decoy in normal operation). Spec block C: automatic containment is
+gated on op_class=="change". Read-like touches are notified with a
+hint and the operator decides whether to cut manually (`zee cut`).
+
+The judgement is made on this structured field, NOT by parsing
+the `detail` string.
 """
 
 from __future__ import annotations
@@ -12,6 +23,7 @@ from typing import Literal, Optional
 
 Source = Literal["decoy_touch", "behavior_anomaly", "manual"]
 Confidence = Literal["high", "medium", "low"]
+OpClass = Literal["read", "change"]
 
 
 @dataclass(frozen=True)
@@ -22,6 +34,7 @@ class TrapEvent:
     decoy_path: Optional[str]
     detected_at: datetime
     detail: str
+    op_class: OpClass
 
     def __post_init__(self) -> None:
         if self.source == "decoy_touch" and self.confidence != "high":
@@ -37,6 +50,7 @@ class TrapEvent:
         asset_id: str,
         decoy_path: Optional[str],
         detail: str,
+        op_class: OpClass,
         detected_at: Optional[datetime] = None,
     ) -> "TrapEvent":
         return cls(
@@ -46,4 +60,5 @@ class TrapEvent:
             decoy_path=decoy_path,
             detected_at=detected_at or datetime.now(timezone.utc),
             detail=detail,
+            op_class=op_class,
         )

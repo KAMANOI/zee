@@ -29,6 +29,12 @@ def _cmd_watch(args: argparse.Namespace) -> int:
         print("no assets defined in", args.config, file=sys.stderr)
         return 1
 
+    # NOTE: the previous build held a hard block here that refused
+    # response_mode=auto with dry_run=false. Spec v4 retires that
+    # approach. Auto-cut is now gated by op_class=="change" in
+    # responder/sequence.py — a structurally narrower trigger that does
+    # not require process attribution. Read-class touches never auto-cut.
+
     # Detect decoy_paths registered to more than one asset. Same path
     # under multiple assets confuses watcher bookkeeping (duplicate FDs,
     # ambiguous reporting).
@@ -123,9 +129,50 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_cut(args: argparse.Namespace) -> int:
+    """Manual containment. Companion to the read-class notification.
+
+    Spec v4 block C: read-class touches never auto-cut. When the
+    operator reviews a read-class alert and concludes it is hostile,
+    they invoke this. cut_method defaults to the asset profile;
+    --method overrides per invocation.
+    """
+    config = Config.load(args.config)
+    asset = config.find(args.asset_id)
+    if asset is None:
+        raise ZeeError(Z102_UNKNOWN_ASSET_ID, args.asset_id)
+    method = args.method or asset.cut_method
+    from .responder.cut_egress import cut_egress
+    from .responder.cut_full import cut_full
+    cut_fn = cut_egress if method == "egress" else cut_full
+    print(f"[zee cut] asset={args.asset_id} method={method}", file=sys.stderr)
+    ok, detail = cut_fn()
+    print(detail, file=sys.stderr)
+    if ok:
+        print(
+            f"[zee cut] applied. recover with: zee restore {args.asset_id}",
+            file=sys.stderr,
+        )
+    return 0 if ok else 1
+
+
 def _cmd_capability(args: argparse.Namespace) -> int:
     print("# Zee capability matrix")
-    print(f"current platform: {sys.platform}\n")
+    print(f"current platform: {sys.platform}")
+    print(
+        "auto-cut trigger : change-class touches only "
+        "(write / delete / rename / extend)"
+    )
+    print(
+        "                  read-class touches notify only and require "
+        "manual `zee cut` if hostile"
+    )
+    print(
+        "                  reason: the watcher cannot identify the "
+        "process that touched the decoy, so auto-cut is restricted to "
+        "operations that legitimate bulk readers do not perform."
+    )
+    print()
     print(capability_text())
     return 0
 
@@ -141,8 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"zee {__version__}")
     parser.add_argument(
-        "-c", "--config", type=Path, default=Path("assets.yaml"),
-        help="path to assets.yaml (default: ./assets.yaml)",
+        "-c", "--config", type=Path, default=Path("assets.toml"),
+        help="path to assets.toml (default: ./assets.toml)",
     )
     parser.add_argument("--verbose", action="store_true", help="enable debug logging")
 
@@ -156,6 +203,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_restore.add_argument("asset_id")
     p_restore.set_defaults(func=_cmd_restore)
+
+    p_cut = sub.add_parser(
+        "cut",
+        help="manually cut an asset's network (companion to read-class alerts)",
+    )
+    p_cut.add_argument("asset_id")
+    p_cut.add_argument(
+        "--method",
+        choices=("full", "egress"),
+        default=None,
+        help="cut method override; defaults to the asset profile's cut_method",
+    )
+    p_cut.set_defaults(func=_cmd_cut)
 
     p_cap = sub.add_parser(
         "capability", help="print the detection-capability matrix for this OS"

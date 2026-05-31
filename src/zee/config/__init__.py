@@ -1,4 +1,4 @@
-"""Asset profile configuration (assets.yaml)."""
+"""Asset profile configuration (assets.toml)."""
 
 from .schema import AssetProfile, Config
 

@@ -1,16 +1,19 @@
-"""assets.yaml schema and loader (spec §6)."""
+"""assets.toml schema and loader (spec §6).
+
+TOML is parsed with the standard library (tomllib, Python 3.11+).
+Zee has no runtime third-party dependency.
+"""
 
 from __future__ import annotations
 
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-import yaml
-
 from ..errors import (
     ZeeError,
-    Z101_INVALID_ASSET_YAML,
+    Z101_INVALID_ASSET_CONFIG,
     Z103_INVALID_RESPONSE_MODE,
     Z104_INVALID_CUT_METHOD,
 )
@@ -42,32 +45,35 @@ class Config:
     @classmethod
     def load(cls, path: Path) -> "Config":
         try:
-            with path.open("r", encoding="utf-8") as f:
-                raw = yaml.safe_load(f) or {}
-        except (OSError, yaml.YAMLError) as e:
-            raise ZeeError(Z101_INVALID_ASSET_YAML, str(e)) from e
+            with path.open("rb") as f:  # tomllib requires binary mode
+                raw = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            raise ZeeError(Z101_INVALID_ASSET_CONFIG, str(e)) from e
 
         if not isinstance(raw, dict):
-            raise ZeeError(Z101_INVALID_ASSET_YAML, "top level must be a mapping")
+            raise ZeeError(Z101_INVALID_ASSET_CONFIG, "top level must be a table")
 
         raw_assets = raw.get("assets", [])
         if not isinstance(raw_assets, list):
-            raise ZeeError(Z101_INVALID_ASSET_YAML, "'assets' must be a list")
+            raise ZeeError(Z101_INVALID_ASSET_CONFIG, "'assets' must be an array of tables")
 
         assets: list[AssetProfile] = []
         for i, a in enumerate(raw_assets):
             if not isinstance(a, dict):
-                raise ZeeError(Z101_INVALID_ASSET_YAML, f"assets[{i}] must be a mapping")
+                raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"assets[{i}] must be a table")
             try:
                 asset = _parse_asset(a)
             except ZeeError:
                 raise
             except (KeyError, TypeError) as e:
-                raise ZeeError(Z101_INVALID_ASSET_YAML, f"assets[{i}]: {e}") from e
+                raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"assets[{i}]: {e}") from e
             assets.append(asset)
 
         dry_run = bool(raw.get("dry_run", True))
-        return cls(assets=tuple(assets), dry_run=dry_run)
+        return cls(
+            assets=tuple(assets),
+            dry_run=dry_run,
+        )
 
     def find(self, asset_id: str) -> Optional[AssetProfile]:
         for a in self.assets:
@@ -81,7 +87,7 @@ def _parse_asset(raw: dict) -> AssetProfile:
     asset_type = raw.get("type", "workstation")
     if asset_type not in _VALID_ASSET_TYPES:
         raise ZeeError(
-            Z101_INVALID_ASSET_YAML,
+            Z101_INVALID_ASSET_CONFIG,
             f"asset '{asset_id}': type must be one of {_VALID_ASSET_TYPES}, got '{asset_type}'",
         )
 

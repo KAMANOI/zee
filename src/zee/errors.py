@@ -15,8 +15,8 @@ User-reported issues should be traceable from the code alone.
 from __future__ import annotations
 
 # Z1xx
-Z101_INVALID_ASSET_YAML = ("Z101", "assets.yaml の形式が正しくありません")
-Z102_UNKNOWN_ASSET_ID = ("Z102", "指定された asset_id は assets.yaml に存在しません")
+Z101_INVALID_ASSET_CONFIG = ("Z101", "資産設定ファイルの形式が正しくありません")
+Z102_UNKNOWN_ASSET_ID = ("Z102", "指定された asset_id は資産設定ファイルに存在しません")
 Z103_INVALID_RESPONSE_MODE = ("Z103", "response_mode は auto / staged / notify のいずれかを指定してください")
 Z104_INVALID_CUT_METHOD = ("Z104", "cut_method は full / egress のいずれかを指定してください")
 

@@ -35,12 +35,14 @@ The figures below were all published by Anthropic, the company that builds the A
 
 - A browser vulnerability (Firefox's JavaScript engine) that an older model could turn into working exploit code only twice in several hundred attempts was weaponized **181 times** by a newer model.
 - A flaw in OpenBSD that had survived **27 years** of expert audits and automated testing was discovered in **about 1,000 automated attempts for under USD 20,000**.
-- A broad sweep surfaced **23,000+** vulnerabilities, including a critical flaw in a cryptographic library affecting roughly **5 billion** devices (CVE-2026-5194).
+- A broad sweep surfaced **23,000+ candidate vulnerabilities** (≈1,752 of which were independently validated), including a critical flaw in a cryptographic library affecting roughly **5 billion** devices (CVE-2026-5194).
 
 Sources: Anthropic Red Team ([red.anthropic.com](https://red.anthropic.com/)) / Project Glasswing.
 
 These describe **offensive capability**. Zee is not a tool to stop that capability.
-What Zee actually addresses is **the gap between the speed at which attack capability evolves and the speed at which defensive preparedness spreads**. Zee aims to narrow that gap a little.
+What Zee buys time against is **human-paced or semi-automated post-intrusion activity** — the phase after a breach succeeds, during which an attacker (or attacker AI) performs reconnaissance, lateral movement, and exfiltration. Against a fully autonomous adversary that completes the entire chain in seconds, Zee's useful range is limited (see Limitations).
+
+What Zee addresses is **the gap between the speed at which attack capability evolves and the speed at which defensive preparedness spreads**. Zee aims to narrow that gap a little.
 
 ---
 
@@ -87,11 +89,11 @@ pip install -e .
 
 ```bash
 # 1. Create an asset profile
-cp examples/assets.example.yaml ./assets.yaml
+cp examples/assets.example.toml ./assets.toml
 # Edit decoy_paths to point at your own paths
 
 # 2. Start monitoring (default dry_run — no real cut)
-zee watch -c ./assets.yaml
+zee watch -c ./assets.toml
 
 # 3. In another window, act as an attacker
 cat ~/.aws/credentials.decoy   # Zee records a high-confidence event
@@ -127,6 +129,37 @@ cat ~/.aws/credentials.decoy   # Zee records a high-confidence event
 
 Verified on macOS. Linux backend complete in code, continuous-run verification on Linux hardware not yet done. Windows backend implemented, not yet verified on Windows hardware.
 
+### False-positive control (we are not using a process allowlist — honestly)
+
+The watcher backends in this MVP (Linux inotify, macOS kqueue, Windows ReadDirectoryChangesW) **do not report which process touched the decoy**. As a result, a process-name or exe-path allowlist cannot be consulted at detect time. The allowlist data structure is kept for future use, but is **never invoked from the responder in this release**. Shipping a default allowlist that the responder cannot consult would create a false sense of safety, so no default allowlist is shipped either.
+
+False positives are controlled in two other layers instead.
+
+**1. Placement (the layer that does most of the work)**
+
+Keep decoys outside what your backup tool, AV/EDR, and OS file indexer walk. Concretely:
+
+- **macOS Spotlight exclude**: System Settings → Siri & Spotlight → Privacy → add the decoy folder
+- **macOS Time Machine exclude**: System Settings → General → Time Machine → Options → exclude the decoy folder
+- **Windows search index exclude**: Settings → Search → Windows Search → Advanced indexing options → remove the decoy path
+- **Backup tool exclude**: Backblaze / Arq / Restic etc. — exclude the decoy path
+- **AV/EDR exclude**: Microsoft Defender / CrowdStrike / SentinelOne etc. — add the decoy path to the scan exclusion list (within whatever your policy allows)
+
+**2. Trigger limit (the safe-by-construction layer)**
+
+Even for `response_mode: auto` assets, **auto-cut fires only on change-class touches** (write / delete / rename / extend). **Read-class touches** (open / read / attribute inspection) **notify only and never auto-cut.**
+
+Reason: legitimate backup / AV / indexer software reads decoys. It does not normally write to them. So even without identifying the process, the kind of operation is enough to distinguish "what bulk readers do not do" — structurally safer against false positives.
+
+Every notification carries an op-class hint:
+
+- read alert: "could be a legitimate bulk reader. If you have no explanation, verify and run `zee cut <asset_id>` to cut manually."
+- change alert: "legitimate software does not normally do this. Treat as suspicious." (auto-cut target if mode=auto and dry_run=false.)
+
+Hints never say "ignore safely". The final call is always the operator's.
+
+For reference: to ever add a process-name allowlist that actually works at detect time, Zee would need a privileged backend (Linux fanotify / macOS Endpoint Security / Windows minifilter). That is incompatible with the MVP's lightweight, low-privilege scope. It will be designed separately if and when needed.
+
 ---
 
 ## Limitations — what Zee does not do
@@ -135,7 +168,12 @@ Zee draws its boundary honestly.
 
 - **It does not prevent intrusion itself** — perimeter defenses (firewall, EDR, patching) are not replaced by Zee
 - **It is detection-centered** — automated containment runs only when an asset profile is promoted to `response_mode: auto` AND `dry_run: false`. Default is dry_run (observe only)
-- **It has limits** — against machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range
+- **Auto-cut fires only on change-class touches** — open / read / attribute-inspection touches never auto-cut. The notification carries an operator-facing hint, and the operator decides whether to invoke `zee cut <asset_id>` manually. Reason: with no process attribution from the current watchers, restricting auto-cut to operations that legitimate bulk readers (backup, AV, indexer) do not perform on decoys is the structurally safer rule
+- **On macOS / Windows, decoy reads only fire via the canary out-of-band** — kqueue and ReadDirectoryChangesW do not emit read notifications. Read detection on those OSes goes through canary URLs embedded in decoys, which fire at the operator's external endpoint and never re-enter Zee's local responder. An attacker who only reads a decoy does not trigger auto-cut on these platforms; handling is via notification plus manual cut
+- **The process allowlist does not take effect on the current MVP** — false-positive control relies on placement (keep decoys outside what backup / AV / indexer software walks) and the change-class trigger limit, not on an allowlist match. See the "False-positive control" section above
+- **`zee restore` has no authentication** — an attacker who obtains a shell on the host can roll back containment. The MVP intentionally keeps this simple for a single-operator deployment
+- **Event log records `decoy_path` in plaintext** — files are owner-only (0700/0600), but a root-equivalent attacker can still read them
+- **It has limits** — against fully autonomous machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range. Zee buys time against human-paced or semi-automated post-intrusion activity — the phase after a breach succeeds, during which an attacker performs reconnaissance, lateral movement, and exfiltration
 - **It is not measured** — effectiveness has not been independently validated. Verify in your own environment before any production use
 
 This is a floor, not a ceiling. We state the failure conditions before claiming safety.

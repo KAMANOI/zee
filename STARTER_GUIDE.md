@@ -91,7 +91,7 @@ MVP は既定で **dry_run** で動きます。実遮断はせず、「もし遮
 
 最初の試行はこの順序を強く推奨します：
 
-1. `examples/assets.example.yaml` を `./assets.yaml` にコピーする
+1. `examples/assets.example.toml` を `./assets.toml` にコピーする
 2. `decoy_paths` を自組織で「絶対盗まれたくない情報」と似た形のダミーパスに書き換える（例：`~/.aws/credentials.decoy`）
 3. `response_mode: notify` のまま起動（最初は遮断系の挙動も dry_run も走らせない）
 4. 数日〜1 週間、自分の業務をいつも通りやってみる。誤検知（自分のバックアップツールや IDE が囮を踏むなど）が **ゼロ** であることを確認する

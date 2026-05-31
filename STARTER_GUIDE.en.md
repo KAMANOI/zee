@@ -91,7 +91,7 @@ The MVP runs **dry_run** by default. It does not actually cut connections; it re
 
 Strongly recommended order for the first run:
 
-1. Copy `examples/assets.example.yaml` to `./assets.yaml`.
+1. Copy `examples/assets.example.toml` to `./assets.toml`.
 2. Edit `decoy_paths` to point at dummy paths shaped like your real sensitive files (e.g. `~/.aws/credentials.decoy`).
 3. Leave `response_mode: notify` (no cut, no would-have-cut path).
 4. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.

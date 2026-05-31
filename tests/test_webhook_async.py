@@ -47,7 +47,8 @@ def test_webhook_does_not_block_responder():
     event = TrapEvent.make(
         source="decoy_touch", confidence="high",
         asset_id="t-host", decoy_path="/tmp/decoy",
-        detail="test", detected_at=datetime.now(timezone.utc),
+        detail="test", op_class="change",
+        detected_at=datetime.now(timezone.utc),
     )
 
     with tempfile.TemporaryDirectory() as td:

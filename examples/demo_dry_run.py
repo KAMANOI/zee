@@ -33,7 +33,8 @@ def main() -> int:
         confidence="high",
         asset_id=asset.id,
         decoy_path="/tmp/zee-demo/.env",
-        detail="decoy read+open",
+        detail="decoy write (demo)",
+        op_class="change",   # demo a change-class event to exercise the cut path
         detected_at=datetime.now(timezone.utc),
     )
 

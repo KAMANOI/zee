@@ -1,13 +1,25 @@
-"""Event log (JSON Lines) and latency metrics (spec §7).
+"""Event log (JSON Lines) and latency metrics (spec §7, v4 owner-only).
 
-All measurements are real, recorded values. No estimates, no predictions
-get written here as if they were observations.
+All measurements are real, recorded values. No estimates, no
+predictions get written here as if they were observations.
+
+The log directory and the individual JSON Lines files are created
+with owner-only permissions (0700 / 0600). The records contain
+`decoy_path` in plaintext, which on a compromised host would let an
+attacker map out every decoy's location and avoid them. Owner-only
+permissions raise the bar against a non-root attacker reading them,
+matching the same posture as `policy/allowlist.py`'s permission check.
+
+This is not a complete defense — a root-equivalent attacker still
+reads everything — but it removes the trivial case of any unprivileged
+user on the same host enumerating decoys via the log.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -31,11 +43,23 @@ def default_log_dir() -> Path:
 
 
 class EventLog:
-    """Append-only JSON-Lines log of trap events and latency metrics."""
+    """Append-only JSON-Lines log of trap events and latency metrics.
+
+    Files are created owner-only (0700 for the directory, 0600 for the
+    log files) so that another local user cannot enumerate decoys by
+    reading the event log. Windows ignores POSIX modes; on that
+    platform Zee relies on the per-user profile directory's ACL.
+    """
 
     def __init__(self, log_dir: Optional[Path] = None) -> None:
         self.log_dir = log_dir or default_log_dir()
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        # Tighten the dir mode if it was created with a looser default
+        # umask. Best-effort: ignore if the platform rejects chmod.
+        try:
+            os.chmod(self.log_dir, 0o700)
+        except (OSError, NotImplementedError):
+            pass
         self.events_path = self.log_dir / "events.jsonl"
         self.metrics_path = self.log_dir / "metrics.jsonl"
 
@@ -106,5 +130,14 @@ class EventLog:
 
     @staticmethod
     def _append(path: Path, record: dict[str, Any]) -> None:
+        # Create owner-only (0600) on first write. open(mode="a") respects
+        # the existing file's mode if it already exists, and falls back to
+        # umask otherwise — we explicitly tighten here to ensure 0600.
+        existed = path.exists()
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if not existed:
+            try:
+                os.chmod(path, 0o600)
+            except (OSError, NotImplementedError):
+                pass

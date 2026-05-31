@@ -16,13 +16,18 @@ from zee.responder.sequence import handle
 from zee.telemetry.events_log import EventLog
 
 
-def _make_event(confidence: str = "high", source: str = "decoy_touch") -> TrapEvent:
+def _make_event(
+    confidence: str = "high",
+    source: str = "decoy_touch",
+    op_class: str = "change",
+) -> TrapEvent:
     return TrapEvent.make(
         source=source,  # type: ignore[arg-type]
         confidence=confidence,  # type: ignore[arg-type]
         asset_id="t-host",
         decoy_path="/tmp/decoy",
         detail="test event",
+        op_class=op_class,  # type: ignore[arg-type]
         detected_at=datetime.now(timezone.utc),
     )
 
@@ -44,6 +49,7 @@ def test_decoy_touch_must_be_high_confidence():
             source="decoy_touch",
             confidence="medium",
             asset_id="x", decoy_path=None, detail="x",
+            op_class="change",
         )
 
 

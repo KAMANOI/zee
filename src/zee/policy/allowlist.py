@@ -1,14 +1,40 @@
-"""Allowlist of legitimate processes that must never be ensnared.
+"""Allowlist data structure — currently NOT consulted by the responder.
 
-Backup tools, antivirus scanners, indexing daemons, and admin operators
-sometimes touch decoy files in the course of legitimate work. The
-allowlist exempts them from triggering containment.
+Spec v4 honest statement:
+This module exists as a typed data structure for an allowlist (by
+process name, absolute exe path, or IP CIDR) and as a loader for its
+on-disk JSON form. However the current watcher backends (Linux inotify,
+macOS kqueue, Windows ReadDirectoryChangesW) **do not report the
+process that touched the decoy**. They only report which decoy was
+touched and how. Because of that, name- and exe-path-based matching
+has no input to operate on at decoy-touch time and is **not wired into
+responder/sequence.py**.
 
-Standard library only. Identification is by absolute executable path
-(harder to spoof) or by process name (used only as a fallback hint).
-Source can be a JSON file or in-memory additions. The JSON file's
-permissions are checked: if it is group- or world-writable, the file is
-refused — otherwise an attacker could add themselves to the allowlist.
+This layer is kept for two future cases:
+  1. A future detection layer that does carry actor identity
+     (Linux fanotify, macOS Endpoint Security, Windows minifilter —
+     all of which require elevated privileges and are deferred per
+     spec v4's MVP scope).
+  2. Future network-peer matching (ip_cidrs) if Zee ever inspects
+     remote sources of touches.
+
+For now, **do not bundle a default allowlist** here. A built-in default
+that the responder never consults would create a false sense of safety.
+False-positive control on the current MVP is provided by:
+  - placement guidance (keep decoys outside what backup / AV /
+    indexer software walks) — see README.
+  - the spec v4 trigger limit in responder/sequence.py: auto-cut
+    fires only on op_class=='change'. Read-class touches notify only
+    and require the operator to `zee cut` manually if hostile.
+
+The JSON loader still performs a permission check (group/world write
+refusal) so that if a future caller does start consulting this
+allowlist, it cannot be silently subverted.
+
+Note on ip_cidrs / is_protected(ip=...): These are also not consulted
+on the current MVP, which neither receives nor stores attacker IPs.
+They remain available for a future relay/correlation phase. Zee does
+not collect or store attacker IPs today.
 """
 
 from __future__ import annotations
@@ -39,6 +65,14 @@ class Allowlist:
         self._networks: list = []
         for cidr in (ip_cidrs or []):
             self._add_network(cidr)
+
+    # NOTE: Allowlist.with_defaults was removed in spec v4. The v2
+    # build added a built-in OS-indexer allowlist, but since the
+    # current watchers do not report the touching process, the
+    # responder cannot consult any allowlist at decoy-touch time.
+    # Shipping defaults that the responder never reads would create a
+    # false sense of safety. See module docstring for the alternative
+    # (placement guidance + change-class trigger limit).
 
     # ── construction ───────────────────────────────────────────────
 

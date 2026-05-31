@@ -11,7 +11,8 @@ First public release.
 
 ### Added
 - **MVP implementation** (`src/zee/`): decoy tripwire with automated
-  containment. Standard library + PyYAML only.
+  containment. Standard library only (TOML config via `tomllib`; no
+  third-party runtime dependency).
 - **Watcher backends**:
   - Linux: `inotify` via ctypes (open / read / modify, plus
     delete-self / move-self for decoy disappearance).
@@ -24,7 +25,7 @@ First public release.
 - **Cut backends** (per-OS): `full` (interface disable) and `egress`
   (block outbound to non-local destinations). Both require admin
   privilege and never run on `dry_run`.
-- **Policy**: asset profile YAML (`assets.yaml`) with
+- **Policy**: asset profile TOML (`assets.toml`) with
   `response_mode` × `cut_method` resolution. Allowlist data structure
   for legitimate processes (responder wiring is a follow-up phase).
 - **Recovery**: manual `zee restore <asset_id>` — no auto-reconnect.

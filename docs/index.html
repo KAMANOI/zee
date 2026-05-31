@@ -286,11 +286,11 @@ cd zee
 pip install -e .
 
 <span class="c"># 2. 資産プロファイルを作成</span>
-cp examples/assets.example.yaml ./assets.yaml
+cp examples/assets.example.toml ./assets.toml
 <span class="c"># 編集して decoy_paths を自組織のパスに置き換える</span>
 
 <span class="c"># 3. 監視開始（既定は dry_run、実遮断なし）</span>
-zee watch -c ./assets.yaml
+zee watch -c ./assets.toml
 
 <span class="c"># 4. 別ウィンドウで攻撃者として囮を読んでみる</span>
 cat ~/.aws/credentials.decoy   <span class="c"># この瞬間 zee が高信頼イベントを記録</span></div>

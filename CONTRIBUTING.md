@@ -25,7 +25,7 @@ yet.
    ```
 3. Keep the change small and focused. One PR, one concern.
 4. Follow the existing code style. Standard library only where possible
-   (Zee's dependency is intentionally minimal: PyYAML plus stdlib).
+   (Zee has zero third-party runtime dependencies — standard library only.
 5. Update tests for any behavior change.
 6. If your change touches the **decoy templates** (`src/zee/decoy/seeder.py`),
    make sure new credential-like strings include `_` (underscore) so they
@@ -36,7 +36,8 @@ yet.
 
 ## What changes are likely to be rejected
 
-- Adding `requirements` or runtime dependencies beyond PyYAML.
+- Adding any third-party runtime dependency (Zee deliberately depends
+  on the standard library only).
 - Adding "defense rate" / "0% false positive" / containment-guarantee
   language to docs, comments, or commit messages. Zee deliberately does
   not make those claims.

@@ -129,12 +129,14 @@ class MacOSKqueueWatcher:
                 if path is None:
                     continue
                 detail = _describe_fflags(ev.fflags)
+                op_class = _classify_fflags(ev.fflags)
                 trap = TrapEvent.make(
                     source="decoy_touch",
                     confidence="high",
                     asset_id=asset_id,
                     decoy_path=path,
                     detail=detail,
+                    op_class=op_class,
                 )
                 try:
                     on_event(trap)
@@ -147,6 +149,26 @@ class MacOSKqueueWatcher:
             self._thread.join(timeout=2.0)
             self._thread = None
         self._cleanup_resources()
+
+
+def _classify_fflags(fflags: int) -> str:
+    """Map a kqueue VNODE fflags bitset to read/change.
+
+    Change-like: WRITE, DELETE, EXTEND, RENAME.
+    Read-like (default): ATTRIB — attribute reads can be triggered by
+    AV/Spotlight inspection, so we put ATTRIB on the read side to
+    avoid spurious auto-cuts. The decision is reported here so the
+    operator can revisit it.
+    """
+    change_mask = (
+        select.KQ_NOTE_WRITE
+        | select.KQ_NOTE_DELETE
+        | select.KQ_NOTE_EXTEND
+        | select.KQ_NOTE_RENAME
+    )
+    if fflags & change_mask:
+        return "change"
+    return "read"
 
 
 def _describe_fflags(fflags: int) -> str:
