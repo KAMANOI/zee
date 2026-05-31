@@ -57,12 +57,15 @@ jobs:
 
       - name: Smoke test — init-restore-token
         # Confirms the v0.3 restore_token plumbing runs end-to-end on
-        # all three OSes. The token file is written to a tmp HOME so
-        # the runner's $HOME stays unaffected.
+        # all three OSes. We ask the same Path.home() that the CLI
+        # uses (via default_token_path()) where it actually wrote
+        # the file — Python resolves HOME differently on win32
+        # (USERPROFILE), so a bash-level HOME override is unreliable
+        # there. The token lands in the runner's profile and is
+        # cleaned up when the runner is torn down.
         run: |
-          mkdir -p tmp_home
-          HOME="$PWD/tmp_home" zee init-restore-token > /dev/null
-          test -f "$PWD/tmp_home/.zee/restore_token" || (echo "restore_token not created" && exit 1)
+          zee init-restore-token > /dev/null
+          python -c "from zee.recovery.auth import default_token_path; import sys; p = default_token_path(); sys.exit(0 if p.exists() else 1)"
         shell: bash
 
   # A standalone job that exercises the canary-configured path: same
