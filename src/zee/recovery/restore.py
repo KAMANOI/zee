@@ -15,7 +15,7 @@ import sys
 from ..errors import ZeeError, Z601_RESTORE_FAILED
 from ..notifier.local import notify_local
 from ..responder.cut_egress import ZEE_RULE_TAG
-from ..responder.cut_full import _list_macos_services, _list_windows_interfaces
+from ..responder.cut_full import list_macos_services, list_windows_interfaces
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ def _restore_linux() -> tuple[bool, str]:
 
 def _restore_macos() -> tuple[bool, str]:
     if shutil.which("networksetup"):
-        for svc in _list_macos_services():
+        for svc in list_macos_services():
             _run(["networksetup", "-setnetworkserviceenabled", svc, "on"])
     if shutil.which("pfctl"):
         _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])
@@ -77,8 +77,13 @@ def _restore_macos() -> tuple[bool, str]:
 
 def _restore_windows() -> tuple[bool, str]:
     if shutil.which("netsh"):
-        # Re-enable interfaces (uses the same enumeration as the cut path).
-        for ifname in _list_windows_interfaces():
+        # Re-enable interfaces. We pass only_enabled=False because cut_full
+        # set admin=disable on every interface that was enabled at cut time;
+        # those interfaces now appear with admin-state "disabled" and would
+        # be skipped by the cut-side filter. See SECURITY.md known issues
+        # for the side-effect of re-enabling interfaces disabled by other
+        # software at the same time.
+        for ifname in list_windows_interfaces(only_enabled=False):
             _run(["netsh", "interface", "set", "interface", ifname, "admin=enable"])
         # Delete the Zee-tagged firewall rules.
         _run(["netsh", "advfirewall", "firewall", "delete", "rule",

@@ -92,12 +92,22 @@ MVP は既定で **dry_run** で動きます。実遮断はせず、「もし遮
 最初の試行はこの順序を強く推奨します：
 
 1. `examples/assets.example.toml` を `./assets.toml` にコピーする
-2. `decoy_paths` を自組織で「絶対盗まれたくない情報」と似た形のダミーパスに書き換える（例：`~/.aws/credentials.decoy`）
+2. `decoy_paths` を Zee 専用ディレクトリ配下のダミーパスに書き換える（例：`~/Documents/zee-decoys/aws-credentials.decoy`）。`~/.aws/` などの正規ツールのディレクトリへの配置は誤検知温床になるため避ける
 3. `response_mode: notify` のまま起動（最初は遮断系の挙動も dry_run も走らせない）
 4. 数日〜1 週間、自分の業務をいつも通りやってみる。誤検知（自分のバックアップツールや IDE が囮を踏むなど）が **ゼロ** であることを確認する
 5. 誤検知ゼロが確認できたら、資産ごとに `response_mode: staged` か `auto` に昇格する
 
 「すぐ auto にする」は **おすすめしません**。Zee は自分の業務を巻き込んだ瞬間に信頼を失う層です。誤検知ゼロを観測してからの昇格が、Zee を長く使うための前提です。
+
+### 自動遮断の発火条件（v4・必読）
+
+`response_mode: auto` ＋ `dry_run: false` に昇格しても、自動遮断が走るのは **囮への「変更系」操作（書き換え・削除・改名・拡張）だけ** です。**囮への「読み取り系」操作（open / read / 属性参照）は通知のみで、自動遮断しません。**
+
+理由は単純です。正規のバックアップ・AV・ファイルインデクサ等の一括リーダーは、囮を **読む** ことはあっても **書き換える** ことはしません。プロセス特定ができない現バックエンド（Linux inotify / macOS kqueue / Windows ReadDirectoryChangesW）で、操作の種類だけを根拠に「正規ソフトが普通やらない動き」を区別するのが、構造的に最も安全な誤検知制御です。
+
+読み取り通知が来たら、心当たりがない場合は手動で `zee cut <asset_id>` を実行してください（復旧は `zee restore <asset_id>`）。「正規ソフトなので無視してよい」と断定するヒントは Zee 側からは出しません。最終判断は人間に委ねます。
+
+なお現リリース（v0.1）では、**macOS / Windows のデコイへの「読むだけ」の攻撃は観測されません**（kqueue / ReadDirectoryChangesW は read を通知せず、canary URL での read 検知も v0.1 では未配線）。Linux は inotify が read を直接観察します。
 
 ---
 

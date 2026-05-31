@@ -147,6 +147,11 @@ class LinuxInotifyWatcher:
             offset = 0
             while offset + _EVENT_HEADER.size <= len(data):
                 wd, mask, _cookie, name_len = _EVENT_HEADER.unpack_from(data, offset)
+                # Zee watches individual decoy files directly, so name_len is
+                # always 0 here (the kernel only fills name when the watch
+                # target is a directory). The +name_len arithmetic is kept
+                # so a future switch to directory-level watches still parses
+                # the variable-length trailing name correctly.
                 offset += _EVENT_HEADER.size + name_len
                 path = self._wd_to_path.get(wd)
                 if path is None:

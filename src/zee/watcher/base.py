@@ -19,9 +19,11 @@ OnEvent = Callable[[TrapEvent], None]
 class Capability:
     """What this watcher backend can detect on the current OS.
 
-    All fields are honest assessments. If a backend uses a canary-token
-    fallback instead of a kernel-level read hook, it should set
-    detects_read=False and rely on the canary path.
+    All fields are honest assessments. If a backend has no kernel-level
+    read hook (kqueue, ReadDirectoryChangesW), it should set
+    detects_read=False. The canary path is planned for read detection on
+    those backends but is NOT wired in v0.1 — see decoy/canary_token.py
+    and the v0.1 Limitations in README.
     """
 
     backend_name: str

@@ -72,6 +72,7 @@ class EventLog:
             "decoy_path": event.decoy_path,
             "detected_at": event.detected_at.isoformat(),
             "detail": event.detail,
+            "op_class": event.op_class,
         }
         self._append(self.events_path, record)
 

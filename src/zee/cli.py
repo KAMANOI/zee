@@ -41,8 +41,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     seen: dict[str, str] = {}
     for asset in config.assets:
         for raw in asset.decoy_paths:
-            from pathlib import Path as _P
-            key = str(_P(raw).expanduser())
+            key = str(Path(raw).expanduser())
             if key in seen and seen[key] != asset.id:
                 print(
                     f"[error] decoy_path {raw!r} appears under both "
@@ -226,6 +225,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 11):
+        print(
+            "zee requires Python 3.11 or newer (uses the standard library "
+            f"tomllib module). Detected: Python {sys.version_info.major}."
+            f"{sys.version_info.minor}.",
+            file=sys.stderr,
+        )
+        return 2
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "verbose", False):

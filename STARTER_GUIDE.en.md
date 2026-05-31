@@ -92,12 +92,22 @@ The MVP runs **dry_run** by default. It does not actually cut connections; it re
 Strongly recommended order for the first run:
 
 1. Copy `examples/assets.example.toml` to `./assets.toml`.
-2. Edit `decoy_paths` to point at dummy paths shaped like your real sensitive files (e.g. `~/.aws/credentials.decoy`).
+2. Edit `decoy_paths` to point at dummy paths under a Zee-only directory (e.g. `~/Documents/zee-decoys/aws-credentials.decoy`). Keep them OUT of real tool directories like `~/.aws/`.
 3. Leave `response_mode: notify` (no cut, no would-have-cut path).
 4. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
 5. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
 
 **Jumping straight to `auto` is not recommended.** Zee is a layer that loses trust the moment it ensnares your own work. Promoting only after observing zero false positives is the precondition for using Zee long-term.
+
+### Auto-cut trigger conditions (v4 — required reading)
+
+Even after you promote an asset to `response_mode: auto` + `dry_run: false`, **auto-cut fires only on change-class touches** (write / delete / rename / extend). **Read-class touches** (open / read / attribute inspection) **notify only and never auto-cut**.
+
+The reasoning is structural: legitimate bulk readers (backup tools, AV/EDR, file indexers) **read** decoys; they do not **write** to them. With no process attribution from the current watcher backends (Linux inotify / macOS kqueue / Windows ReadDirectoryChangesW), restricting auto-cut to operations that legitimate bulk readers do not perform is the safest possible false-positive control.
+
+If you receive a read-class alert and have no explanation for it, invoke `zee cut <asset_id>` manually to cut (and `zee restore <asset_id>` to recover). Zee does not emit hints that say "ignore safely"; the final call is always yours.
+
+Note for v0.1: **read-only attacker activity against a macOS / Windows decoy is NOT observed** in this release. kqueue / ReadDirectoryChangesW do not emit read events, and the planned canary-URL path is not wired in v0.1. Linux observes reads directly via inotify.
 
 ---
 

@@ -3,8 +3,11 @@
 Observes change notifications on the parent directories of decoys.
 Does NOT observe reads — reliable read detection on Windows requires
 Object Access auditing (SACL + Security event log), which is out of
-scope for this MVP. Read signals come from canary URLs embedded in
-decoys (see decoy/canary_token.py).
+scope for this MVP. Read detection via canary URLs embedded in decoys
+is planned (see decoy/canary_token.py for the registry data structure),
+but the canary path is NOT wired into the seeder in v0.1; read-only
+attacker activity against a Windows decoy is not observed in this
+release. See README "Limitations".
 """
 
 from __future__ import annotations
@@ -81,11 +84,13 @@ class WindowsWatcher:
             detects_open=False,
             detects_read=False,
             detects_modify=True,
-            uses_canary_fallback=True,
+            uses_canary_fallback=False,
             notes=(
                 "ReadDirectoryChangesW for change detection on the parent "
-                "directory. Read detection is delegated to canary URLs "
-                "embedded in decoys."
+                "directory. Read detection on Windows is planned via "
+                "canary URLs embedded in decoys, but the canary path is "
+                "NOT wired in v0.1; read-only attacker activity against "
+                "a decoy is not observed in this release."
             ),
         )
 
@@ -179,9 +184,10 @@ class WindowsWatcher:
                 detail = f"decoy {ACTION_NAMES.get(action, f'action={action}')}"
                 # ReadDirectoryChangesW only fires on change-class
                 # events (added / removed / modified / renamed). Reads
-                # do not generate notifications here at all — those are
-                # picked up out-of-band by the canary token, which
-                # never re-enters this responder. Therefore every event
+                # do not generate notifications here at all. The
+                # planned out-of-band canary path (decoy/canary_token.py)
+                # is not wired in v0.1, so read-only activity is not
+                # observed on this release. Therefore every event
                 # delivered through this path is change-class.
                 trap = TrapEvent.make(
                     source="decoy_touch",

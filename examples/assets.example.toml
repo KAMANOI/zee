@@ -1,6 +1,15 @@
 # Zee asset profiles example
 # Copy to ./assets.toml and edit. Zee starts in dry_run by default.
 # Promote response_mode to "auto" only after confirming zero false positives.
+#
+# decoy_paths NOTE — the paths below intentionally live under a Zee-only
+# directory (~/Documents/zee-decoys/), NOT inside real tool directories
+# such as ~/.aws/ or ~/.ssh/. Real tools (AWS CLI, ssh-agent, IDEs) walk
+# their own dot-directories and will produce false positives if decoys
+# share those paths. Keeping decoys in a dedicated directory you also
+# exclude from backup / AV / indexer scans (see README "decoy placement")
+# is the configuration that the v0.1 trigger-limited responder is
+# designed for.
 
 dry_run = true
 
@@ -9,8 +18,8 @@ id = "front-desk-pc"
 type = "workstation"
 overnight_active = false
 decoy_paths = [
-    "~/.aws/credentials.decoy",
-    "~/Documents/_secrets/.env",
+    "~/Documents/zee-decoys/aws-credentials.decoy",
+    "~/Documents/zee-decoys/.env",
 ]
 response_mode = "notify"   # auto / staged / notify  (start with notify)
 cut_method = "full"        # full / egress  (only used when mode != notify)
@@ -20,7 +29,7 @@ id = "edit-laptop"
 type = "workstation"
 overnight_active = true
 decoy_paths = [
-    "~/Documents/_secrets/id_rsa",
+    "~/Documents/zee-decoys/id_rsa.decoy",
 ]
 response_mode = "notify"
 cut_method = "egress"
@@ -39,10 +48,12 @@ cut_method = "egress"
 # False positives are controlled in two other ways instead:
 #
 #   1. PLACEMENT: keep decoys outside what your backup tool, AV/EDR,
-#      and OS file indexer walk by default. See the README "decoy
-#      placement" section for OS-specific exclusion steps (Spotlight
-#      privacy, Time Machine exclusions, Windows search exclusions,
-#      and your backup / AV tool's exclusion list).
+#      and OS file indexer walk by default. The Zee-only directory
+#      shown above is the recommended pattern; also add that directory
+#      to your Spotlight privacy / Time Machine / Windows search index
+#      / backup tool / AV exclusion lists. Real tool dot-directories
+#      (~/.aws/, ~/.ssh/, ~/.config/) are NOT recommended for decoy
+#      placement because their owners walk them as part of normal work.
 #
 #   2. TRIGGER LIMIT: auto-cut fires only on change-class touches
 #      (write / delete / rename / extend). Read-class touches notify

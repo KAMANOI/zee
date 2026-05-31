@@ -39,30 +39,34 @@ MATRIX: tuple[StaticCapability, ...] = (
     ),
     StaticCapability(
         os="macOS",
-        backend="kqueue/EVFILT_VNODE + canary token fallback",
+        backend="kqueue/EVFILT_VNODE",
         detects_open=False,
         detects_read=False,
         detects_modify=True,
-        uses_canary_fallback=True,
-        status="implemented",
+        uses_canary_fallback=False,
+        status="implemented (change-only; read not observed in v0.1)",
         notes=(
-            "kqueue for change detection only. Reliable read detection requires "
-            "the Endpoint Security framework (entitlement); v1 relies on "
-            "canary URLs embedded in decoys for read signals."
+            "kqueue for change detection only. Reliable read detection "
+            "requires the Endpoint Security framework (entitlement); a "
+            "canary URL path is planned but NOT wired in v0.1. Read-only "
+            "attacker activity against a macOS decoy is not observed "
+            "in this release."
         ),
     ),
     StaticCapability(
         os="Windows",
-        backend="ReadDirectoryChangesW + canary token fallback",
+        backend="ReadDirectoryChangesW",
         detects_open=False,
         detects_read=False,
         detects_modify=True,
-        uses_canary_fallback=True,
-        status="implemented (untested on Windows hardware)",
+        uses_canary_fallback=False,
+        status="implemented (change-only; read not observed in v0.1; untested on Windows hardware)",
         notes=(
-            "ReadDirectoryChangesW for change detection on the parent directory. "
-            "Reliable read auditing requires Object Access auditing (SACL + Event "
-            "Log); v1 relies on canary URLs embedded in decoys for read signals."
+            "ReadDirectoryChangesW for change detection on the parent "
+            "directory. Reliable read auditing requires Object Access "
+            "auditing (SACL + Event Log); a canary URL path is planned "
+            "but NOT wired in v0.1. Read-only attacker activity against "
+            "a Windows decoy is not observed in this release."
         ),
     ),
 )

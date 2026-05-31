@@ -61,3 +61,41 @@ subject of legal action by the maintainer. Please:
 - Give us a reasonable amount of time to respond before public disclosure.
 - Do not use vulnerabilities you discover to access data beyond what is
   necessary to demonstrate the issue.
+
+## Known issues (v0.1)
+
+The following are documented limitations of the v0.1 release that we
+have not yet fixed. They are not "vulnerabilities" in the sense of an
+unintended weakness — they are honestly-published boundaries of the
+current MVP.
+
+- **Canary URL read detection is not wired.** `CanaryTokenRegistry`
+  (`src/zee/decoy/canary_token.py`) provides the data structure for
+  issuing tokens, but the seeder does not embed canary URLs into the
+  decoy files in v0.1. As a result, **read-only attacker activity
+  against a macOS / Windows decoy is not observed** (kqueue and
+  ReadDirectoryChangesW do not emit read events). Linux observes reads
+  directly via `inotify`. Seeder-side canary automation is tracked as a
+  separate task.
+- **Windows interface enumeration is English-locale-dependent.**
+  `list_windows_interfaces()` in `src/zee/responder/cut_full.py` parses
+  the English-locale output of `netsh interface show interface`
+  (filtering on `cols[0].lower() == "enabled"`). On non-English Windows
+  the header text differs and enumeration may return zero entries.
+  Locale-independent enumeration (e.g. via `Get-NetAdapter`) is a
+  follow-up.
+- **`zee restore` on Windows re-enables every interface it can see.**
+  The recovery path enumerates all interfaces (not just the ones Zee
+  cut) and re-enables them, because Zee does not currently record the
+  exact set of interfaces it disabled. If another tool had disabled an
+  interface at the same time, `zee restore` will re-enable it as a
+  side-effect. Tracking the cut-state per asset is a follow-up.
+- **`zee restore` has no authentication.** The MVP is single-operator;
+  anyone who can run the CLI can revert containment. See README
+  "Limitations" for the threat-model implications.
+- **Event log records `decoy_path` in plaintext.** Files are owner-only
+  (0700 / 0600), but a root-equivalent attacker can still read them and
+  enumerate decoy locations.
+
+These are tracked publicly so that anyone running Zee in v0.1 can plan
+around them.

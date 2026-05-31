@@ -38,7 +38,15 @@ class CanaryTokenRegistry:
     """
 
     def __init__(self, base_url: Optional[str] = None) -> None:
-        self._base_url = (base_url or "").rstrip("/")
+        cleaned = (base_url or "").rstrip("/")
+        if cleaned and not cleaned.startswith("https://"):
+            raise ValueError(
+                "CanaryTokenRegistry base_url must use https:// — canary URLs "
+                "are embedded in decoys and dereferenced by attackers; their "
+                "destination must not be observable in plaintext on the wire. "
+                f"Got: {base_url!r}"
+            )
+        self._base_url = cleaned
         self._tokens: dict[str, CanaryToken] = {}
 
     @property

@@ -136,3 +136,31 @@ def test_latency_recorded(monkeypatch):
         assert record["mode"] == "contain"
         assert record["cut_done_at"] is not None
         assert record["dry_run"] is False
+
+
+def test_events_jsonl_records_op_class(monkeypatch):
+    """spec v4 addendum 2: op_class must be persisted in events.jsonl for audit."""
+    monkeypatch.setattr("zee.responder.sequence.cut_egress",
+                        lambda: (True, "stub"))
+    with tempfile.TemporaryDirectory() as td:
+        log = EventLog(log_dir=Path(td))
+        handle(
+            _make_event(op_class="change"),
+            _make_asset(response_mode="auto", cut_method="egress"),
+            dry_run=True,
+            event_log=log,
+        )
+        # also exercise the read path
+        handle(
+            _make_event(op_class="read"),
+            _make_asset(response_mode="auto", cut_method="egress"),
+            dry_run=True,
+            event_log=log,
+        )
+        lines = log.events_path.read_text().strip().split("\n")
+        assert len(lines) == 2
+        rec_change = json.loads(lines[0])
+        rec_read = json.loads(lines[1])
+        assert rec_change["type"] == "trap_event"
+        assert rec_change["op_class"] == "change"
+        assert rec_read["op_class"] == "read"

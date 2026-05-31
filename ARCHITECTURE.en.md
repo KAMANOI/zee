@@ -127,6 +127,16 @@ privacy policy of whoever runs that endpoint. The token_id itself is
 generated with `secrets.token_urlsafe` and carries no operator
 identifier inside Zee.
 
+**Canary wiring status in v0.1.** `CanaryTokenRegistry`
+(`src/zee/decoy/canary_token.py`) provides **only the data structure**
+for issuing and registering tokens. In v0.1 the seeder does NOT call
+the registry and the decoy files do NOT contain canary URLs
+automatically. Read-only attacker activity against a macOS / Windows
+decoy is therefore not observed in v0.1 (kqueue / ReadDirectoryChangesW
+do not emit read events, and there is no canary URL in the decoy to
+fire out-of-band). An operator can hand-embed canary URLs in decoys
+today; the seeder-side automation is planned as a separate task.
+
 `policy/allowlist.py`'s `ip_cidrs` / `is_protected(ip=...)` are **not
 called by any current watcher backend**. They are a placeholder for a
 future relay/correlation phase. There is no path in this release that
@@ -220,7 +230,7 @@ The affine Collatz research referenced there is described as a **research direct
 
 | Component | Status | Location and notes |
 |---|---|---|
-| 1. Behavior observation (decoy tripwire) | ✅ Implemented | `src/zee/watcher/` — Linux inotify (open/read/modify), macOS kqueue (change-only) + canary fallback, Windows ReadDirectoryChangesW + canary (Windows hardware untested) |
+| 1. Behavior observation (decoy tripwire) | ✅ Implemented (change-only on macOS / Windows) | `src/zee/watcher/` — Linux inotify (open/read/modify), macOS kqueue (change-only), Windows ReadDirectoryChangesW (change-only). **Canary-URL read detection is NOT wired in v0.1** (read-only attacker activity against a macOS / Windows decoy is not observed). Windows hardware untested |
 | 2. Gatekeepers | Partial | `src/zee/policy/` — allowlist data structure done; wiring into the responder (downgrading contain when allowlist matches) and the multi-signal trap gate are next |
 | 3. Decoy redirection | Research-stage | Design only |
 | 4. Fake internal network | Research-stage | Design only |

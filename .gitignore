@@ -17,5 +17,8 @@ venv/
 .idea/
 .DS_Store
 
+# Claude Code per-project notes (decisions / past mistakes — local memory)
+.claude/
+
 # Zee local state (event logs from local runs)
 *.jsonl

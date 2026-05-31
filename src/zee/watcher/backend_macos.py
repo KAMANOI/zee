@@ -1,11 +1,16 @@
 """macOS watcher backend — kqueue / EVFILT_VNODE (spec §9).
 
 kqueue observes file-level change events (write, delete, attrib, rename,
-extend). It does NOT observe reads. For read signals on macOS, Zee
-relies on canary URLs embedded in decoys (see decoy/canary_token.py)
-which fire out-of-band when an attacker dereferences them.
+extend). It does NOT observe reads. Read detection on macOS is planned
+via canary URLs embedded in decoys (the CanaryTokenRegistry in
+decoy/canary_token.py), but the canary path is NOT wired into the
+seeder in v0.1 — the registry currently has no caller in production
+code. On v0.1, read-only attacker activity against a macOS decoy is
+therefore not observed by Zee. See README "Limitations" for the v0.1
+boundary and decoy/canary_token.py for the registry data structure
+that the future wiring will use.
 
-This honest split — change events here, read events via canary — is
+This honest split — change events here, read detection deferred — is
 reflected in the capability declaration.
 """
 
@@ -51,10 +56,13 @@ class MacOSKqueueWatcher:
             detects_open=False,
             detects_read=False,
             detects_modify=True,
-            uses_canary_fallback=True,
+            uses_canary_fallback=False,
             notes=(
-                "kqueue/EVFILT_VNODE for change detection only. Read detection "
-                "is delegated to canary URLs embedded in decoys."
+                "kqueue/EVFILT_VNODE for change detection only. Read "
+                "detection on macOS is planned via canary URLs embedded "
+                "in decoys, but the canary path is NOT wired in v0.1; "
+                "read-only attacker activity against a decoy is not "
+                "observed in this release."
             ),
         )
 

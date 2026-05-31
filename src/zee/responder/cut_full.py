@@ -37,7 +37,7 @@ def _cut_full_linux() -> tuple[bool, str]:
         logger.warning("nmcli failed (%s); falling back to `ip link`", result[1])
     # Fallback: bring all non-loopback interfaces down.
     if shutil.which("ip"):
-        ifaces = _list_linux_interfaces()
+        ifaces = list_linux_interfaces()
         all_ok = True
         details: list[str] = []
         for ifname in ifaces:
@@ -48,7 +48,8 @@ def _cut_full_linux() -> tuple[bool, str]:
     return False, "no supported backend (need nmcli or ip)"
 
 
-def _list_linux_interfaces() -> list[str]:
+def list_linux_interfaces() -> list[str]:
+    """Enumerate non-loopback Linux interfaces. Used by both cut and restore."""
     try:
         out = subprocess.check_output(
             ["ip", "-o", "link", "show"], text=True, timeout=3
@@ -68,7 +69,7 @@ def _list_linux_interfaces() -> list[str]:
 def _cut_full_macos() -> tuple[bool, str]:
     if not shutil.which("networksetup"):
         return False, "networksetup not available"
-    services = _list_macos_services()
+    services = list_macos_services()
     all_ok = True
     details: list[str] = []
     for svc in services:
@@ -78,7 +79,11 @@ def _cut_full_macos() -> tuple[bool, str]:
     return all_ok, "networksetup -setnetworkserviceenabled off: " + ", ".join(details)
 
 
-def _list_macos_services() -> list[str]:
+def list_macos_services() -> list[str]:
+    """Enumerate currently-enabled macOS network services. Used by both cut and restore.
+
+    Disabled services (those marked with '*' by networksetup) are excluded.
+    """
     try:
         out = subprocess.check_output(
             ["networksetup", "-listallnetworkservices"], text=True, timeout=3
@@ -95,7 +100,7 @@ def _list_macos_services() -> list[str]:
 
 def _cut_full_windows() -> tuple[bool, str]:
     # netsh requires the visible interface name; enumerate first.
-    ifaces = _list_windows_interfaces()
+    ifaces = list_windows_interfaces(only_enabled=True)
     if not ifaces:
         return False, "no enabled interfaces found via netsh"
     all_ok = True
@@ -109,7 +114,20 @@ def _cut_full_windows() -> tuple[bool, str]:
     return all_ok, "netsh disable: " + ", ".join(details)
 
 
-def _list_windows_interfaces() -> list[str]:
+def list_windows_interfaces(*, only_enabled: bool = True) -> list[str]:
+    """Enumerate Windows interfaces visible to netsh.
+
+    Args:
+        only_enabled: when True (default), return only interfaces whose
+            admin-state column is "enabled". cut_full uses this to find
+            disable-able interfaces. recovery/restore passes only_enabled=False
+            so that previously-disabled interfaces (which is what cut left
+            behind) are also re-enabled.
+
+    Known limitation: this parses the English-locale `netsh interface show
+    interface` output. On non-English Windows the header text differs and
+    enumeration may return zero entries. See SECURITY.md known issues.
+    """
     try:
         out = subprocess.check_output(
             ["netsh", "interface", "show", "interface"], text=True, timeout=3
@@ -120,8 +138,11 @@ def _list_windows_interfaces() -> list[str]:
     for line in out.splitlines()[3:]:
         cols = line.split()
         # Columns: AdminState, State, Type, Interface Name
-        if len(cols) >= 4 and cols[0].lower() == "enabled":
-            ifs.append(" ".join(cols[3:]))
+        if len(cols) < 4:
+            continue
+        if only_enabled and cols[0].lower() != "enabled":
+            continue
+        ifs.append(" ".join(cols[3:]))
     return ifs
 
 

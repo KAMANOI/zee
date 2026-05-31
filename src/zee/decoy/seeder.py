@@ -81,7 +81,19 @@ def seed(path: Path) -> Path:
     overwriting would corrupt the evidence).
     """
     path = path.expanduser().resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    parent = path.parent
+    parent_existed = parent.exists()
+    parent.mkdir(parents=True, exist_ok=True)
+    # Tighten the parent directory only when Zee created it: a 0755 default
+    # would let other local users enumerate decoy filenames. We do not
+    # narrow an existing dir's mode (the operator may have placed decoys
+    # under a path with its own policy). Best-effort: Windows ignores
+    # POSIX mode; some filesystems reject chmod.
+    if not parent_existed:
+        try:
+            os.chmod(parent, 0o700)
+        except (OSError, NotImplementedError):
+            pass
     if path.exists():
         return path
     template = _TEMPLATES[_pick_template(path)]

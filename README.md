@@ -92,12 +92,17 @@ pip install -e .
 # 1. 資産プロファイルを作成
 cp examples/assets.example.toml ./assets.toml
 # 編集して decoy_paths を自組織のパスに置き換える
+# 既定では Zee 専用ディレクトリ（~/Documents/zee-decoys/）を例示
 
 # 2. 監視開始（既定は dry_run、実遮断なし）
 zee watch -c ./assets.toml
 
-# 3. 別ウィンドウで「攻撃者として」囮を読んでみる
-cat ~/.aws/credentials.decoy   # この瞬間 zee が高信頼イベントを記録
+# 3. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換えてみる
+echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
+#  → 変更系の接触（modify）として高信頼イベントを 3 OS 共通で記録します。
+#  Linux では `cat <decoy>` のような読み取りだけでも記録します（inotify が
+#  open/read を直接観察するため）。macOS / Windows では「読むだけ」の操作は
+#  v0.1 では観測されません（後述の Limitations 参照）。
 ```
 
 ### このフェーズの Zee がすること／しないこと
@@ -121,12 +126,12 @@ cat ~/.aws/credentials.decoy   # この瞬間 zee が高信頼イベントを記
 | OS | Backend | open | read | modify | canary fallback | status |
 |---|---|---|---|---|---|---|
 | Linux | inotify | yes | yes | yes | no | implemented |
-| macOS | kqueue + canary | no | no | yes | yes | implemented |
-| Windows | ReadDirectoryChangesW + canary | no | no | yes | yes | implemented (Windows 実機未検証) |
+| macOS | kqueue | no | no | yes | no (planned) | implemented (change-only; read not observed in v0.1) |
+| Windows | ReadDirectoryChangesW | no | no | yes | no (planned) | implemented (change-only; read not observed in v0.1; Windows 実機未検証) |
 
 - **Linux** — `inotify` で open / read / modify を直接観察します（標準ライブラリのみ・ctypes 経由）
-- **macOS** — `kqueue/EVFILT_VNODE` で変更系のみ観察します。read 検知は OS の制約（Endpoint Security framework が必要）で直接できないため、囮ファイルに埋め込んだ canary URL で補います
-- **Windows** — `ReadDirectoryChangesW` で親ディレクトリの変更系のみ観察します。read 検知は SACL + Object Access 監査が必要で、v1 では canary URL に委譲します
+- **macOS** — `kqueue/EVFILT_VNODE` で変更系のみ観察します。read 検知は OS の制約（Endpoint Security framework が必要）で直接できません。**canary URL での read 検知は将来配線の予定ですが v0.1 では未実装で、`CanaryTokenRegistry` は seeder から呼ばれません。** 現リリースで macOS デコイへの「読むだけ」の攻撃は観測されません
+- **Windows** — `ReadDirectoryChangesW` で親ディレクトリの変更系のみ観察します。read 検知は SACL + Object Access 監査が必要で、v1 では対応外です。**canary URL での read 検知は将来配線の予定ですが v0.1 では未実装です。** 現リリースで Windows デコイへの「読むだけ」の攻撃は観測されません
 
 Mac で動作検証済み。Linux はコード上完成、実機での連続稼働検証は未実施。Windows は実装あり、Windows ハードウェアでの実機検証は未実施。
 
@@ -170,7 +175,7 @@ Zee は誠実に範囲を区切ります。
 - **侵入そのものは防がない** — 入口防御（ファイアウォール・EDR・パッチ）の役割を置き換えるものではありません
 - **検知中心** — 自動の封じ込め機構は、資産プロファイルで `response_mode: auto` を明示し `dry_run: false` にしたときだけ動きます。既定は dry_run（観測のみ）
 - **自動遮断は「変更系の接触」のみ** — open / read / 属性参照 など読み取り系の接触は自動遮断しません。通知で人間に判断材料を渡し、必要なら `zee cut <asset_id>` で手動遮断する設計です。理由：プロセス特定ができない現バックエンドでは、正規ソフト（バックアップ・AV・インデクサ）が普通やらない操作だけを自動遮断の根拠にするのが構造的に安全だからです
-- **macOS / Windows の「デコイ読み取り」は canary 外部発火のみ** — kqueue / ReadDirectoryChangesW は読み取り通知を出しません。読み取りは囮ファイル内に埋め込んだ canary URL の外部発火で検知され、Zee 本体の自動遮断には戻りません。攻撃者がデコイを「読むだけ」のケースでは Zee の自動遮断は発火せず、対応は通知＋手動遮断が担います
+- **macOS / Windows のデコイ読み取りは v0.1 では観測されません** — kqueue / ReadDirectoryChangesW は読み取り通知を出しません。canary URL での read 検知は将来配線の予定ですが **v0.1 では未実装** で、`CanaryTokenRegistry` は seeder から呼ばれず、囮ファイルにも canary URL は埋め込まれません。macOS / Windows で「読むだけ」の攻撃に対しては Zee は無反応です。Linux では inotify が読み取りを直接観察します
 - **プロセス allowlist は現バックエンドでは効かない** — 誤検知制御は許可リストの照合ではなく、「囮を正規ソフトの走査対象外に置く配置ガイド」と「変更系トリガーへの限定」で行います。詳しくは上の「誤検知対策」節
 - **`zee restore` に認証はない** — ホスト上でシェルを取れる攻撃者は遮断を巻き戻せます。MVP は単一 operator 前提で意図的に簡素化しています
 - **イベントログには `decoy_path` が平文で記録される** — owner-only（0700/0600）で保護していますが、root 相当の攻撃者には読まれます

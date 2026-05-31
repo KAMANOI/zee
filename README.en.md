@@ -91,12 +91,17 @@ pip install -e .
 # 1. Create an asset profile
 cp examples/assets.example.toml ./assets.toml
 # Edit decoy_paths to point at your own paths
+# The default example uses a Zee-only directory (~/Documents/zee-decoys/)
 
 # 2. Start monitoring (default dry_run — no real cut)
 zee watch -c ./assets.toml
 
-# 3. In another window, act as an attacker
-cat ~/.aws/credentials.decoy   # Zee records a high-confidence event
+# 3. In another window, simulate an attacker tampering with the decoy
+echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
+#  -> change-class touch (modify); Zee records a high-confidence event
+#     on all three OSes. On Linux, `cat <decoy>` (read-only) also fires
+#     because inotify observes open/read directly. On macOS / Windows
+#     read-only touches are NOT observed in v0.1 (see Limitations).
 ```
 
 ### What this MVP does / does not do
@@ -120,12 +125,12 @@ cat ~/.aws/credentials.decoy   # Zee records a high-confidence event
 | OS | Backend | open | read | modify | canary fallback | status |
 |---|---|---|---|---|---|---|
 | Linux | inotify | yes | yes | yes | no | implemented |
-| macOS | kqueue + canary | no | no | yes | yes | implemented |
-| Windows | ReadDirectoryChangesW + canary | no | no | yes | yes | implemented (untested on Windows hardware) |
+| macOS | kqueue | no | no | yes | no (planned) | implemented (change-only; read not observed in v0.1) |
+| Windows | ReadDirectoryChangesW | no | no | yes | no (planned) | implemented (change-only; read not observed in v0.1; untested on Windows hardware) |
 
 - **Linux** — `inotify` observes open / read / modify directly (standard library only, via ctypes).
-- **macOS** — `kqueue/EVFILT_VNODE` observes change events only. Read detection is not available without the Endpoint Security framework entitlement; instead, Zee embeds canary URLs in decoys and fires out-of-band when those URLs are dereferenced.
-- **Windows** — `ReadDirectoryChangesW` observes change events on the parent directory. Read auditing requires Object Access auditing (SACL + Event Log), which is out of scope for v1; canary URLs cover the read path.
+- **macOS** — `kqueue/EVFILT_VNODE` observes change events only. Read detection is not available without the Endpoint Security framework entitlement. **A canary-URL path for read detection is planned but NOT wired in v0.1; `CanaryTokenRegistry` is not invoked from the seeder.** Read-only attacker activity against a macOS decoy is not observed in this release.
+- **Windows** — `ReadDirectoryChangesW` observes change events on the parent directory. Read auditing requires Object Access auditing (SACL + Event Log), which is out of scope for v1. **A canary-URL path for read detection is planned but NOT wired in v0.1.** Read-only attacker activity against a Windows decoy is not observed in this release.
 
 Verified on macOS. Linux backend complete in code, continuous-run verification on Linux hardware not yet done. Windows backend implemented, not yet verified on Windows hardware.
 
@@ -169,7 +174,7 @@ Zee draws its boundary honestly.
 - **It does not prevent intrusion itself** — perimeter defenses (firewall, EDR, patching) are not replaced by Zee
 - **It is detection-centered** — automated containment runs only when an asset profile is promoted to `response_mode: auto` AND `dry_run: false`. Default is dry_run (observe only)
 - **Auto-cut fires only on change-class touches** — open / read / attribute-inspection touches never auto-cut. The notification carries an operator-facing hint, and the operator decides whether to invoke `zee cut <asset_id>` manually. Reason: with no process attribution from the current watchers, restricting auto-cut to operations that legitimate bulk readers (backup, AV, indexer) do not perform on decoys is the structurally safer rule
-- **On macOS / Windows, decoy reads only fire via the canary out-of-band** — kqueue and ReadDirectoryChangesW do not emit read notifications. Read detection on those OSes goes through canary URLs embedded in decoys, which fire at the operator's external endpoint and never re-enter Zee's local responder. An attacker who only reads a decoy does not trigger auto-cut on these platforms; handling is via notification plus manual cut
+- **On macOS / Windows, decoy reads are NOT observed in v0.1** — kqueue and ReadDirectoryChangesW do not emit read notifications. A canary-URL path for read detection is planned but **not wired in v0.1**: `CanaryTokenRegistry` is not invoked from the seeder, and no canary URL is embedded in the decoy files. An attacker who only reads a macOS/Windows decoy triggers nothing in Zee. Linux observes reads directly via inotify
 - **The process allowlist does not take effect on the current MVP** — false-positive control relies on placement (keep decoys outside what backup / AV / indexer software walks) and the change-class trigger limit, not on an allowlist match. See the "False-positive control" section above
 - **`zee restore` has no authentication** — an attacker who obtains a shell on the host can roll back containment. The MVP intentionally keeps this simple for a single-operator deployment
 - **Event log records `decoy_path` in plaintext** — files are owner-only (0700/0600), but a root-equivalent attacker can still read them
