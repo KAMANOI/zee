@@ -33,10 +33,10 @@ next person to hit the same wall finds your write-up.
 
 Three channels for that:
 
-- 🔧 **[GitHub Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a)** —
+- 🔧 **[GitHub Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/q-a)** —
   "Mac 26.x broke launchd registration, I fixed it like this …" /
   "Japanese-locale Windows enumeration: my patch."
-- 🌱 **[GitHub Discussions → Show your fork](https://github.com/KAMANOI/zee/discussions/categories/show-your-fork)** —
+- 🌱 **[GitHub Discussions → Show your fork](https://github.com/KAMANOI/zee/discussions/categories/show-and-tell)** —
   "Here is how our beauty salon / small EC / law office runs Zee."
 - 📚 **[Wiki](https://github.com/KAMANOI/zee/wiki)** — durable
   collective knowledge: per-OS maintenance recipes, confirmed

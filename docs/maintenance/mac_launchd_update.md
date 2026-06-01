@@ -101,14 +101,14 @@ Here is the current state of the files most likely to need an edit
    `SECURITY.md` if the fix surfaces a new limitation.
 
 After I apply your patch and `pytest tests/ -q` returns green, I'll
-post the diff to https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+post the diff to https://github.com/KAMANOI/zee/discussions/categories/q-a
 so others hitting this same upgrade can copy it.
 ```
 
 ## After it works
 
 Open a Discussion at
-<https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a>
+<https://github.com/KAMANOI/zee/discussions/categories/q-a>
 with:
 
 1. The exact macOS version (`sw_vers -productVersion` output)

@@ -339,7 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 _DISCUSSIONS_URL = (
-    "https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a"
+    "https://github.com/KAMANOI/zee/discussions/categories/q-a"
 )
 
 # Error codes that are clearly user-input mistakes, not OS-shift /

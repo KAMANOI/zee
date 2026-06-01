@@ -74,13 +74,13 @@ or different Python release.
    versions to confirm regressions are caught.
 
 After I apply your patch and the suite is green, I'll post the diff
-to https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a.
+to https://github.com/KAMANOI/zee/discussions/categories/q-a.
 ```
 
 ## After it works
 
 Open a Discussion at
-<https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a>
+<https://github.com/KAMANOI/zee/discussions/categories/q-a>
 with:
 
 1. Python version

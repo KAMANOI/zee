@@ -110,14 +110,14 @@ Here is the current state of the files most likely to need an edit
    "distro X without nftables now falls back to the compat path").
 
 After I apply your patch and `pytest tests/ -q` returns green, I'll
-post the diff to https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+post the diff to https://github.com/KAMANOI/zee/discussions/categories/q-a
 so others hitting this same shift can copy it.
 ```
 
 ## After it works
 
 Open a Discussion at
-<https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a>
+<https://github.com/KAMANOI/zee/discussions/categories/q-a>
 with:
 
 1. Your distro and version (`cat /etc/os-release`)

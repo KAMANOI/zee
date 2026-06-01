@@ -8,7 +8,7 @@ labels: bug
 > 📣 **Before you file:** if Zee stopped working in *your environment*
 > (after an OS update, in a non-en-US locale, on an untested Python,
 > on a distro the reference impl doesn't cover), please open a
-> **Discussion** in [Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a)
+> **Discussion** in [Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/q-a)
 > instead. The maintainer does not promise to chase OS-shift fallout
 > upstream (see [CONTRIBUTING.md](../../CONTRIBUTING.md) — Zee is a
 > seeded OSS). Discussions stay searchable and the next person hits
@@ -43,6 +43,6 @@ fresh checkout.
 
 ## Have you searched Discussions?
 
-- [ ] I searched [Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a)
+- [ ] I searched [Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/q-a)
       and this is **not** an environment-specific issue someone else
       has already worked around.

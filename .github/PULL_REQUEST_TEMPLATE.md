@@ -6,7 +6,7 @@ front because Zee is run as a "seeded OSS" (see CONTRIBUTING.md):
     git rebase` is too much friction, just keep your fork.
   * If your change is "this fix made Zee work in my environment",
     the highest-leverage place to post it is actually a Discussion
-    under https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+    under https://github.com/KAMANOI/zee/discussions/categories/q-a
     (searchable by the next person hitting your OS / locale).
   * If you do want it upstream, fill this template and the CI
     matrix will validate it across Linux / macOS / Windows.

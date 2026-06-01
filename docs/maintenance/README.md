@@ -52,7 +52,7 @@ After you apply the patch:
 2. Run the relevant `zee` smoke commands (`zee --version`,
    `zee capability`, `zee init-restore-token`) to confirm the CLI is
    still intact.
-3. **Post your fix to [Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a)**
+3. **Post your fix to [Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/q-a)**
    so the next person to hit this is unblocked fast. Include the OS
    version, the symptom, and the redacted diff (or a link to your
    fork). For *what to share vs. what to keep private*, see

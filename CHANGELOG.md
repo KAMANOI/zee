@@ -60,7 +60,7 @@ single operator's drift never becomes the project's drift.
   private. Source code and maintenance write-ups are shared freely.
 - **CLI hint on ZeeError** — when `zee` exits with an error the
   next line nudges the operator toward
-  https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+  https://github.com/KAMANOI/zee/discussions/categories/q-a
   so they can search for / share their fix.
 
 ### Operator action needed (once)

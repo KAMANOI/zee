@@ -1,14 +1,14 @@
 blank_issues_enabled: false
 contact_links:
   - name: 🔧 Maintenance Q&A (環境別の動かない問題はここに)
-    url: https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+    url: https://github.com/KAMANOI/zee/discussions/categories/q-a
     about: |
       OS の更新で動かなくなった / 自分の環境で動かない場合は Discussions が一番速いです。
       `docs/maintenance/` の指示書テンプレを Claude / Cursor / Copilot に渡せば修正案が出ます。
       ⚠️ 投稿前に：SECURITY.md → Shared vs. private logs で「貼ってよい/ダメ」を確認してください。
       Open a Discussion if Zee broke after an OS update — see docs/maintenance/.
   - name: 🌱 Show your fork (使い方の共有)
-    url: https://github.com/KAMANOI/zee/discussions/categories/show-your-fork
+    url: https://github.com/KAMANOI/zee/discussions/categories/show-and-tell
     about: |
       自分の業種でこう使っている、こう改造した、を共有する場所。
       Share how you use Zee — by industry, by environment, by fork.

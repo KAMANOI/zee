@@ -120,14 +120,14 @@ Here is the current state of the files most likely to need an edit:
    workaround").
 
 After I apply your patch and `pytest tests/ -q` returns green, I'll
-post the diff to https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+post the diff to https://github.com/KAMANOI/zee/discussions/categories/q-a
 so others on the same Windows version / locale can copy it.
 ```
 
 ## After it works
 
 Open a Discussion at
-<https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a>
+<https://github.com/KAMANOI/zee/discussions/categories/q-a>
 with:
 
 1. Windows version (`winver`)
