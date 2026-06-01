@@ -221,7 +221,7 @@ Instead, three places to share what you learn:
 | Where | What for |
 |---|---|
 | 🔧 [Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/q-a) | "Mac 26.x broke launchd registration, I fixed it like this …" / "Japanese-locale Windows: my patch." |
-| 🌱 [Discussions → Show your fork](https://github.com/KAMANOI/zee/discussions/categories/show-and-tell) | "Here is how our beauty salon / small EC / law office runs Zee." |
+| 🌱 [Discussions → Show your fork](https://github.com/KAMANOI/zee/discussions/categories/show-and-tell) | "Here is how our beauty salon / small EC / law office runs Zee."<br />**First write-up**: [a 5-minute dry-run on macOS (the maintainer's own session)](https://github.com/KAMANOI/zee/discussions/3) |
 | 📚 [Wiki](https://github.com/KAMANOI/zee/wiki) | Durable collective knowledge: per-OS maintenance recipes, confirmed environments, industry-specific deployment notes. Anyone can edit. |
 
 **When Zee stops working in your environment**, open [`docs/maintenance/`](./docs/maintenance/). The folder contains prompts you can paste into Claude / Cursor / Copilot to generate a patch for your fork. Then post your write-up to Discussions and the next person who hits the same wall is unblocked much faster.
