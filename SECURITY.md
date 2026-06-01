@@ -62,6 +62,35 @@ subject of legal action by the maintainer. Please:
 - Do not use vulnerabilities you discover to access data beyond what is
   necessary to demonstrate the issue.
 
+<a id="shared-vs-private-logs-v05"></a>
+## Shared vs. private logs (v0.5+)
+
+Zee runs as a **seeded OSS** (see [CONTRIBUTING.md](./CONTRIBUTING.md))
+and explicitly encourages users to share maintenance knowledge in
+GitHub Discussions and the Wiki. To avoid confusion about what is
+safe to share:
+
+| Artefact | Where | Share? |
+|---|---|---|
+| Attack detection log (`events.jsonl`, `metrics.jsonl`) | `~/.local/state/zee/` (0600) | **Do not share.** v0.3 already strips `decoy_path`; the `decoy_ref` (`asset_id#index`) it keeps does not leak filesystem layout, but the raw records can still reveal attacker behaviour against your specific assets |
+| Canary registry (`canary_tokens.jsonl`) | `~/.local/state/zee/` (0600) | **Do not share.** Carries token IDs against your operator-controlled URL |
+| Cut state (`cut_state.jsonl`) | `~/.local/state/zee/` (0600) | **Do not share.** Lists the interface / service / rule names Zee disabled |
+| Restore token (`~/.zee/restore_token`) | (0600) | **Do not share.** It's a secret |
+| **Asset profile (`assets.toml`)** | operator's working dir | **Do not share as-is.** Decoy paths (filesystem locations), interface names, and `cut_method` are operator-internal. If you must share a sample, redact `decoy_paths` and `id` to neutral names first |
+| **`ZEE_WEBHOOK_URL` (env var)** | shell profile / launcher | **Do not share.** It is your webhook endpoint and often carries a bearer-style query string |
+| **`ZEE_CANARY_BASE_URL` (env var)** | shell profile / launcher | **Do not share.** It identifies the operator's external receiver and the URL shape an attacker would dereference |
+| Reference implementation source code | `src/zee/`, `tests/`, `docs/` | **Share freely** — MIT-licensed and the whole point of the project |
+| Maintenance write-ups | GitHub Discussions, Wiki | **Share freely, please** — OS version, locale, redacted error message, redacted diff, "what fixed it" |
+| Industry deployment notes | GitHub Discussions / Wiki | **Share freely** — anonymised business type, decoy directory shape (e.g. `~/Documents/zee-decoys/<files>`), webhook receiver choice (Canarytokens.org / self-hosted / Lambda) |
+
+**Before posting to Discussions or pasting into an AI session**, run
+your text through the redaction checklist in
+[docs/maintenance/README.md](./docs/maintenance/README.md#-before-you-paste-anything-anywhere--read-this).
+
+Zee itself never sends your event log anywhere. Sharing in
+Discussions / Wiki is an explicit, manual choice you make, on the
+parts of the experience that help the next operator.
+
 ## Honesty boundaries (current release)
 
 These are not "known bugs" — the items in the Known-limitations

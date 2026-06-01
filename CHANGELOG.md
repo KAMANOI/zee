@@ -5,6 +5,91 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.5.0] — 2026-06-01
+
+**Zee becomes a collective.** This release does not add any
+detection or containment behaviour — it formalises the operating
+model the project will use from here onward: a **seeded OSS** where
+the maintainer publishes a reference implementation, and the people
+who actually use Zee keep their forks alive in their environments.
+
+The motto is **"defense by everyone, for everyone — みんなで防災"**.
+
+### Why this release
+
+Through v0.1–v0.4 the maintainer chased every OS shift personally.
+That model does not scale (it's the classic OSS maintainer-burnout
+trap) and it does not match Zee's own "this is a floor, not a
+ceiling" stance. v0.5 makes the seeded-OSS model explicit so a
+single operator's drift never becomes the project's drift.
+
+### Added
+
+- **`CONTRIBUTING.md` rewrite** introducing the "seeded OSS / 各自
+  メンテ" model. Explains why PRs are welcome but not required, why
+  the maintainer does not promise to chase OS updates forever, and
+  what `docs/maintenance/` is for.
+- **`docs/maintenance/` directory** with prompt templates for the
+  common failure modes:
+  - `mac_launchd_update.md` — Apple ships an `launchd` /
+    `networksetup` / `pfctl` / `kqueue` change
+  - `linux_systemd_update.md` — `nmcli` / `nft` / `iptables` /
+    `inotify` shifts or distro switch
+  - `windows_service_update.md` — `Get-NetAdapter` / `netsh` /
+    locale / Service registration shifts
+  - `python_version_bump.md` — new Python release deprecates
+    something Zee depends on
+  Each template hands the AI tool (Claude / Cursor / Copilot /
+  Codex) enough context to produce a working patch as a diff. The
+  recommended flow ends with "post your fix to Discussions".
+- **GitHub issue / PR templates** (`.github/ISSUE_TEMPLATE/` and
+  `.github/PULL_REQUEST_TEMPLATE.md`) that route environment-specific
+  problems toward GitHub Discussions instead of the Issue tracker,
+  and explicitly position upstream merge as one outcome among
+  several (the others being "post your write-up to Discussions",
+  "edit the Wiki", "just keep your fork").
+- **README ja/en "みんなで防災" section** at the top of the user-
+  facing prose.
+- **LP (`docs/index.html`) collective block** between Limitations and
+  Get-it, with four cards (Maintenance Q&A / Show your fork / Wiki /
+  docs/maintenance).
+- **`SECURITY.md` "Shared vs. private logs" table** — clarifies
+  exactly which Zee artefacts are safe to share in Discussions /
+  Wiki and which are private to the operator. `events.jsonl`,
+  `canary_tokens.jsonl`, `cut_state.jsonl`, `restore_token` stay
+  private. Source code and maintenance write-ups are shared freely.
+- **CLI hint on ZeeError** — when `zee` exits with an error the
+  next line nudges the operator toward
+  https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a
+  so they can search for / share their fix.
+
+### Operator action needed (once)
+
+The maintainer needs to enable GitHub Discussions and the Wiki on
+the repository for the URLs above to resolve. Until that switch is
+flipped, the links resolve to a "this is disabled" page; no code
+breakage, just a flat experience for arriving readers. This is a
+two-click toggle in the repo Settings.
+
+### Changed
+
+- **CLI stderr on `ZeeError`** — `zee` now appends a two-line hint
+  pointing at `Discussions / Maintenance Q&A` after most error
+  prints. The exit code and the primary error message are unchanged,
+  but `stderr` carries the extra hint. Plain user-input errors
+  (`Z102` unknown asset, `Z602`/`Z603`/`Z604` restore-token problems)
+  suppress the hint so the operator is not pointed at a community
+  board for a typo.
+
+### Not changed
+
+- No detection / containment / restore behaviour changed. No
+  on-disk file layouts (`events.jsonl`, `cut_state.jsonl`,
+  `canary_tokens.jsonl`, `restore_token`) changed. v0.4.1 state is
+  forward-compatible.
+- All 78 unit tests still pass on Linux / macOS / Windows × Python
+  3.11 / 3.12 / 3.13 in the CI matrix.
+
 ## [0.4.1] — 2026-05-31
 
 The v0.4.0 CI matrix surfaced two Windows-specific issues that were

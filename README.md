@@ -211,6 +211,28 @@ Zee は誠実に範囲を区切ります。
 
 ---
 
+## みんなで防災 — Defense by everyone, for everyone
+
+Zee は **seed 型 OSS** として運営されます。メンテナはリファレンス実装と設計を公開し、実際にあなたの環境で動かす・OS の更新に追従させる・自分の業種に合わせて改造するのは **各自** がやってください。一人の管理者が全 OS の仕様変更に永続的に追従するモデル（OSS のメンテナ疲れ問題の典型）から最初から外れます。
+
+代わりに、**気付きと修正を共有する場** が用意されています：
+
+| 場所 | 用途 |
+|---|---|
+| 🔧 [Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a) | 「Mac 26.x で動かなくなった → こう直した」「日本語 Windows でこの修正が効いた」 |
+| 🌱 [Discussions → Show your fork](https://github.com/KAMANOI/zee/discussions/categories/show-your-fork) | 「うちのサロン / 小規模 EC / 士業はこう使っている」 |
+| 📚 [Wiki](https://github.com/KAMANOI/zee/wiki) | 安定したナレッジ（OS 別メンテ手順・動作確認済み環境・業種別ガイド） |
+
+**自分の環境で動かなくなったら** [`docs/maintenance/`](./docs/maintenance/) の指示書テンプレを Claude / Cursor / Copilot に渡して修正案を生成し、自分のフォークに適用してください。直し方を Discussions に書き残してくれれば、次に同じ問題に当たった人の作業コストが目安として大きく下がります。
+
+これが「みんなで防災」です。Zee 本体のソースに PR を送らなくても、書き残すだけで貢献になります。業種の例：**美容室 / 小規模 EC / 士業 / 町工場** など、どんな現場の使い方でも歓迎します。
+
+> ⚠️ **Discussions / Wiki に投稿する前に：何を貼って何を伏せるか** は [SECURITY.md → Shared vs. private logs](./SECURITY.md#shared-vs-private-logs-v05) を確認してください。`events.jsonl`・`assets.toml`・`ZEE_WEBHOOK_URL`・`ZEE_CANARY_BASE_URL` などは原則として公開しないことになっています。
+
+> 詳しい運営モデルと参加の流れは [CONTRIBUTING.md](./CONTRIBUTING.md) を参照してください。
+
+---
+
 ## v0.2 から v0.3 へのアップグレード
 
 v0.3 で `zee restore` がトークン認証必須になりました。アップグレード後の最初の `zee restore` を実行する前に **一度だけ** 次を実行してください：

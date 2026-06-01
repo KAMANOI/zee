@@ -212,6 +212,28 @@ This is a floor, not a ceiling. We state the failure conditions before claiming 
 
 ---
 
+## Defense by everyone, for everyone — みんなで防災
+
+Zee is a **seeded OSS** project. The maintainer publishes a reference implementation and the designs. Actually running it on your machine, chasing OS updates, and adapting it to your industry is **yours**. A single maintainer chasing every OS shift forever (the classic OSS-burnout failure mode) is explicitly not the operating model.
+
+Instead, three places to share what you learn:
+
+| Where | What for |
+|---|---|
+| 🔧 [Discussions → Maintenance Q&A](https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a) | "Mac 26.x broke launchd registration, I fixed it like this …" / "Japanese-locale Windows: my patch." |
+| 🌱 [Discussions → Show your fork](https://github.com/KAMANOI/zee/discussions/categories/show-your-fork) | "Here is how our beauty salon / small EC / law office runs Zee." |
+| 📚 [Wiki](https://github.com/KAMANOI/zee/wiki) | Durable collective knowledge: per-OS maintenance recipes, confirmed environments, industry-specific deployment notes. Anyone can edit. |
+
+**When Zee stops working in your environment**, open [`docs/maintenance/`](./docs/maintenance/). The folder contains prompts you can paste into Claude / Cursor / Copilot to generate a patch for your fork. Then post your write-up to Discussions and the next person who hits the same wall is unblocked much faster.
+
+That is "defense by everyone, for everyone." You contribute to Zee by writing down what you fixed, even if it never lands upstream. The industries already in scope here: **beauty salons / small EC / law / accountancy / small factory shops** — but write-ups from any environment are welcome.
+
+> ⚠️ **Before you post to Discussions or paste source into an AI session**: see [SECURITY.md → Shared vs. private logs](./SECURITY.md#shared-vs-private-logs-v05) for what is safe to share. Keep `events.jsonl`, `assets.toml`, `ZEE_WEBHOOK_URL`, `ZEE_CANARY_BASE_URL`, and the `restore_token` out of public posts.
+
+> See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full operating model and how to participate.
+
+---
+
 ## Upgrading from v0.2 to v0.3
 
 `zee restore` now requires a restore_token. Run **once** before your next `zee restore`:

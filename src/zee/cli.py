@@ -338,6 +338,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_DISCUSSIONS_URL = (
+    "https://github.com/KAMANOI/zee/discussions/categories/maintenance-q-a"
+)
+
+# Error codes that are clearly user-input mistakes, not OS-shift /
+# environment-quirk failures. We suppress the seeded-OSS Discussions
+# hint on these so the operator isn't pointed at a community board
+# for "you typed the wrong token" or "you ran restore on an asset
+# that's not in assets.toml". The hint stays on every other code so
+# any genuinely environment-shaped error gets pointed at the right
+# place by default.
+_USER_INPUT_CODES = frozenset({
+    "Z102",  # unknown asset_id
+    "Z602",  # restore token required
+    "Z603",  # restore token not initialised
+    "Z604",  # restore token invalid
+})
+
+
 def main(argv: list[str] | None = None) -> int:
     if sys.version_info < (3, 11):
         print(
@@ -355,6 +374,16 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except ZeeError as e:
         print(f"error: {e}", file=sys.stderr)
+        if e.code not in _USER_INPUT_CODES:
+            # Seeded-OSS hint (v0.5): nudge the operator toward the
+            # community knowledge base for genuinely environment-shaped
+            # failures, while staying out of the way for plain
+            # user-input mistakes (above list).
+            print(
+                f"  ↳ hit by an OS update or environment-specific quirk? "
+                f"search / share at:\n    {_DISCUSSIONS_URL}",
+                file=sys.stderr,
+            )
         return 1
 
 
