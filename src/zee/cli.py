@@ -249,6 +249,13 @@ def _cmd_cut(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_status(args: argparse.Namespace) -> int:
+    from .telemetry.status import compute, render
+    report = compute()
+    print(render(report))
+    return 0
+
+
 def _cmd_capability(args: argparse.Namespace) -> int:
     canary_url = os.environ.get("ZEE_CANARY_BASE_URL", "").strip()
     canary_configured = bool(canary_url)
@@ -329,6 +336,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="cut method override; defaults to the asset profile's cut_method",
     )
     p_cut.set_defaults(func=_cmd_cut)
+
+    p_status = sub.add_parser(
+        "status",
+        help="show recent trap activity, cut state, and burst detection summary",
+    )
+    p_status.set_defaults(func=_cmd_status)
 
     p_cap = sub.add_parser(
         "capability", help="print the detection-capability matrix for this OS"

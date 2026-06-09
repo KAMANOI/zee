@@ -5,6 +5,34 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.6.0] — 2026-06-09
+
+### Added
+
+- **`zee status` command** — read-only summary of trap activity
+  and containment state. Reads `events.jsonl` and `cut_state.jsonl`
+  directly; no `assets.toml` required.
+
+  Output:
+  - Event counts over 24 h / 7 d / 30 d, broken down by
+    `read-class` and `change-class`
+  - Per-asset 30 d counts with current cut state (clear /
+    ⚠ ACTIVE — method / since)
+  - Assets that have an active `zee cut` but no events in the log
+    are shown in the per-asset section (e.g. a manual pre-emptive cut)
+  - **Burst detection**: flags when ≥ 2 `change-class` events occur
+    within a 300 s sliding window in the last 30 days
+
+  Usage: `zee status`
+
+### Internal
+
+- 17 new tests for `status.py` (95 total)
+- `StatusReport.read_error` surfaces an `OSError` on `events.jsonl`
+  as an in-band warning rather than silent zero counts
+
+---
+
 ## [0.5.0] — 2026-06-01
 
 **Zee becomes a collective.** This release does not add any
