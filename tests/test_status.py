@@ -276,6 +276,84 @@ def test_cut_without_events_still_shown(tmp_path):
     assert orphan.cut_record.method == "egress"
 
 
+# ─── C-2: skipped lines ────────────────────────────────────────────────────────
+
+def test_malformed_json_lines_counted(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    with events_path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(_trap("host-a", "change", _ts(100, NOW))) + "\n")
+        f.write("NOT JSON\n")
+        f.write("{broken\n")
+        f.write(json.dumps(_trap("host-b", "read", _ts(200, NOW))) + "\n")
+    report = compute(log_dir=tmp_path)
+    assert report.skipped_lines == 2
+    assert report.total["30d"] == 2  # valid records still counted
+
+
+def test_malformed_lines_shown_in_render(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    with events_path.open("w", encoding="utf-8") as f:
+        f.write("garbage\n")
+        f.write(json.dumps(_trap("host-a", "change", _ts(100, NOW))) + "\n")
+    report = compute(log_dir=tmp_path)
+    output = render(report)
+    assert "malformed" in output
+    assert "1" in output
+
+
+# ─── C-3: burst boundary conditions ────────────────────────────────────────────
+
+def test_burst_exactly_at_window_boundary(tmp_path):
+    """Two events exactly 300s apart: ≤ BURST_WINDOW_SEC, must be detected."""
+    events_path = tmp_path / "events.jsonl"
+    _write_events(events_path, [
+        _trap("host-a", "change", _ts(300, NOW)),  # exactly 300s ago
+        _trap("host-a", "change", _ts(1, NOW)),    # 1s ago (diff = 299s ≤ BURST_WINDOW_SEC)
+    ])
+    report = compute(log_dir=tmp_path)
+    assert len(report.bursts) == 1
+
+
+def test_burst_just_outside_window_no_burst(tmp_path):
+    """Two events 301s apart: > BURST_WINDOW_SEC, must NOT be detected."""
+    events_path = tmp_path / "events.jsonl"
+    _write_events(events_path, [
+        _trap("host-a", "change", _ts(301, NOW)),
+        _trap("host-a", "change", _ts(0, NOW)),    # diff = 301s > 300s
+    ])
+    report = compute(log_dir=tmp_path)
+    assert report.bursts == []
+
+
+def test_mixed_timezone_events_handled(tmp_path):
+    """Events with timezone info and without (naive) must be compared correctly."""
+    events_path = tmp_path / "events.jsonl"
+    # Write one event with explicit +00:00 offset and one naive (no timezone).
+    naive_ts = (NOW - timedelta(seconds=150)).strftime("%Y-%m-%dT%H:%M:%S")
+    aware_ts = (NOW - timedelta(seconds=50)).isoformat()
+    with events_path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(_trap("host-a", "change", naive_ts)) + "\n")
+        f.write(json.dumps(_trap("host-a", "change", aware_ts)) + "\n")
+    report = compute(log_dir=tmp_path)
+    # Both are within 300s window → burst
+    assert len(report.bursts) == 1
+
+
+def test_event_just_inside_30d_boundary_included(tmp_path):
+    """An event 10 s inside the 30d window must be included (boundary-inclusive)."""
+    # Add a 10s margin so compute()'s fresh datetime.now() doesn't push the
+    # cutoff past this timestamp.
+    ts_inside = NOW - timedelta(days=30) + timedelta(seconds=10)
+    events_path = tmp_path / "events.jsonl"
+    _write_events(events_path, [
+        _trap("host-a", "change", ts_inside.isoformat()),
+    ])
+    report = compute(log_dir=tmp_path)
+    assert report.total["30d"] == 1
+
+
+# ─── existing render tests ─────────────────────────────────────────────────────
+
 def test_render_no_burst_message(tmp_path):
     events_path = tmp_path / "events.jsonl"
     _write_events(events_path, [

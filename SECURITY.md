@@ -127,3 +127,21 @@ honestly-published boundaries of what Zee is and is not:
   `zee init-restore-token`), and PowerShell / netsh enumeration
   parsers. Continuous-run verification on Japanese / German / French
   Windows hosts is still pending — the CI runner is en-US.
+- **`cut_egress` "local" definition covers RFC 1918 and loopback only.**
+  The egress-cut backends (`nftables`, `iptables`, `pfctl`, `netsh`)
+  pass traffic to the following destinations and block everything else:
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and the loopback
+  interface (`lo` / `lo0` on Linux/macOS; `127.0.0.0/8` on Windows).
+  Not covered: IPv4 link-local (`169.254.0.0/16`), IPv6 ULA
+  (`fc00::/7`), IPv6 link-local (`fe80::/10`), and IPv6 loopback
+  (`::1`). In typical SME environments these ranges are uncommon, but
+  operators who rely on APIPA addresses or IPv6-only LAN segments
+  should review the egress rules before enabling `cut_egress`.
+- **Event logs grow without bound by default; rotate manually for
+  long-running deployments.** `events.jsonl` and `metrics.jsonl`
+  accumulate every trap event and latency record indefinitely. Zee
+  auto-rotates each file on next write when it exceeds 10 MB (renaming
+  it to `<file>.YYYYMMDD_HHMMSS` and starting a fresh log); rotated files
+  are kept permanently — never auto-deleted — because they are
+  evidence. For deployments that expect high event volume, also plan
+  a manual archiving schedule.

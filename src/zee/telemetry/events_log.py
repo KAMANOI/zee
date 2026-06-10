@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+_LOG_ROTATE_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB
+
 from ..events import TrapEvent
 
 
@@ -137,7 +139,25 @@ class EventLog:
         self._append(self.metrics_path, record)
 
     @staticmethod
+    def _rotate_if_needed(path: Path, max_bytes: int = _LOG_ROTATE_MAX_BYTES) -> None:
+        """Rename path → path.YYYYMMDD_HHMMSS when it exceeds max_bytes.
+
+        Old files are kept indefinitely — logs are evidence and must not be
+        deleted automatically. Rotation failure is silently swallowed so it
+        never blocks event recording.
+        """
+        try:
+            if path.exists() and path.stat().st_size >= max_bytes:
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                rotated = path.parent / f"{path.name}.{ts}"
+                path.rename(rotated)
+        except OSError:
+            pass
+
+    @staticmethod
     def _append(path: Path, record: dict[str, Any]) -> None:
+        # Rotate before appending if the file has grown past the size threshold.
+        EventLog._rotate_if_needed(path)
         # Create owner-only (0600) on first write. open(mode="a") respects
         # the existing file's mode if it already exists, and falls back to
         # umask otherwise — we explicitly tighten here to ensure 0600.

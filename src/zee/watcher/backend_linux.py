@@ -59,6 +59,11 @@ class LinuxInotifyWatcher:
         self._wd_to_path: dict[int, str] = {}
         # path -> "asset_id#index" for the v0.3 decoy_ref payload.
         self._wd_to_ref: dict[int, str] = {}
+        # path -> ref, kept for re-registration after delete/move.
+        self._path_to_ref: dict[str, str] = {}
+        # paths queued for re-registration.
+        self._pending_rewatch: set[str] = set()
+        self._pending_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -117,8 +122,10 @@ class LinuxInotifyWatcher:
                     Z301_WATCHER_BACKEND_UNAVAILABLE,
                     f"inotify_add_watch({p}) failed: {os.strerror(err)}",
                 )
+            ref = f"{asset_id}#{index}"
             self._wd_to_path[wd] = str(p)
-            self._wd_to_ref[wd] = f"{asset_id}#{index}"
+            self._wd_to_ref[wd] = ref
+            self._path_to_ref[str(p)] = ref
 
         self._thread = threading.Thread(
             target=self._loop,
@@ -128,11 +135,38 @@ class LinuxInotifyWatcher:
         )
         self._thread.start()
 
+    def _try_reregister(self, path: str) -> bool:
+        """Re-add an inotify watch for a decoy that was deleted or moved.
+
+        Returns True when inotify_add_watch succeeds.  Called from _loop only.
+        """
+        try:
+            p = Path(path)
+            if not p.exists():
+                return False
+            wd = self._libc.inotify_add_watch(self._fd, str(p).encode(), DECOY_MASK)
+            if wd < 0:
+                return False
+            ref = self._path_to_ref.get(path, "?#?")
+            self._wd_to_path[wd] = path
+            self._wd_to_ref[wd] = ref
+            return True
+        except OSError:
+            return False
+
     def _loop(self, asset_id: str, on_event: OnEvent) -> None:
         import select
 
         buf_size = 8192
         while not self._stop_event.is_set():
+            # Retry re-registration for any decoys that disappeared.
+            with self._pending_lock:
+                pending = list(self._pending_rewatch)
+            for path in pending:
+                if self._try_reregister(path):
+                    with self._pending_lock:
+                        self._pending_rewatch.discard(path)
+
             try:
                 rlist, _, _ = select.select([self._fd], [], [], 0.5)
             except (OSError, ValueError):
@@ -156,6 +190,18 @@ class LinuxInotifyWatcher:
                 # so a future switch to directory-level watches still parses
                 # the variable-length trailing name correctly.
                 offset += _EVENT_HEADER.size + name_len
+
+                # IN_IGNORED fires after the kernel removes a stale wd
+                # (following IN_DELETE_SELF or IN_MOVE_SELF).  The wd is now
+                # invalid; queue the path for re-registration.
+                if mask & IN_IGNORED:
+                    path = self._wd_to_path.pop(wd, None)
+                    self._wd_to_ref.pop(wd, None)
+                    if path:
+                        with self._pending_lock:
+                            self._pending_rewatch.add(path)
+                    continue
+
                 path = self._wd_to_path.get(wd)
                 if path is None:
                     continue
@@ -190,6 +236,8 @@ class LinuxInotifyWatcher:
                 pass
         self._wd_to_path.clear()
         self._wd_to_ref.clear()
+        with self._pending_lock:
+            self._pending_rewatch.clear()
         if self._fd >= 0:
             try:
                 os.close(self._fd)

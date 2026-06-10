@@ -58,6 +58,7 @@ class StatusReport:
     bursts: list[BurstEvent]
     log_exists: bool
     read_error: Optional[str] = None
+    skipped_lines: int = 0  # malformed JSON lines silently skipped
 
 
 def compute(log_dir: Optional[Path] = None) -> StatusReport:
@@ -91,6 +92,7 @@ def compute(log_dir: Optional[Path] = None) -> StatusReport:
     raw: list[tuple[datetime, str, str]] = []  # (ts, asset_id, op_class)
 
     read_error: str | None = None
+    skipped_lines: int = 0
     try:
         content = events_path.read_text(encoding="utf-8")
     except OSError as e:
@@ -104,6 +106,7 @@ def compute(log_dir: Optional[Path] = None) -> StatusReport:
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
+            skipped_lines += 1
             continue
         if rec.get("type") != "trap_event":
             continue
@@ -205,6 +208,7 @@ def compute(log_dir: Optional[Path] = None) -> StatusReport:
         bursts=bursts,
         log_exists=True,
         read_error=read_error,
+        skipped_lines=skipped_lines,
     )
 
 
@@ -223,6 +227,11 @@ def render(report: StatusReport) -> str:
     if report.read_error:
         lines.append(f"⚠  events.jsonl could not be read: {report.read_error}")
         lines.append("   (counts below reflect partial or no data)")
+        lines.append("")
+    if report.skipped_lines:
+        lines.append(
+            f"⚠  {report.skipped_lines} malformed line(s) skipped in events.jsonl"
+        )
         lines.append("")
 
     any_cut = any(s.cut_record is not None for s in report.per_asset)

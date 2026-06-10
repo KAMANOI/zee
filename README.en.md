@@ -41,7 +41,7 @@ The figures below were all published by Anthropic, the company that builds the A
 - A flaw in OpenBSD that had survived **27 years** of expert audits and automated testing was discovered in **about 1,000 automated attempts for under USD 20,000**.
 - A broad sweep surfaced **23,000+ candidate vulnerabilities** (≈1,752 of which were independently validated), including a critical flaw in a cryptographic library affecting roughly **5 billion** devices (CVE-2026-5194).
 
-Sources: Anthropic Red Team ([red.anthropic.com](https://red.anthropic.com/)) / [Project Glasswing: An initial update](https://www.anthropic.com/research/glasswing-initial-update) (source for 23,019 total / 1,752 independently validated figures).
+Sources: [Partnering with Mozilla to improve Firefox's security](https://red.anthropic.com/2026/firefox/) (source for the 181-times figure) / [Claude Mythos Preview](https://red.anthropic.com/2026/mythos-preview/) (source for the 27-year OpenBSD / ~1,000-run / under USD 20k figures) / [Project Glasswing: An initial update](https://www.anthropic.com/research/glasswing-initial-update) (source for 23,019 total / 1,752 independently validated figures).
 
 These describe **offensive capability**. Zee is not a tool to stop that capability.
 What Zee buys time against is **human-paced or semi-automated post-intrusion activity** — the phase after a breach succeeds, during which an attacker (or attacker AI) performs reconnaissance, lateral movement, and exfiltration. Against a fully autonomous adversary that completes the entire chain in seconds, Zee's useful range is limited (see Limitations).

@@ -50,6 +50,11 @@ class MacOSKqueueWatcher:
         self._fds: dict[int, str] = {}
         # fd -> "asset_id#index" for the v0.3 decoy_ref payload.
         self._fd_to_ref: dict[int, str] = {}
+        # path -> ref, kept for re-registration after delete/rename.
+        self._path_to_ref: dict[str, str] = {}
+        # paths queued for re-registration (the decoy was deleted or renamed).
+        self._pending_rewatch: set[str] = set()
+        self._pending_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._canary_configured = canary_configured
@@ -94,8 +99,10 @@ class MacOSKqueueWatcher:
                 if not p.exists():
                     raise ZeeError(Z302_DECOY_PATH_NOT_FOUND, str(p))
                 fd = os.open(str(p), os.O_RDONLY)
+                ref = f"{asset_id}#{index}"
                 self._fds[fd] = str(p)
-                self._fd_to_ref[fd] = f"{asset_id}#{index}"
+                self._fd_to_ref[fd] = ref
+                self._path_to_ref[str(p)] = ref
 
             kevents = [
                 select.kevent(
@@ -134,6 +141,8 @@ class MacOSKqueueWatcher:
                 pass
         self._fds.clear()
         self._fd_to_ref.clear()
+        with self._pending_lock:
+            self._pending_rewatch.clear()
         if self._kq is not None:
             try:
                 self._kq.close()
@@ -141,8 +150,50 @@ class MacOSKqueueWatcher:
                 pass
             self._kq = None
 
+    def _try_reregister(self, path: str) -> bool:
+        """Open and re-register a decoy that was deleted or renamed.
+
+        Returns True when registration succeeds so the caller can remove
+        the path from the pending set.  Called from _loop only.
+        """
+        try:
+            if self._kq is None:
+                return False
+            p = Path(path)
+            if not p.exists():
+                return False
+            fd = os.open(str(p), os.O_RDONLY)
+            ref = self._path_to_ref.get(path, f"?#?")
+            self._fds[fd] = path
+            self._fd_to_ref[fd] = ref
+            kevent = select.kevent(
+                fd,
+                filter=select.KQ_FILTER_VNODE,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ENABLE | select.KQ_EV_CLEAR,
+                fflags=(
+                    select.KQ_NOTE_WRITE
+                    | select.KQ_NOTE_DELETE
+                    | select.KQ_NOTE_ATTRIB
+                    | select.KQ_NOTE_EXTEND
+                    | select.KQ_NOTE_RENAME
+                ),
+            )
+            self._kq.control([kevent], 0, 0)
+            return True
+        except OSError:
+            return False
+
     def _loop(self, asset_id: str, on_event: OnEvent) -> None:
         while not self._stop_event.is_set():
+            # Retry re-registration for any decoys deleted/renamed since the
+            # last iteration.
+            with self._pending_lock:
+                pending = list(self._pending_rewatch)
+            for path in pending:
+                if self._try_reregister(path):
+                    with self._pending_lock:
+                        self._pending_rewatch.discard(path)
+
             try:
                 events = self._kq.control(None, 16, 0.5)
             except (OSError, ValueError):
@@ -166,6 +217,27 @@ class MacOSKqueueWatcher:
                     on_event(trap)
                 except Exception:
                     logger.exception("on_event callback raised")
+
+                # Queue for re-registration when the decoy is deleted or renamed.
+                if ev.fflags & (select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME):
+                    with self._pending_lock:
+                        self._pending_rewatch.add(path)
+                    # Deregister the stale vnode so kqueue stops sending events.
+                    try:
+                        cancel = select.kevent(
+                            ev.ident,
+                            filter=select.KQ_FILTER_VNODE,
+                            flags=select.KQ_EV_DELETE,
+                        )
+                        self._kq.control([cancel], 0, 0)
+                    except OSError:
+                        pass
+                    try:
+                        os.close(ev.ident)
+                    except OSError:
+                        pass
+                    self._fds.pop(ev.ident, None)
+                    self._fd_to_ref.pop(ev.ident, None)
 
     def stop(self) -> None:
         self._stop_event.set()

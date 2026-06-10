@@ -93,9 +93,13 @@ Strongly recommended order for the first run:
 
 1. Copy `examples/assets.example.toml` to `./assets.toml`.
 2. Edit `decoy_paths` to point at dummy paths under a Zee-only directory (e.g. `~/Documents/zee-decoys/aws-credentials.decoy`). Keep them OUT of real tool directories like `~/.aws/`.
-3. Leave `response_mode: notify` (no cut, no would-have-cut path).
-4. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
-5. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
+3. **(macOS / Windows — recommended) Configure a canary receiver.** Linux observes reads directly via inotify and does not need a canary. On macOS / Windows, without `ZEE_CANARY_BASE_URL` set, read-only attacker touches against a decoy are not observed at all. Quickest path using Canarytokens.org:
+   1. Open [https://canarytokens.org/](https://canarytokens.org/), choose "DNS / HTTP canary", and generate a token.
+   2. Set the generated URL as an environment variable: `export ZEE_CANARY_BASE_URL="https://canarytokens.org/..."`
+   3. Start `zee watch` with this variable set. The seeder will embed the canary URL into decoy content; when an attacker dereferences it, Canarytokens.org notifies you (out-of-band — never re-enters Zee's local responder).
+4. Leave `response_mode: notify` (no cut, no would-have-cut path).
+5. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
+6. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
 
 **Jumping straight to `auto` is not recommended.** Zee is a layer that loses trust the moment it ensnares your own work. Promoting only after observing zero false positives is the precondition for using Zee long-term.
 

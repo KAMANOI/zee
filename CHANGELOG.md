@@ -5,6 +5,79 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.6.0] — 2026-06-10
+
+### Fixed
+
+- **Watcher re-registration after decoy delete / rename** — macOS
+  (kqueue) and Linux (inotify) now re-register the new vnode / inotify
+  watch descriptor when a decoy is deleted or renamed and later
+  re-created (e.g. after running `zee seed` again). Previously the
+  watcher silently stopped detecting events on the restored file.
+  Windows (`ReadDirectoryChangesW`) watches the parent directory and
+  was not affected. Verified by a new integration test on macOS
+  (`test_delete_and_reseed_fires_event`).
+
+- **`zee status` now reports malformed JSON lines** — partial or
+  corrupt lines in `events.jsonl` (e.g. written during a concurrent
+  `zee watch`) are silently skipped as before, but the count of
+  skipped lines is now surfaced as an in-band warning in the status
+  output, consistent with the existing `read_error` design.
+
+### Changed
+
+- **Anthropic Red Team citation links in README ja/en** — replaced the
+  general `red.anthropic.com` top-page link with specific article URLs:
+  [Partnering with Mozilla to improve Firefox's security](https://red.anthropic.com/2026/firefox/)
+  and [Claude Mythos Preview](https://red.anthropic.com/2026/mythos-preview/).
+  The Glasswing link was already specific and is unchanged.
+
+- **STARTER_GUIDE ja/en** — canary receiver setup is now a numbered
+  step (step 3) in the dry-run walkthrough, with a Canarytokens.org
+  quickstart. Previously it appeared only at the end of the section,
+  making it easy to miss for macOS / Windows operators.
+
+### Added
+
+- **Automatic log rotation** — `events.jsonl` and `metrics.jsonl` are
+  renamed to `<file>.YYYYMMDD_HHMMSS` when they exceed 10 MB. Rotated
+  files are kept permanently (never auto-deleted; they are evidence).
+
+- **`examples/integration_smoke.py`** — opt-in local script that
+  reproduces the Discussion #3 walkthrough automatically: seed decoy,
+  detect modification, verify delete → re-seed → re-detect cycle.
+  Not part of CI; run manually with `python examples/integration_smoke.py`.
+
+- **Burst detection boundary tests** — three new test cases: exactly
+  300 s window boundary, mixed-timezone inputs, and event just inside
+  the 30 d window.
+
+### Fixed (post-review)
+
+- **macOS watcher: `_kq is None` guard in `_try_reregister`** — if
+  `stop()` races with the re-registration loop, `self._kq` can be
+  `None` at the point `_try_reregister` calls `kq.control()`. Added an
+  early-return guard to prevent `AttributeError`.
+
+- **STARTER_GUIDE ja/en: canary URL example domain corrected** — the
+  example `export ZEE_CANARY_BASE_URL="https://canarytokens.com/..."`
+  used `.com` while the service is at `.org`; now consistently
+  `canarytokens.org`.
+
+- **Test: `test_burst_exactly_at_window_boundary` stability** — changed
+  the "now" timestamp from `_ts(0, NOW)` to `_ts(1, NOW)` so
+  `compute()`'s fresh `datetime.now()` cannot exclude the event on slow
+  CI runners.
+
+### Documentation
+
+- **SECURITY.md** — added two new Honesty-boundaries entries:
+  (1) `cut_egress` "local" definition (RFC 1918 + loopback; IPv4
+  link-local and IPv6 ranges not covered); (2) log rotation behaviour
+  and evidence-preservation policy. Clarified that rotation is
+  triggered on next write ("auto-rotates on next write when it exceeds
+  10 MB") to avoid implying a background daemon.
+
 ## [0.6.0] — 2026-06-09
 
 ### Added
