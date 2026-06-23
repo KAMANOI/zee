@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from zee.cli import main
 from zee.gate.inspector import inspect_source, promote_if_low
 from zee.gate.model import Artifact, ArtifactKind, RiskLevel, Severity, Verdict
@@ -181,7 +183,10 @@ def test_symlink_escaping_is_high_and_not_promoted(tmp_path):
     s = tmp_path / "linky-skill"
     s.mkdir()
     (s / "SKILL.md").write_text("# ok\nclean\n")
-    (s / "creds").symlink_to(secret)
+    try:
+        (s / "creds").symlink_to(secret)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not supported on this platform (e.g. Windows)")
     v = inspect_source(s, quarantine_base=_q(tmp_path))
     assert any(f.code == "G701" for f in v.flags)
     assert v.risk_level is RiskLevel.HIGH
