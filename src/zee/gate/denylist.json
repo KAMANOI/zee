@@ -1,0 +1,6 @@
+{
+  "_comment": "Community denylist (no server, GitHub-distributed). hashes = sha256 of artifact tree; names = artifact names; domains = reserved for later phases. The self-test name is a sentinel used only by the test suite.",
+  "hashes": [],
+  "names": ["zee-gate-denylist-selftest"],
+  "domains": []
+}

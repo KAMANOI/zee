@@ -5,6 +5,43 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.7.0] — 2026-06-23
+
+### Added
+
+- **Optional MCP layer (`zee[mcp]`)** — a separate, opt-in stdio server
+  (`zee mcp`) that exposes Zee's signals over the Model Context Protocol
+  for an agent such as Claude Code. Read-only + propose-only: resources
+  (`zee://status`, `zee://events/recent`, `zee://containment/active`,
+  `zee://policy`) and `query_*` tools never mutate; `propose_*` tools
+  return a plan plus the command a human must run and never execute.
+  Safe by default (`enabled=false`, `expose_actions=false`,
+  `redact_paths=true`), never reaches the HMAC restore secret, and audits
+  every access with `source=mcp` (free-text args and paths are redacted in
+  the audit log too when `redact_paths=true`). Time filters compare real
+  instants, not raw strings, so mixed timezone offsets agree with
+  `zee status`. Core stays dependency-free; MCP is an optional extra
+  (`mcp>=1.0,<2`). 22 new tests (102 → 124).
+- **Entry gate (`zee gate`)** — pre-install inspection for AI artifacts
+  (Claude Code skill / MCP server / package). `zee gate add <source>`
+  fetches the artifact into a quarantine directory **without executing
+  it**, statically inspects it (dynamic-exec, `curl|bash`,
+  download-then-exec, encoded blobs, credential-path reads, magic-byte
+  mismatch, prompt-injection text, escaping symlinks, and a
+  GitHub-distributed denylist), assigns a LOW / MEDIUM / HIGH verdict
+  with evidence, and promotes to the real install dir **only on LOW**
+  (`--promote-to`). Exit code is the verdict (LOW=0, MEDIUM=1, HIGH=2)
+  for CI / pre-install hooks. Phase 0 (contracts) + Phase 1 (static MVP,
+  skill + MCP); the sandboxed behavioural run is a later phase. stdlib
+  only — no execution of untrusted code, no network, core stays
+  dependency-free. 16 new tests (124 → 140).
+
+### Fixed
+
+- **LP (`docs/index.html`) Red Team citation** — replaced the remaining
+  `red.anthropic.com` top-page link with the same per-article URLs already
+  used in README ja / en, so the public site no longer lags the READMEs.
+
 ## [0.6.0] — 2026-06-10
 
 ### Fixed

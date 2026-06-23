@@ -285,6 +285,66 @@ def _cmd_capability(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    """Run the optional MCP server (read-only + propose-only).
+
+    Needs the `mcp` extra (`pip install 'zee[mcp]'`). It exposes Zee's
+    signals over stdio so an agent can read status/events and *propose*
+    next steps — it never cuts, restores, or edits policy.
+    """
+    try:
+        from .mcp.server import serve
+        from .mcp.config import McpConfig
+    except ImportError:
+        print(
+            "the MCP layer needs the optional extra. Install it with:\n"
+            "    pip install 'zee[mcp]'",
+            file=sys.stderr,
+        )
+        return 2
+    cfg = McpConfig.load(args.config)
+    if not cfg.enabled and not args.force:
+        print(
+            "MCP is disabled (default). Enable it by adding to assets.toml:\n"
+            "    [mcp]\n    enabled = true\n"
+            "or pass --force to run anyway (still read-only + propose-only).",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        f"[zee mcp] starting stdio server  redact_paths={cfg.redact_paths} "
+        f"expose_actions={cfg.expose_actions} (propose-only)",
+        file=sys.stderr,
+    )
+    serve(config_path=str(args.config))
+    return 0
+
+
+def _cmd_gate_add(args: argparse.Namespace) -> int:
+    """Entry gate: fetch (no exec) -> inspect -> verdict -> optional promote.
+
+    Exit code is the verdict: LOW=0, MEDIUM=1, HIGH=2 (safeinspect
+    heritage), so the command composes in CI / pre-install hooks.
+    """
+    import json as _json
+
+    from .gate.inspector import inspect_source, promote_if_low
+
+    try:
+        verdict = inspect_source(args.source, kind=args.kind)
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(_json.dumps(verdict.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(verdict.to_text())
+    if args.promote_to:
+        ok, msg = promote_if_low(verdict, args.promote_to)
+        print(msg, file=sys.stderr)
+    return verdict.exit_code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="zee",
@@ -347,6 +407,46 @@ def build_parser() -> argparse.ArgumentParser:
         "capability", help="print the detection-capability matrix for this OS"
     )
     p_cap.set_defaults(func=_cmd_capability)
+
+    p_mcp = sub.add_parser(
+        "mcp",
+        help="run the MCP server (read-only + propose-only; needs zee[mcp])",
+    )
+    p_mcp.add_argument(
+        "--force",
+        action="store_true",
+        help="run even if [mcp] enabled is not set in assets.toml",
+    )
+    p_mcp.set_defaults(func=_cmd_mcp)
+
+    p_gate = sub.add_parser(
+        "gate",
+        help="inspect an AI artifact (skill / MCP / package) before install",
+    )
+    gate_sub = p_gate.add_subparsers(dest="gate_command", required=True)
+    p_gate_add = gate_sub.add_parser(
+        "add",
+        help="fetch into quarantine (no exec), statically inspect, and "
+        "optionally promote if LOW",
+    )
+    p_gate_add.add_argument(
+        "source", help="local path to a skill / MCP server / package"
+    )
+    p_gate_add.add_argument(
+        "--kind",
+        choices=("skill", "mcp", "package"),
+        default=None,
+        help="artifact kind (auto-detected if omitted)",
+    )
+    p_gate_add.add_argument(
+        "--promote-to",
+        default=None,
+        help="install dir to copy into IF the verdict is LOW",
+    )
+    p_gate_add.add_argument(
+        "--json", action="store_true", help="emit the verdict as JSON"
+    )
+    p_gate_add.set_defaults(func=_cmd_gate_add)
 
     return parser
 

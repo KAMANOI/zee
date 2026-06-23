@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zee"
-version = "0.6.0"
+version = "0.7.0"
 description = "Lightweight decoy tripwire and post-intrusion containment layer."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -26,6 +26,10 @@ dependencies = []
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
+# Optional MCP layer (read-only + propose-only). Core stays dependency-free.
+# Pinned below 2.0: the SDK's v2 renames the server class (FastMCP ->
+# MCPServer), so we cap the major to keep zee.mcp.server importable.
+mcp = ["mcp>=1.0,<2"]
 
 [project.scripts]
 zee = "zee.cli:main"
@@ -41,6 +45,9 @@ Sponsor = "https://github.com/sponsors/KAMANOI"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+[tool.setuptools.package-data]
+"zee.gate" = ["denylist.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
