@@ -5,6 +5,34 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.10.0] — 2026-06-24
+
+### Added
+
+- **Entry gate — ecosystem adapters (Phase 4).** `zee gate add` now
+  recognises **npm** (`package.json`), **PyPI** (`pyproject.toml` /
+  `setup.py` / `setup.cfg` / `PKG-INFO`) and **VS Code extensions**
+  (`engines.vscode` / `contributes`) in addition to Claude skills and MCP
+  servers, extracting the artifact name and version. Auto-detection orders
+  specific manifests first, so a Claude skill or a VS Code extension that
+  also carries a `package.json` is never misread as a plain npm package.
+- **Interoperability — fold in existing scanners (`--import-scan`, I4).**
+  Zee does not re-implement Semgrep / Snyk / Socket. `zee gate add …
+  --import-scan report.json` ingests a **Semgrep JSON** or **SARIF 2.1.0**
+  report (Snyk, CodeQL, and most CI scanners emit SARIF) and folds each
+  finding into the verdict as a `G901` flag at a severity mapped from the
+  source tool — an imported `error` drives the verdict to HIGH like a
+  native finding. An unreadable / unknown report degrades to a `G909`
+  notice rather than aborting. Imported text is sanitised of terminal
+  control sequences before display.
+- **GitHub Action + CI usage (`action.yml`).** A composite action runs the
+  gate as a pre-install / pre-merge check (`fail-on: high | medium`; exit
+  code is the verdict). Inputs are passed through the step environment, not
+  interpolated into the script, so a crafted input cannot inject shell
+  commands. New docs: `docs/gate.md` (CI / pre-install / interop) and
+  `docs/threat-list.md` (denylist format, contribution, and an honest note
+  that per-entry signing is future work). 13 new tests.
+
 ## [0.9.0] — 2026-06-24
 
 ### Added

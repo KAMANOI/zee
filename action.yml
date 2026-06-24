@@ -1,0 +1,70 @@
+name: "Zee entry gate"
+description: >-
+  Inspect an AI artifact (Claude skill / MCP / npm / PyPI / VS Code
+  extension) before install. Fails the job on a HIGH verdict by default,
+  so the gate works as a pre-install / pre-merge check.
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  source:
+    description: "Path to the artifact to inspect (default: repo root)."
+    required: false
+    default: "."
+  kind:
+    description: "Artifact kind (skill|mcp|npm|pypi|vscode|package). Auto-detected if empty."
+    required: false
+    default: ""
+  fail-on:
+    description: "Verdict at or above which the job fails: high | medium."
+    required: false
+    default: "high"
+  import-scan:
+    description: "Optional path to a Semgrep JSON or SARIF report to fold in."
+    required: false
+    default: ""
+  zee-version:
+    description: "Version spec for `pip install zee` (e.g. ==0.10.0). Empty = latest."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - name: Install Zee
+      shell: bash
+      # Inputs are passed through env (data), never interpolated into the
+      # script body, so a crafted input cannot inject shell commands.
+      env:
+        ZEE_VERSION: ${{ inputs.zee-version }}
+      run: python -m pip install --quiet "zee${ZEE_VERSION}"
+    - name: Run Zee gate
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.source }}
+        KIND: ${{ inputs.kind }}
+        IMPORT_SCAN: ${{ inputs.import-scan }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        args=( "$SOURCE" --json )
+        if [ -n "$KIND" ]; then args+=( --kind "$KIND" ); fi
+        if [ -n "$IMPORT_SCAN" ]; then args+=( --import-scan "$IMPORT_SCAN" ); fi
+        # Exit code is the verdict: LOW=0, MEDIUM=1, HIGH=2.
+        set +e
+        python -m zee.cli gate add "${args[@]}"
+        code=$?
+        set -e
+        case "$FAIL_ON" in
+          medium) threshold=1 ;;
+          *)      threshold=2 ;;
+        esac
+        if [ "$code" -ge "$threshold" ]; then
+          echo "::error::Zee gate verdict (exit $code) meets the fail-on=$FAIL_ON threshold"
+          exit "$code"
+        fi
+        exit 0

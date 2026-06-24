@@ -36,6 +36,7 @@ def inspect_source(
     *,
     behavioral: bool = False,
     behavioral_timeout: int = 20,
+    import_scans: tuple[str, ...] = (),
 ) -> Verdict:
     root = fetch_local(source, base=quarantine_base)  # copy only, NO exec
     adapter = pick_adapter(root, kind)
@@ -45,6 +46,13 @@ def inspect_source(
     flags += static_checks.scan_tree(root)
     flags += denylist.check(artifact)
     flags += _install_hook_flags(artifact.install_hooks)
+
+    if import_scans:
+        # Interop (I4): fold existing scanners' findings into the same
+        # verdict instead of re-implementing them.
+        from .imports import import_scans as _import_scans
+
+        flags += _import_scans(import_scans)
 
     notes: list[str] = []
     if behavioral:

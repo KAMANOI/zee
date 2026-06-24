@@ -16,6 +16,9 @@ from typing import Any, Optional
 class ArtifactKind(str, Enum):
     SKILL = "skill"
     MCP = "mcp"
+    NPM = "npm"
+    PYPI = "pypi"
+    VSCODE = "vscode"
     PACKAGE = "package"
 
 
@@ -41,9 +44,10 @@ class Severity(str, Enum):
 
 @dataclass(frozen=True)
 class Flag:
-    """A single finding. `code` (G1xx..G8xx) makes user reports precise
+    """A single finding. `code` (G1xx..G9xx) makes user reports precise
     ("G501 fired") and `evidence` shows *why* without re-running.
-    G1xx-G7xx are static; G8xx are behavioural (sandboxed run)."""
+    G1xx-G7xx are static, G8xx are behavioural (sandboxed run), G9xx are
+    imported from an external scanner (Semgrep / SARIF)."""
 
     severity: Severity
     code: str
@@ -68,12 +72,14 @@ class Artifact:
     declared_capabilities: tuple[str, ...] = ()
     install_hooks: tuple[str, ...] = ()
     root: Optional[str] = None  # quarantine dir it was fetched into (NOT run)
+    version: Optional[str] = None  # declared version (npm/pypi/vscode), if any
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind.value,
             "source": self.source,
             "name": self.name,
+            "version": self.version,
             "content_hash": self.content_hash,
             "declared_capabilities": list(self.declared_capabilities),
             "install_hooks": list(self.install_hooks),
@@ -106,8 +112,11 @@ class Verdict:
         }
 
     def to_text(self) -> str:
+        name = self.artifact.name
+        if self.artifact.version:
+            name = f"{name}@{self.artifact.version}"
         lines = [
-            f"zee gate — {self.artifact.kind.value}: {self.artifact.name}",
+            f"zee gate — {self.artifact.kind.value}: {name}",
             f"  source : {self.artifact.source}",
             f"  sha256 : {self.artifact.content_hash[:16]}…",
             f"  verdict: {self.risk_level.value}  (score {self.risk_score})",

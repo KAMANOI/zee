@@ -336,6 +336,7 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
             kind=args.kind,
             behavioral=args.behavioral,
             behavioral_timeout=args.timeout,
+            import_scans=tuple(args.import_scan or ()),
         )
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -474,9 +475,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_gate_add.add_argument(
         "--kind",
-        choices=("skill", "mcp", "package"),
+        choices=("skill", "mcp", "npm", "pypi", "vscode", "package"),
         default=None,
         help="artifact kind (auto-detected if omitted)",
+    )
+    p_gate_add.add_argument(
+        "--import-scan",
+        action="append",
+        metavar="FILE",
+        help="fold an existing scanner's report (Semgrep JSON or SARIF) "
+        "into the verdict instead of re-running it (repeatable)",
     )
     p_gate_add.add_argument(
         "--promote-to",
