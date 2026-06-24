@@ -5,6 +5,39 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.8.0] — 2026-06-24
+
+### Added
+
+- **Entry gate — behavioural sandbox (`zee gate add … --behavioral`)** —
+  Phase 2 of the entry gate. Opt-in, and the *only* path that executes an
+  artifact: it detonates the artifact's install hook (`install.sh` /
+  `setup.sh` / `pre`/`postinstall.sh`) inside an isolation backend and
+  watches what it actually does at runtime, so it catches stealers that
+  slip past the static scan (e.g. a credential path assembled at runtime).
+  Signals become G8xx flags folded into the same LOW/MEDIUM/HIGH verdict:
+  `G801` a seeded **decoy credential was read and exfiltrated**, `G802`
+  an outbound network attempt, `G803` a write to a persistence / autostart
+  location (shell rc, LaunchAgent, agent config), `G804` a decoy read
+  (access-time, best-effort), `G805` the run was killed on timeout.
+  - **The detonator is isolated from the Zee core (invariant I7)** — a
+    separate subpackage (`zee.gate.sandbox`) the core never imports.
+  - **Hard interlock (I2):** if no isolation backend is available the
+    artifact is **never run on the bare host** — the run is skipped with a
+    `G809` notice and the static verdict stands. MVP backend is macOS
+    native `sandbox-exec` (zero install); Docker / Linux backends slot in
+    behind the same interface later.
+  - **Containment, honestly (I5/I6):** writes are confined to a throwaway
+    sandbox HOME, all network is denied except one loopback port routed to
+    a local FakeNet sink, and reads of the real user homes (`/Users`,
+    `/private/var/root`) are denied so a hook cannot read the host's real
+    `~/.ssh` / `~/.aws` / source and exfiltrate it. Only credential-shaped
+    **decoys** (never real secrets) are planted as bait. This contains
+    writes + network and blocks real-home reads; it is layered risk
+    reduction, not complete detection — TLS bodies sent through a CONNECT
+    tunnel are contained but opaque. Default behaviour is unchanged
+    (without `--behavioral` nothing is ever executed). 15 new tests.
+
 ## [0.7.0] — 2026-06-23
 
 ### Added

@@ -41,8 +41,9 @@ class Severity(str, Enum):
 
 @dataclass(frozen=True)
 class Flag:
-    """A single finding. `code` (G1xx..G6xx) makes user reports precise
-    ("G501 fired") and `evidence` shows *why* without re-running."""
+    """A single finding. `code` (G1xx..G8xx) makes user reports precise
+    ("G501 fired") and `evidence` shows *why* without re-running.
+    G1xx-G7xx are static; G8xx are behavioural (sandboxed run)."""
 
     severity: Severity
     code: str
@@ -86,6 +87,10 @@ class Verdict:
     risk_level: RiskLevel
     risk_score: int
     flags: list[Flag] = field(default_factory=list)
+    # Non-scored, human-facing context (e.g. whether the behavioural
+    # sandbox ran, was skipped, or found nothing). Kept out of the score
+    # so an honesty note can never change the verdict.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -97,6 +102,7 @@ class Verdict:
             "risk_level": self.risk_level.value,
             "risk_score": self.risk_score,
             "flags": [f.to_dict() for f in self.flags],
+            "notes": list(self.notes),
         }
 
     def to_text(self) -> str:
@@ -121,4 +127,6 @@ class Verdict:
                         f.evidence[:117] + "…"
                     )
                     lines.append(f"            ↳ {ev}")
+        for note in self.notes:
+            lines.append(f"  note   : {note}")
         return "\n".join(lines)

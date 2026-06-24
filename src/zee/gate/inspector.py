@@ -33,6 +33,9 @@ def inspect_source(
     source: str | Path,
     kind: Optional[str] = None,
     quarantine_base: Optional[Path] = None,
+    *,
+    behavioral: bool = False,
+    behavioral_timeout: int = 20,
 ) -> Verdict:
     root = fetch_local(source, base=quarantine_base)  # copy only, NO exec
     adapter = pick_adapter(root, kind)
@@ -43,8 +46,22 @@ def inspect_source(
     flags += denylist.check(artifact)
     flags += _install_hook_flags(artifact.install_hooks)
 
+    notes: list[str] = []
+    if behavioral:
+        # Opt-in: this is the one path that EXECUTES the artifact, always
+        # inside the isolation backend (or not at all — see I2/I7). Its
+        # G8xx flags fold into the same score as the static findings.
+        from .sandbox import run_behavioral
+
+        result = run_behavioral(artifact, timeout=behavioral_timeout)
+        flags += result.flags
+        notes.append(f"behavioural: {result.summary}")
+
     level, sc = scorer.score(flags)
-    return Verdict(artifact=artifact, risk_level=level, risk_score=sc, flags=flags)
+    return Verdict(
+        artifact=artifact, risk_level=level, risk_score=sc,
+        flags=flags, notes=notes,
+    )
 
 
 def promote_if_low(verdict: Verdict, dest_dir: str | Path) -> tuple[bool, str]:

@@ -19,6 +19,7 @@ venv/
 
 # Claude Code per-project notes (decisions / past mistakes — local memory)
 .claude/
+WORKLOG.md
 
 # Zee local state (event logs from local runs)
 *.jsonl

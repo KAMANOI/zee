@@ -331,7 +331,12 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
     from .gate.inspector import inspect_source, promote_if_low
 
     try:
-        verdict = inspect_source(args.source, kind=args.kind)
+        verdict = inspect_source(
+            args.source,
+            kind=args.kind,
+            behavioral=args.behavioral,
+            behavioral_timeout=args.timeout,
+        )
     except FileNotFoundError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -445,6 +450,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_gate_add.add_argument(
         "--json", action="store_true", help="emit the verdict as JSON"
+    )
+    p_gate_add.add_argument(
+        "--behavioral",
+        action="store_true",
+        help="ALSO run the artifact's install hook inside an isolation "
+        "sandbox and watch for credential exfil / persistence / outbound "
+        "traffic (opt-in; needs an isolation backend such as macOS "
+        "sandbox-exec — never runs on the bare host)",
+    )
+    p_gate_add.add_argument(
+        "--timeout",
+        type=int,
+        default=20,
+        help="wall-clock seconds for the behavioural run (default: 20)",
     )
     p_gate_add.set_defaults(func=_cmd_gate_add)
 
