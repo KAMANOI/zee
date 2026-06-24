@@ -347,7 +347,42 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
     if args.promote_to:
         ok, msg = promote_if_low(verdict, args.promote_to)
         print(msg, file=sys.stderr)
+        if ok:
+            # Pin the promoted bytes so `zee gate audit` can later detect a
+            # Rug Pull (self-update / silent rewrite) of this install.
+            from .gate.pins import PinRegistry
+
+            dest = str(Path(args.promote_to).expanduser() / verdict.artifact.name)
+            PinRegistry().pin(
+                name=verdict.artifact.name,
+                kind=verdict.artifact.kind.value,
+                source=verdict.artifact.source,
+                content_hash=verdict.artifact.content_hash,
+                install_dir=dest,
+            )
+            print(f"pinned for Rug Pull monitoring: {dest}", file=sys.stderr)
     return verdict.exit_code
+
+
+def _cmd_gate_audit(args: argparse.Namespace) -> int:
+    """Re-check pinned artifacts for Rug Pull drift (Phase 3).
+
+    Exit code: 2 if any pinned artifact has drifted (HIGH), 1 if some are
+    missing, 0 if all clean — so it composes in cron / pre-run hooks.
+    """
+    import json as _json
+
+    from .gate.audit import audit_pins
+    from .gate.pins import PinRegistry
+
+    report = audit_pins(
+        PinRegistry(), rescan=args.rescan, behavioral=args.behavioral
+    )
+    if args.json:
+        print(_json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    else:
+        print(report.to_text())
+    return report.exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -466,6 +501,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="wall-clock seconds for the behavioural run (default: 20)",
     )
     p_gate_add.set_defaults(func=_cmd_gate_add)
+
+    p_gate_audit = gate_sub.add_parser(
+        "audit",
+        help="re-check pinned (promoted) artifacts for Rug Pull drift — a "
+        "silent self-update / rewrite since they passed the gate",
+    )
+    p_gate_audit.add_argument(
+        "--rescan",
+        action="store_true",
+        help="re-inspect any drifted artifact to show what it became "
+        "(static; add --behavioral to also detonate it)",
+    )
+    p_gate_audit.add_argument(
+        "--behavioral",
+        action="store_true",
+        help="with --rescan, also run the drifted artifact in the sandbox",
+    )
+    p_gate_audit.add_argument(
+        "--json", action="store_true", help="emit the audit report as JSON"
+    )
+    p_gate_audit.set_defaults(func=_cmd_gate_audit)
 
     return parser
 

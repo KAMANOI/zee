@@ -5,6 +5,36 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.9.0] — 2026-06-24
+
+### Added
+
+- **Entry gate — Rug Pull monitoring (`zee gate audit`)** — Phase 3 of the
+  entry gate. When `zee gate add … --promote-to` promotes a LOW artifact,
+  its content hash is now **pinned** (recorded in `pins.jsonl`, owner-only).
+  `zee gate audit` re-hashes every pinned install location and reports:
+  `clean` (still the bytes that passed the gate), `drifted` (the artifact
+  changed since it was pinned — a self-update / silent rewrite, i.e. a Rug
+  Pull → HIGH), or `missing`. Exit code composes in cron / pre-run hooks
+  (drift=2, missing=1, clean=0).
+  - **Shared threat record (input ↔ output):** a drifted artifact's new
+    hash is written to a machine-local denylist overlay, so re-installing
+    that exact version is blocked everywhere the denylist is consulted
+    (`G610`). No server — repo `denylist.json` + local overlay only (I1/I4).
+  - **`--rescan`** re-inspects a drifted artifact to show *what* it became
+    (static; add **`--behavioral`** to also detonate the new version in the
+    Phase 2 sandbox, which surfaces credential exfil / outbound of the
+    changed bytes).
+  - The tree hash now also covers **symlink targets** (hashed by readlink,
+    never followed), so a Rug Pull that only swaps a symlink target is
+    still caught as drift.
+  - **Honest scope (I5):** this is an on-demand *integrity* check, not a
+    live process/network monitor. It catches on-disk modification and
+    self-update (the dominant Rug Pull shape) when run; pair it with the
+    `--behavioral` rescan to inspect a changed version's runtime behaviour.
+    Continuous real-time egress monitoring of a running artifact remains
+    future work. 8 new tests.
+
 ## [0.8.0] — 2026-06-24
 
 ### Added

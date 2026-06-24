@@ -9,6 +9,7 @@ followed) so a malicious symlink cannot pull in host files during copy.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -28,8 +29,23 @@ def sha256_tree(root: Path) -> str:
         h.update(root.read_bytes())
         return h.hexdigest()
     for p in sorted(root.rglob("*")):
-        if p.is_file() and not p.is_symlink():
-            h.update(str(p.relative_to(root)).encode("utf-8"))
+        rel = str(p.relative_to(root)).encode("utf-8")
+        # Hash symlinks by their target string (NOT followed — no host read)
+        # so a Rug Pull that only swaps a symlink target is still detected
+        # as drift. The type tag keeps a file and a symlink of the same
+        # name/bytes distinct.
+        if p.is_symlink():
+            h.update(b"L\0")
+            h.update(rel)
+            h.update(b"\0")
+            try:
+                h.update(os.readlink(p).encode("utf-8"))
+            except OSError:
+                pass
+        elif p.is_file():
+            h.update(b"F\0")
+            h.update(rel)
+            h.update(b"\0")
             try:
                 h.update(p.read_bytes())
             except OSError:
