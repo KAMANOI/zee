@@ -274,6 +274,24 @@
   </div>
 </section>
 
+<!-- 4.5 ENTRY GATE -->
+<section id="gate">
+  <div class="wrap">
+    <div class="eyebrow">入口ゲート — 入れる前に、見る</div>
+    <h2>AIスキル・MCP・パッケージを、<br />インストールする前にスキャン。</h2>
+    <p class="lead" style="max-width:760px">公開されている AI スキルや MCP サーバー、npm / PyPI パッケージには、エージェントを外部へ開かせる<strong>プロンプトインジェクション</strong>が仕込まれていることがあります。いま最も大きい攻撃面の一つです。Zee の入口ゲートは、<span class="accent">導入する前に</span>その成果物を隔離下で静的に検査し、不審な指示・過剰な権限要求・既知の脅威リスト該当を洗い出して、入れる／入れないの判断材料を返します。</p>
+    <div class="code"><span class="c"># 導入前にスキャン（Claudeスキル / MCP / npm / PyPI / VS Code拡張を自動判別）</span>
+zee gate add ./some-skill
+
+<span class="c"># 既存スキャナ（Semgrep / SARIF: Snyk・CodeQL 等）の結果も取り込んで合算</span>
+zee gate add ./pkg --import-scan report.json
+
+<span class="c"># 配布後のすり替え（Rug Pull）を後から監視</span>
+zee gate audit</div>
+    <p style="margin-top:14px;font-size:13.5px;color:var(--faint)">静的検査であり、すべての悪意を検出できるわけではありません（正直に）。Semgrep / Snyk / Socket を置き換えるものではなく、それらと<strong>併用する一層</strong>です。GitHub Action として CI / pre-install に組み込めます。詳細は <a href="https://github.com/KAMANOI/zee/blob/main/docs/gate.md" style="color:var(--accent)">docs/gate.md</a> ／ 脅威リストの形式は <a href="https://github.com/KAMANOI/zee/blob/main/docs/threat-list.md" style="color:var(--accent)">docs/threat-list.md</a> を参照してください。</p>
+  </div>
+</section>
+
 <!-- 5. MVP -->
 <section id="mvp">
   <div class="wrap">

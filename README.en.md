@@ -73,7 +73,27 @@ At this stage Zee provides:
 - **Starter Guide** — the first step in figuring out what to think about ([STARTER_GUIDE.en.md](./STARTER_GUIDE.en.md))
 - **Architecture overview** — design intent and the role of each component ([ARCHITECTURE.en.md](./ARCHITECTURE.en.md))
 - **Research note** — CDS and affine Collatz research as a research direction ([RESEARCH.en.md](./RESEARCH.en.md))
+- **Entry gate** — statically scan an AI skill / MCP / npm / PyPI / VS Code extension *before* you install it (`zee gate` — [docs/gate.md](./docs/gate.md))
 - **MVP implementation** — a lightweight decoy tripwire with automated containment (`src/zee/` — **dry_run by default**)
+
+---
+
+## Entry gate — look before you install
+
+Public AI skills, MCP servers, and npm / PyPI packages can carry **prompt injection** that opens your agent up to the outside — currently one of the largest attack surfaces. Zee's entry gate fetches the artifact into quarantine (**never executes it**), statically inspects it *before* installation, and surfaces suspicious instructions, excessive permission requests, and matches against a known threat list — so you have something to decide install / don't-install on.
+
+```bash
+# Scan before installing (auto-detects Claude skill / MCP / npm / PyPI / VS Code extension)
+zee gate add ./some-skill
+
+# Fold in results from existing scanners (Semgrep / SARIF: Snyk, CodeQL, ...)
+zee gate add ./pkg --import-scan report.json
+
+# Re-check pinned artifacts later for post-distribution swaps (Rug Pull)
+zee gate audit
+```
+
+This is static inspection and cannot catch every malicious payload (honestly). It does not replace Semgrep / Snyk / Socket — it is **a layer to run alongside them**, and can be wired into CI / pre-install as a GitHub Action. See [docs/gate.md](./docs/gate.md); the threat-list format is documented in [docs/threat-list.md](./docs/threat-list.md).
 
 ---
 
