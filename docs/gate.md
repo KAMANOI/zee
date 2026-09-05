@@ -98,10 +98,30 @@ semgrep --json -o semgrep.json ./pkg
 zee gate add ./pkg --kind npm --import-scan semgrep.json
 ```
 
-Supported report formats: **Semgrep JSON** and **SARIF 2.1.0** (Snyk,
-CodeQL, and most CI scanners emit SARIF). Imported findings appear as
-`G901` flags at a severity mapped from the source tool, so an imported
-`error` drives the verdict to HIGH like a native finding.
+Supported report formats: **Semgrep JSON** and **SARIF 2.1.0**. Imported
+findings appear as `G901` flags at a severity mapped from the source tool, so
+an imported `error` drives the verdict to HIGH like a native finding.
+
+## Using Zee with Snyk / Socket / Semgrep
+
+**Verified:** Zee imports Semgrep JSON and SARIF 2.1.0 through
+`--import-scan`. An imported `error` becomes a HIGH-severity `G901` finding.
+Zee separately applies its own checks for prompt-injection text aimed at
+Claude skills or MCP artifacts, excessive permission requests, and Rug Pull
+drift.
+
+**Unverified:** Snyk CLI is reported to offer SARIF output. If
+`snyk code test --sarif-file-output=snyk.sarif` produces a SARIF report, pass
+it to `--import-scan snyk.sarif` (unverified in this repo).
+
+**No information:** This repository has no verified information about whether
+Socket emits SARIF. If it does not, review Socket's verdict first and then use
+Zee for Zee-specific checks only.
+
+Division of responsibility: use Snyk or Socket for known dependency
+vulnerabilities, Semgrep for static code patterns, and Zee for instructions in
+AI artifacts, permission requests, and post-distribution changes. Zee does not
+replace those tools (invariant I4).
 
 ## Limits (invariant I5)
 
