@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: KAMANOI/zee@main          # or @v0.10.0 once tagged
+      - uses: KAMANOI/zee@main          # pin to a commit SHA in real use; the latest pushed tag is v0.7.0
         with:
           source: .
           fail-on: high                  # high (default) | medium
@@ -38,10 +38,15 @@ Add the gate to a package you control so it runs before npm installs it:
 ```json
 {
   "scripts": {
-    "preinstall": "npx --yes zee gate add . --kind npm || exit 1"
+    "preinstall": "zee gate add . --kind npm || exit 1"
   }
 }
 ```
+
+> **Do not run `npx zee` or `pip install zee`.** Those names on npm and PyPI belong to
+> unrelated packages by other authors (verified 2026-09-05). Zee is installed from this
+> repository only — see the install instructions in the README. Running the wrong `zee`
+> is exactly the supply-chain problem this gate exists to catch.
 
 ### pip / Python projects
 
