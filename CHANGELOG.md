@@ -5,6 +5,21 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.10.1] — 2026-09-05
+
+### Fixed
+
+- **GitHub Action installs Zee from its own checkout.** The composite
+  action previously ran `pip install zee`, but the name `zee` on PyPI
+  belongs to an unrelated package by another author (verified
+  2026-09-05), so the Action would have installed a stranger's code.
+  It now installs from `$GITHUB_ACTION_PATH`. The `zee-version` input
+  is removed — pin with `uses: KAMANOI/zee@<tag|sha>` instead.
+- **Docs no longer suggest `npx --yes zee` or `pip install zee`.** Same
+  reason: those names belong to other people's packages.
+- `actions/setup-python` is pinned to a commit SHA, matching the CI
+  workflows.
+
 ## [0.10.0] — 2026-06-24
 
 ### Added

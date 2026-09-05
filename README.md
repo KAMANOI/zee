@@ -105,10 +105,18 @@ zee gate audit
 ### インストール
 
 ```bash
+# タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
+uv tool install "git+https://github.com/KAMANOI/zee@v0.10.1"
+
+# または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git
 cd zee
 pip install -e .
 ```
+
+> **`pip install zee` / `npx zee` は使わないでください。** PyPI と npm の `zee` は
+> 別の作者による無関係なパッケージです（2026-09-05 実測）。Zee はこのリポジトリからのみ
+> 配布しています。
 
 ### 起動
 
