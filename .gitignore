@@ -23,3 +23,6 @@ WORKLOG.md
 
 # Zee local state (event logs from local runs)
 *.jsonl
+
+# 壊れた旧環境の退避（2026-08-22）。公開リポジトリなので誤って入れない
+.venv.broken-*/
