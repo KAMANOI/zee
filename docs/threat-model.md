@@ -49,6 +49,34 @@ skips execution.
 | Linux | None; Docker and bubblewrap are not implemented | No |
 | Windows | None | No |
 
+## Complementary scanners (Snyk / Socket)
+
+Zee's entry gate (`G1xx`–`G9xx`) targets AI-artifact-specific threats:
+instructions aimed at an AI agent (prompt injection in Claude skills or MCP
+artifacts), excessive permission requests, and post-adoption drift (Rug
+Pull). It does not maintain a database of known CVEs, and its denylist only
+matches hashes or names it has already been told about (see Detection
+limits above). Snyk and Socket cover different, complementary ground:
+
+- **Snyk.** `snyk code test` can emit SARIF (`--sarif` /
+  `--sarif-file-output`), which `zee gate add --import-scan` consumes as
+  `G901` findings ([Snyk docs](https://docs.snyk.io/developer-tools/snyk-cli/commands/code-test)).
+  Snyk's SCA products separately track known CVEs against dependency
+  manifests; Zee does not.
+- **Socket.** Its documented checks are behavioral supply-chain signals
+  (install scripts, typosquats, known malware, native code, telemetry),
+  delivered through a GitHub App or CLI, not a CVE database
+  ([Socket for GitHub](https://docs.socket.dev/docs/socket-for-github),
+  [Socket introduction](https://docs.socket.dev/docs/introduction)). Neither
+  page documents SARIF output, so Zee cannot confirm today whether Socket
+  findings can reach `--import-scan`.
+
+Known-CVE tracking, behavioral supply-chain analysis, and AI-artifact
+inspection are three separate mechanisms; none substitutes for the others.
+See [gate.md](gate.md#using-zee-with-snyk--socket--semgrep) for the
+command-level combination steps and the current verified/unverified status
+of each integration.
+
 ## Out of scope (current release)
 
 - Live, real-time network monitoring and immediate interruption of running
@@ -80,4 +108,6 @@ Zee には出口側の囮と入口側の `zee gate` があり、本書は入口�
 ライブ通信監視、即時遮断、リモート取得、署名付き脅威リスト、プロセス特定は対象外です。
 Zee は PyPI・npm・Homebrew では配布されておらず、同名パッケージは無関係です。
 導入時はタグまたは commit SHA、CI では `KAMANOI/zee@<tag|sha>` に固定します。
+Zee は既知 CVE のデータベースを持たず、AI アーティファクト固有の脅威（指示のすり込み・過剰な権限要求・Rug Pull）だけを見ます。
+既知脆弱性は Snyk、振る舞いベースのサプライチェーン検知は Socket と役割が異なり、併用が前提です（詳細は gate.md）。
 効果は未測定で、独立検証もありません。本番前に利用環境で確認してください。
