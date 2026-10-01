@@ -5,6 +5,41 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+### Added
+
+- **`zee export`** — writes the trap events of a period and the
+  containment records not yet resolved to `<prefix>.json` / `<prefix>.txt`,
+  for the operator to attach to a report of their choosing. Local files
+  only; nothing is sent. Files are created 0600, an existing file or
+  symlink at the target stops the export (`Z701`, `--force` to replace the
+  link itself), and `--since` / `--until` are parsed strictly (`Z702`; no
+  timezone = UTC, date only = 00:00 UTC). `detail` is masked unless
+  `--no-redact`. Exit code 1 when the chain check finds a problem or the
+  log cannot be read ("unverifiable").
+- **MCP `query_containment_report`** — same content, read-only, at most
+  `limit` events (default 50, max 1000); counts always cover the whole
+  period.
+- **Hash-chained evidence log** — every record in `events.jsonl` /
+  `metrics.jsonl` carries `prev_hash` / `record_hash`. Verification walks
+  rotated segments in order and reports edited, deleted, reordered or
+  hash-stripped lines and a missing start. Not detected: lines removed
+  from the end, and an attacker on the host recomputing the (unkeyed)
+  hashes.
+- `docs/containment-report-mapping.md` — the reporting provisions checked
+  against the statute texts on e-Gov, and which report items Zee can and
+  cannot fill.
+
+### Changed
+
+- Appends to the evidence log are serialised across threads and
+  processes, read only the last 64 KiB, and never raise: a broken,
+  unreadable or full log no longer stops notification or containment.
+- Rotation never overwrites a segment rotated in the same second.
+- Constructing `CutStateLog` no longer creates or chmods the state
+  directory (read paths such as `zee status` and MCP stay side-effect free).
+
 ## [0.10.1] — 2026-09-05
 
 ### Fixed

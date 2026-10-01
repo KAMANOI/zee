@@ -75,6 +75,7 @@ At this stage Zee provides:
 - **Research note** — CDS and affine Collatz research as a research direction ([RESEARCH.en.md](./RESEARCH.en.md))
 - **Entry gate** — statically scan an AI skill / MCP / npm / PyPI / VS Code extension *before* you install it (`zee gate` — [docs/gate.md](./docs/gate.md))
 - **MVP implementation** — a lightweight decoy tripwire with automated containment (`src/zee/` — **dry_run by default**)
+- **Containment evidence export** — write what Zee already recorded to local files you can attach to a report (`zee export`; nothing is sent — see [Relation to Japanese law](#relation-to-japanese-law-from-2026-10-01))
 
 ---
 
@@ -211,6 +212,24 @@ Every notification carries an op-class hint:
 Hints never say "ignore safely". The final call is always the operator's.
 
 For reference: to ever add a process-name allowlist that actually works at detect time, Zee would need a privileged backend (Linux fanotify / macOS Endpoint Security / Windows minifilter). That is incompatible with the MVP's lightweight, low-privilege scope. It will be designed separately if and when needed.
+
+---
+
+## Relation to Japanese law (from 2026-10-01)
+
+On 2026-10-01 Japan's Act on the Prevention of Damage Caused by Unauthorized Acts against Important Computers (Act No. 42 of 2025, commonly called the Cyber Response Capability Enhancement Act; [e-Gov](https://laws.e-gov.go.jp/law/507AC0000000042)) took effect together with its Cabinet Order and reporting ordinance.
+
+**Zee does not connect to or act on an attacker's machines, and has no legal authority to do so.** The statutory measures against machines used in an attack are given to police officers by Article 6-2 of the Police Duties Execution Act ([e-Gov](https://laws.e-gov.go.jp/law/323AC0000000136)) and applied to SDF officers through the Self-Defense Forces Act (as referenced in Art. 61(2)(viii) of the Act; we did not fetch the SDF Act itself). We found no provision giving private businesses or tools a similar power in the texts we checked.
+
+What Zee provides is unchanged: on-host containment (detection of write / delete / rename, and an automatic cut only when you set `response_mode: auto` and `dry_run: false`; dry_run is the default) and a record of it. `zee export` packages those records into files you can attach to a report to whoever you choose. **Whether and where to submit is your decision. Zee sends nothing.**
+
+- **Check yourself whether you must report.** The reporting duty of Article 5 applies to a *special social infrastructure business operator* (Art. 2(3): a designated specified social infrastructure business operator that uses a specified important computer). A report goes to the competent minister and the Prime Minister "promptly" after becoming aware of the incident, followed by a report "within 30 days" of that date (reporting ordinance Art. 4(2), [e-Gov](https://laws.e-gov.go.jp/law/508M60000F5A004)). The report form is to be set by the ministers; we have not seen it. Individuals and non-designated businesses carry no duty under that article. Zee does not decide whether you are covered.
+- **`zee export --out <prefix>`** writes the trap events in the period (`--since` / `--until`, ISO 8601; no timezone = UTC, date only = 00:00 UTC) and the containment records not yet resolved to `<prefix>.json` and `<prefix>.txt`. Files are created owner-only (0600); if a file or link with that name exists, the export stops instead of overwriting (`--force` replaces it). `detail` (may contain paths) is masked unless `--no-redact`. The MCP tool `query_containment_report` returns the same content (read-only, at most 50 events by default).
+- **`asset_id` is not masked.** Do not put personal or customer names in the `id` of `assets.toml`.
+- **Verification and its limits.** Each record in `events.jsonl` / `metrics.jsonl` carries the hash of the previous record, and `zee export` verifies rotated files too. It detects edited, deleted or reordered lines in the middle, a missing start of the log, and hash-less lines after hashed ones. **It does not detect lines removed from the end, or an attacker who can write the log recomputing every hash** (the hash is unkeyed). The exported events do not carry per-line hashes; Zee verifies on the host and reports the result in `chain_verification`. If the log cannot be read, the export says "unverifiable" and exits with 1.
+- **`export_sha256` only shows the export was not changed after it was produced** (if you keep a copy elsewhere). It says nothing about the log before export.
+- **No guarantee of legal compliance.** Zee's output covers only part of items 3–6 of the seven report items (reporting ordinance Art. 4(3)); you fill in the rest.
+- Article-by-article check and field mapping (Japanese): [`docs/containment-report-mapping.md`](./docs/containment-report-mapping.md).
 
 ---
 

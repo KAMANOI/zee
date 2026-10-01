@@ -4,7 +4,8 @@
 
 Zee has two security surfaces: an exit-side system of decoy tripwires and
 containment responses, and the entry-side `zee gate` inspection workflow. This
-document models threats to the entry gate and to Zee's own distribution.
+document models threats to the entry gate and to Zee's own distribution, plus
+the evidence store and the containment-report export (last section).
 
 The exit-side boundaries are documented in [README Limitations](../README.md#limitations--zee-がやらないこと),
 [SECURITY Honesty boundaries](../SECURITY.md#honesty-boundaries-current-release),
@@ -94,6 +95,26 @@ other authors. Install Zee from this repository and pin a tag or full commit
 SHA; see the [README installation instructions](../README.md#インストール).
 In CI, pin the Action as `uses: KAMANOI/zee@<tag|sha>`.
 
+## Evidence store and containment export
+
+Covers `events.jsonl` / `metrics.jsonl` (including rotated
+`*.YYYYMMDD_HHMMSS` segments), `zee export`, and the MCP tool
+`query_containment_report`.
+
+| Threat | What Zee does | Limit |
+| --- | --- | --- |
+| A local attacker edits, deletes or reorders a log line | Each record carries `prev_hash` / `record_hash` (SHA-256 chain, starting at a fixed genesis value). `zee export` verifies all segments in order and reports `corrupted`, `chain_break`, `head_missing`, `legacy_after_chain`. | The hash is **unkeyed**. Zee assumes the attacker is on the host (ARCHITECTURE.md), and an attacker who can write the log can recompute every hash. Detection holds only against edits that do not recompute the chain. |
+| Records removed from the end of the log | — | **Not detected.** A truncated chain is still a valid chain. Nothing is anchored outside the host. |
+| Older rotated segments moved away | Reported as `head_missing`. | Cannot tell an operator's clean-up from an attacker's. |
+| A corrupted or unreadable log blocks containment | Every append is wrapped: failures are logged and swallowed, so `responder.sequence.handle()` still notifies and cuts. Concurrent appends (threads and processes) are serialised with a lock; only the last 64 KiB is read per append. | A failed append loses that evidence record (it is logged to the Zee logger only). |
+| Export output overwrites or leaks a file | Output is written to `O_EXCL` + `O_NOFOLLOW` temp files at 0600 and moved into place only after both are complete; an existing file or symlink at the target stops the export (Z701) unless `--force`, which replaces the link itself, never its target. | A failed run can leave a 0600 temp file next to the target (named in the error). |
+| Recipient trusts the export as proof | `chain_verification` states what was checked; `export_sha256` covers the export itself. | The export carries no per-line hashes, so the recipient cannot re-verify the chain; they rely on Zee's local result. `export_sha256` shows only that the export was not changed after it was produced (if a copy was kept elsewhere). |
+| Sensitive data in the export | `detail` (may contain paths) is masked unless `--no-redact`. MCP follows the server's redaction setting and returns at most `limit` events (default 50). | `asset_id` is not masked. Operators must not put personal or customer names in asset ids. |
+| MCP read path changes local state | The report path is read-only; reading containment state no longer creates or chmods the state directory. Only the MCP audit line is written. | — |
+
+Zee never sends the export anywhere and has no code that connects to or acts
+on an attacker's machine.
+
 ## What this document is not
 
 Zee's effectiveness has not been measured, and it has not been independently
@@ -108,6 +129,7 @@ Zee には出口側の囮と入口側の `zee gate` があり、本書は入口�
 ライブ通信監視、即時遮断、リモート取得、署名付き脅威リスト、プロセス特定は対象外です。
 Zee は PyPI・npm・Homebrew では配布されておらず、同名パッケージは無関係です。
 導入時はタグまたは commit SHA、CI では `KAMANOI/zee@<tag|sha>` に固定します。
+証跡ログは鍵なしのハッシュチェーンで、途中の書き換え・削除と先頭の欠落は検知しますが、末尾の切り詰めとホスト上の攻撃者による全ハッシュの再計算は検知できません。`zee export` は 0600・既存ファイルやリンクを上書きしない形で書き出し、何も送信しません。証跡の書き込み失敗は通知・遮断を止めません。
 Zee は既知 CVE のデータベースを持たず、AI アーティファクト固有の脅威（指示のすり込み・過剰な権限要求・Rug Pull）だけを見ます。
 既知脆弱性は Snyk、振る舞いベースのサプライチェーン検知は Socket と役割が異なり、併用が前提です（詳細は gate.md）。
 効果は未測定で、独立検証もありません。本番前に利用環境で確認してください。
