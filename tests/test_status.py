@@ -365,3 +365,28 @@ def test_render_no_burst_message(tmp_path):
     report = compute(log_dir=tmp_path)
     output = render(report)
     assert "burst activity (30d): none" in output
+
+
+def test_rotated_segment_counted_and_burst_spans_rotation(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    _write_events(
+        tmp_path / "events.jsonl.r000001_20260101_000000",
+        [_trap("a1", "change", _ts(120, now))],
+    )
+    _write_events(tmp_path / "events.jsonl", [_trap("a1", "change", _ts(60, now))])
+    report = compute(tmp_path)
+    assert report.log_exists
+    assert report.total["24h"] == 2
+    assert report.change_total["24h"] == 2
+    assert len(report.bursts) >= 1
+
+
+def test_only_rotated_segment_still_reported(tmp_path: Path) -> None:
+    now = datetime.now(timezone.utc)
+    _write_events(
+        tmp_path / "events.jsonl.r000001_20260101_000000",
+        [_trap("a1", "read", _ts(60, now))],
+    )
+    report = compute(tmp_path)
+    assert report.log_exists
+    assert report.total["24h"] == 1

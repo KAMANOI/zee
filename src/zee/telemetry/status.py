@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from .cut_state import CutRecord, CutStateLog
-from .events_log import default_log_dir
+from .events_log import default_log_dir, log_segments
 
 BURST_WINDOW_SEC: int = 300
 BURST_MIN_EVENTS: int = 2
@@ -75,7 +75,13 @@ def compute(log_dir: Optional[Path] = None) -> StatusReport:
 
     _zero = lambda: {"24h": 0, "7d": 0, "30d": 0}  # noqa: E731
 
-    if not events_path.exists():
+    try:
+        segments = log_segments(events_path)
+        list_error: str | None = None
+    except OSError as e:
+        segments, list_error = [events_path], str(e)
+
+    if not any(p.exists() for p in segments):
         return StatusReport(
             log_dir=ldir,
             now=now,
@@ -91,15 +97,18 @@ def compute(log_dir: Optional[Path] = None) -> StatusReport:
     cutoff_30d = cutoffs["30d"]
     raw: list[tuple[datetime, str, str]] = []  # (ts, asset_id, op_class)
 
-    read_error: str | None = None
+    read_error: str | None = list_error
     skipped_lines: int = 0
-    try:
-        content = events_path.read_text(encoding="utf-8")
-    except OSError as e:
-        content = ""
-        read_error = str(e)
+    # Rotated segments (oldest first) + current file, so counts and bursts
+    # are not reset when events.jsonl rotates.
+    lines: list[str] = []
+    for seg in segments:
+        try:
+            lines.extend(seg.read_text(encoding="utf-8").splitlines())
+        except OSError as e:
+            read_error = str(e)
 
-    for line in content.splitlines():
+    for line in lines:
         line = line.strip()
         if not line:
             continue
