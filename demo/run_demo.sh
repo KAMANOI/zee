@@ -38,6 +38,15 @@ SANDBOX_DIR_REL="${RUN_DIR}/sandbox"
 mkdir -p "${SANDBOX_DIR_REL}"
 SANDBOX_DIR="$(python3 -c "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())" "${SANDBOX_DIR_REL}")"
 
+# Isolate Zee's own state (events.jsonl / cut_state.jsonl / canary registry)
+# into this run's throwaway dir instead of the real ~/.local/state/zee —
+# independent review (2026-10-01) flagged that without this, demo runs
+# pollute the host's real Zee telemetry and would mix with any real
+# monitoring run on this machine later.
+export XDG_STATE_HOME
+XDG_STATE_HOME="$(python3 -c "import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())" "${RUN_DIR}/state")"
+mkdir -p "${XDG_STATE_HOME}"
+
 echo "[run_demo] sandbox dir: ${SANDBOX_DIR}"
 python3 demo/make_dummy_files.py "${SANDBOX_DIR}"
 
@@ -48,10 +57,11 @@ ASSETS_TOML="${RUN_DIR}/assets.demo.toml"
 sed "s#__SANDBOX_DIR__#${SANDBOX_DIR}#g" demo/assets.demo.toml.tmpl > "${ASSETS_TOML}"
 echo "[run_demo] wrote ${ASSETS_TOML}"
 
-if [ ! -f "${HOME}/.zee/restore_token" ]; then
-  echo "[run_demo] no restore_token yet — generating one (needed for 'zee restore' later)"
-  python3 -m zee.cli init-restore-token
-fi
+# No `zee init-restore-token` here: this demo only shows the dry_run
+# "would cut" path (never runs `zee cut`/`zee restore`), so a restore
+# token is not needed. It also used to print the token to stderr before
+# the recording-start prompt below, where it could land in the terminal
+# scrollback on camera (independent review, 2026-10-01).
 
 echo "[run_demo] starting zee watch (dry_run) ..."
 python3 -m zee.cli -c "${ASSETS_TOML}" watch > "${RUN_DIR}/watch.log" 2>&1 &
@@ -59,6 +69,11 @@ WATCH_PID=$!
 trap 'kill "${WATCH_PID}" 2>/dev/null || true' EXIT
 
 sleep 2
+if ! kill -0 "${WATCH_PID}" 2>/dev/null; then
+  echo "[run_demo] zee watch exited immediately — see ${RUN_DIR}/watch.log:" >&2
+  cat "${RUN_DIR}/watch.log" >&2
+  exit 1
+fi
 echo "----------------------------------------------------------------"
 echo " zee watch is running (log: ${RUN_DIR}/watch.log)."
 echo " Start screen recording now, then press Enter to run the mock attack."

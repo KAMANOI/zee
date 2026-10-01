@@ -26,9 +26,9 @@
 
 ## 静止画として切り出す画面（note 用）
 
-1. **封じ込め通知**：macOS 通知バナー（`Zee tripwire` → `Zee dry_run: would cut`）
-2. **止められた操作の一覧**：`zee watch` ログの `[event] ... would_cut=yes` の並び
-3. **封じ込め状態のサマリ**：`zee status` の出力（検知件数・burst 警告・`cut state: clear`）
+1. **検知通知（dry_run 判定）**：macOS 通知バナー（`Zee tripwire` → `Zee dry_run: would cut`。実際に遮断したわけではない点を字幕等でも明示する）
+2. **検知→遮断判定（dry_run）の一覧**：`zee watch` ログの `[event] ... would_cut=yes` の並び（`cut=no` ＝実際には何も遮断していないことが読み取れる形で見せる）
+3. **検知サマリ**：`zee status` の出力（検知件数・burst 警告・`cut state: clear` ＝実遮断なしの確認）
 4. （証跡機能完成後に追加）改ざん検知付き証跡の出力画面：`zee export` の結果。**現時点では未実施**（README「証跡出力について」参照）
 
 ## 非技術層向けの一言表現（候補）
