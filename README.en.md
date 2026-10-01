@@ -31,7 +31,7 @@ What we want to protect is everyday safety, trust between people, the honest eff
 
 ---
 
-## Preparedness in the Mythos era
+## Preparedness in the next-generation AI era
 
 Attacks now move at machine speed. Finding and weaponizing vulnerabilities has become cheap, fast, and high-volume.
 
