@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..telemetry import status as status_mod
-from ..telemetry.events_log import default_log_dir
+from ..telemetry.events_log import default_log_dir, log_segments
 
 _REDACTED = "[redacted]"
 SCHEMA_VERSION = "1"
@@ -63,25 +63,30 @@ class EventReader:
     # ---- raw → canonical -------------------------------------------------
 
     def _iter_raw(self):
-        if not self.events_path.exists():
-            return
-        try:
-            content = self.events_path.read_text(encoding="utf-8")
-        except OSError:
-            return
-        for line in content.splitlines():
-            line = line.strip()
-            if not line:
-                continue
+        # Rotated segments (events.jsonl.YYYYMMDD_HHMMSS) first, then the
+        # current file — otherwise events older than the last 10 MB
+        # rotation silently vanish from queries and from `zee export`.
+        for seg in log_segments(self.events_path):
             try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                # Malformed (e.g. partial line during a concurrent write):
-                # skip, consistent with `zee status`.
+                with seg.open(encoding="utf-8", errors="replace") as f:
+                    lines = list(f)
+            except OSError:
+                # Unreadable segment: skipped here; verify_chain reports it
+                # as read_error ("unverifiable") in the export.
                 continue
-            if rec.get("type") != "trap_event":
-                continue
-            yield rec
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    # Malformed (e.g. partial line during a concurrent write):
+                    # skip, consistent with `zee status`.
+                    continue
+                if not isinstance(rec, dict) or rec.get("type") != "trap_event":
+                    continue
+                yield rec
 
     def _canonical(self, rec: dict[str, Any]) -> dict[str, Any]:
         # Fields follow the *actual* events.jsonl record (trap_event:

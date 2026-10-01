@@ -19,55 +19,167 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
-import stat
+import re
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
+
+try:  # POSIX
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore[assignment]
+try:  # Windows
+    import msvcrt
+except ImportError:
+    msvcrt = None  # type: ignore[assignment]
+
+from ..events import TrapEvent
+
+logger = logging.getLogger(__name__)
 
 _LOG_ROTATE_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
-# Hash-chain genesis marker (record_hash of a chain's first entry chains
-# from this, not from a real prior record). Also what a fresh chain
-# segment starts from after a run of pre-chain ("legacy") lines that have
-# no record_hash field at all — see EventReader/verify for how those are
-# told apart from a tampered line (report-formats / containment export).
+# Hash-chain genesis marker: the prev_hash of the very first hash-bearing
+# record of a log (across all of its rotated segments). Pre-chain
+# ("legacy") lines that come BEFORE the first hash-bearing record are
+# reported as unverified; a legacy line AFTER a hash-bearing one is an
+# anomaly (see verify_chain).
 GENESIS_HASH: str = "0" * 64
 
-from ..events import TrapEvent
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+# Rotated segment names written by _rotate_if_needed: <name>.YYYYMMDD_HHMMSS[_NNN]
+_ROTATED_SUFFIX = re.compile(r"\.\d{8}_\d{6}(_\d{3,})?")
+# How far back from EOF the writer looks for the last chained record.
+# ponytail: a record is a few hundred bytes; if 64 KiB of trailing garbage
+# hides every hash, the next record restarts at GENESIS and verify_chain
+# reports the break — visible, not silent.
+_TAIL_WINDOW: int = 64 * 1024
+# ponytail: one in-process lock for every log file; per-path locks if
+# contention between events.jsonl and metrics.jsonl ever matters.
+_APPEND_LOCK = threading.Lock()
+
+# verify_chain statuses that mean "something is wrong with the evidence".
+TAMPER_STATUSES = frozenset({"corrupted", "chain_break", "head_missing", "legacy_after_chain"})
 
 
 def _canonical_json(record: dict[str, Any]) -> str:
     """The exact byte form that is hashed — sorted keys, no whitespace.
 
-    Both `_append` (write) and the export verifier (read) must use this
-    one definition, or a hash computed at write time will never match a
-    hash recomputed at verify time even with unmodified bytes.
+    Both `_append` (write) and `verify_chain` (read) must use this one
+    definition, or a hash computed at write time will never match a hash
+    recomputed at verify time even with unmodified bytes.
     """
     return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
-def _last_record_hash(path: Path) -> Optional[str]:
-    """The `record_hash` of the last line in `path`, or None.
+def _record_hash(prev_hash: str, bare: dict[str, Any]) -> str:
+    return hashlib.sha256((prev_hash + _canonical_json(bare)).encode("utf-8")).hexdigest()
 
-    None means either the file doesn't exist / is empty, or its last
-    line predates the hash-chain feature (no `record_hash` key) — both
-    cases start a fresh chain segment at GENESIS_HASH, they are not
-    treated as tampering.
+
+def _is_hash(v: Any) -> bool:
+    return isinstance(v, str) and _HEX64.fullmatch(v) is not None
+
+
+def log_segments(path: Path) -> list[Path]:
+    """Rotated segments of `path` (oldest first) followed by `path` itself.
+
+    Rotation names sort chronologically as plain strings (zero-padded
+    UTC timestamp, zero-padded collision counter), so reading in this
+    order reconstructs the original append order.
     """
-    if not path.exists():
-        return None
+    rotated: list[Path] = []
     try:
-        lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        for p in path.parent.glob(path.name + ".*"):
+            if _ROTATED_SUFFIX.fullmatch(p.name[len(path.name):]) and p.is_file():
+                rotated.append(p)
     except OSError:
-        return None
-    if not lines:
-        return None
+        pass
+    rotated.sort(key=lambda p: p.name)
+    return rotated + ([path] if path.exists() else [])
+
+
+def _tail(path: Path) -> tuple[Optional[str], bool, bool]:
+    """(last valid record_hash in the tail window, file non-empty, ends with newline).
+
+    Reads only the last _TAIL_WINDOW bytes — never the whole file — so
+    the cost of one append does not grow with the log size. Lines that do
+    not parse, are not objects, or carry a malformed hash are skipped
+    (verify_chain reports them); legacy lines (no hash) are skipped too.
+    """
     try:
-        last = json.loads(lines[-1])
-    except json.JSONDecodeError:
-        return None
-    return last.get("record_hash")
+        f = path.open("rb")
+    except FileNotFoundError:
+        return None, False, True
+    with f:
+        size = f.seek(0, os.SEEK_END)
+        if size == 0:
+            return None, False, True
+        start = max(0, size - _TAIL_WINDOW)
+        f.seek(start)
+        data = f.read()
+    ends_nl = data.endswith(b"\n")
+    lines = data.split(b"\n")
+    if start > 0:
+        lines = lines[1:]  # first piece may be the middle of a line
+    if not ends_nl:
+        lines = lines[:-1]  # unterminated last piece: possibly mid-write
+    for raw in reversed(lines):
+        try:
+            rec = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            continue
+        if isinstance(rec, dict) and _is_hash(rec.get("record_hash")):
+            return rec["record_hash"], True, ends_nl
+    return None, True, ends_nl
+
+
+def _chain_tail(path: Path) -> tuple[Optional[str], bool]:
+    """(hash to chain the next record from, current file needs a leading newline).
+
+    Falls back to the newest rotated segment only while the current file
+    is missing/empty (i.e. right after a rotation).
+    """
+    needs_nl = False
+    for i, seg in enumerate(reversed(log_segments(path))):
+        h, nonempty, ends_nl = _tail(seg)
+        if i == 0 and seg == path:
+            needs_nl = nonempty and not ends_nl
+        if h is not None or nonempty:
+            return h, needs_nl
+    return None, needs_nl
+
+
+@contextmanager
+def _locked(path: Path) -> Iterator[None]:
+    """Serialise tail-read + rotate + append across threads AND processes.
+
+    The lock lives in a sidecar file (dot-prefixed, so it never matches
+    the rotated-segment pattern) because rotation renames the data file.
+    """
+    lock_path = path.parent / f".{path.name}.lock"
+    with _APPEND_LOCK:
+        fd = os.open(
+            lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600
+        )
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            elif msvcrt is not None:  # pragma: no cover - Windows
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            yield
+        finally:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                elif msvcrt is not None:  # pragma: no cover - Windows
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            finally:
+                os.close(fd)
 
 
 def default_log_dir() -> Path:
@@ -181,102 +293,157 @@ class EventLog:
 
     @staticmethod
     def _rotate_if_needed(path: Path, max_bytes: int = _LOG_ROTATE_MAX_BYTES) -> None:
-        """Rename path → path.YYYYMMDD_HHMMSS when it exceeds max_bytes.
+        """Rename path → path.YYYYMMDD_HHMMSS[_NNN] when it exceeds max_bytes.
 
         Old files are kept indefinitely — logs are evidence and must not be
-        deleted automatically. Rotation failure is silently swallowed so it
-        never blocks event recording.
+        deleted automatically. A name collision (two rotations within one
+        second) gets a counter suffix instead of silently replacing the
+        older segment. Rotation failure is swallowed so it never blocks
+        event recording. Called only under `_locked(path)`.
         """
         try:
             if path.exists() and path.stat().st_size >= max_bytes:
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
                 rotated = path.parent / f"{path.name}.{ts}"
+                n = 0
+                while rotated.exists():
+                    n += 1
+                    rotated = path.parent / f"{path.name}.{ts}_{n:03d}"
                 path.rename(rotated)
         except OSError:
             pass
 
     @staticmethod
     def _append(path: Path, record: dict[str, Any]) -> None:
-        # Read the current last-record hash BEFORE rotating — rotation only
-        # renames the file that line lives in, the line itself (and the
-        # chain it anchors) is unchanged, so computing prev_hash first keeps
-        # the chain continuous across a rotation instead of restarting it.
-        prev_hash = _last_record_hash(path) or GENESIS_HASH
-        EventLog._rotate_if_needed(path)
-        chained = dict(record)
-        chained["prev_hash"] = prev_hash
-        chained["record_hash"] = hashlib.sha256(
-            (prev_hash + _canonical_json(record)).encode("utf-8")
-        ).hexdigest()
-        # Create owner-only (0600) on first write. open(mode="a") respects
-        # the existing file's mode if it already exists, and falls back to
-        # umask otherwise — we explicitly tighten here to ensure 0600.
-        existed = path.exists()
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(chained, ensure_ascii=False) + "\n")
-        if not existed:
-            try:
-                os.chmod(path, 0o600)
-            except (OSError, NotImplementedError):
-                pass
+        """Append one hash-chained record. NEVER raises.
 
-
-def verify_chain(path: Path) -> list[dict[str, Any]]:
-    """Walk `path` line by line and check the hash chain.
-
-    Per line, returns one of:
-        ok        — record_hash matches its content, and (if a prior
-                    hash-bearing line exists) prev_hash matches it.
-        legacy    — no record_hash field (written before this feature).
-                    Not verified — this is a format gap, not tampering.
-        corrupted — record_hash present but does not match recomputed
-                    content: this line's bytes were edited after writing.
-        chain_break — record_hash matches its own content, but prev_hash
-                    does not match the previous hash-bearing line: a line
-                    between them (or this one's link) was deleted,
-                    reordered, or replaced wholesale.
-
-    Threat model — what this catches, and what it does not (repo
-    convention, see module docstring / `gate/audit.py`): this detects
-    partial edits to an existing log file (one line rewritten, one line
-    cut out). It does NOT stop an attacker who deletes or replaces the
-    *entire* file — nothing here is compared against an out-of-band
-    record. That is what the export digest (see `zee export`) is for:
-    the operator must keep it somewhere other than next to the file it
-    describes for it to mean anything.
-    """
-    results: list[dict[str, Any]] = []
-    if not path.exists():
-        return results
-    try:
-        lines = [l for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    except OSError:
-        return results
-    expected_prev: Optional[str] = None
-    for i, line in enumerate(lines):
+        Every record_* call — including record_event(), which
+        responder.sequence.handle() calls BEFORE notifying and cutting —
+        routes through here. A broken, unreadable or full evidence log must
+        not stop the defence: the failure is logged and swallowed, and the
+        missing/broken record shows up later in verify_chain / zee export.
+        """
         try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            results.append({"line": i, "status": "corrupted", "reason": "not valid JSON"})
-            expected_prev = None
-            continue
-        record_hash = rec.get("record_hash")
-        prev_hash = rec.get("prev_hash")
-        if record_hash is None:
-            results.append({"line": i, "status": "legacy"})
-            expected_prev = None
-            continue
-        bare = {k: v for k, v in rec.items() if k not in ("record_hash", "prev_hash")}
-        recomputed = hashlib.sha256(
-            ((prev_hash or "") + _canonical_json(bare)).encode("utf-8")
-        ).hexdigest()
-        if recomputed != record_hash:
-            results.append({"line": i, "status": "corrupted"})
-            expected_prev = None
-            continue
-        if expected_prev is not None and prev_hash != expected_prev:
-            results.append({"line": i, "status": "chain_break"})
-        else:
-            results.append({"line": i, "status": "ok"})
-        expected_prev = record_hash
-    return results
+            with _locked(path):
+                # Rotate first: _chain_tail() falls back to the just-rotated
+                # segment when the current file is empty, so the chain
+                # continues across the rotation boundary.
+                EventLog._rotate_if_needed(path)
+                try:
+                    prev_hash, needs_nl = _chain_tail(path)
+                except Exception:  # noqa: BLE001 - evidence side only
+                    logger.exception("zee: could not read the tail of %s", path)
+                    prev_hash, needs_nl = None, False
+                prev_hash = prev_hash or GENESIS_HASH
+                chained = dict(record)
+                chained["prev_hash"] = prev_hash
+                chained["record_hash"] = _record_hash(prev_hash, record)
+                line = json.dumps(chained, ensure_ascii=False) + "\n"
+                if needs_nl:
+                    # The previous line is unterminated (crash mid-write):
+                    # keep it as its own (corrupted) line instead of gluing
+                    # this record onto it.
+                    line = "\n" + line
+                # O_CREAT with 0600 → owner-only from the first byte.
+                fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+                try:
+                    os.write(fd, line.encode("utf-8"))
+                finally:
+                    os.close(fd)
+        except Exception:  # noqa: BLE001 - never block notify/containment
+            logger.exception(
+                "zee: failed to append evidence record to %s "
+                "(containment continues; verify with `zee export`)",
+                path,
+            )
+
+
+def verify_chain(path: Path) -> dict[str, Any]:
+    """Verify the hash chain of `path` and all of its rotated segments.
+
+    Segments are read oldest-first (`log_segments`) and checked as one
+    continuous chain. Returns
+        {"files": [segment names], "read_error": str | None,
+         "results": [{"file", "line", "status", ["reason"]}, ...]}
+
+    Per-line status:
+        ok                 — record_hash matches the content, and prev_hash
+                             is GENESIS (first chained record) or the previous
+                             chained record's hash.
+        legacy             — no prev_hash/record_hash, and no chained record
+                             came before it: written before the hash chain
+                             existed. NOT verified.
+        legacy_after_chain — no hashes, but a chained record came before it:
+                             hashes stripped or a line inserted. Anomaly.
+        corrupted          — not valid UTF-8/JSON, not an object, malformed
+                             hash fields, or content does not match
+                             record_hash (the line was edited).
+        chain_break        — prev_hash does not match the previous chained
+                             record: a line was deleted, reordered or replaced.
+        head_missing       — the first chained record does not start at
+                             GENESIS: the start of the log (or an older rotated
+                             segment) is missing.
+        partial            — unparsable final line of the newest segment with
+                             no trailing newline: possibly still being written
+                             (or a crash mid-write). Not counted as tampering.
+
+    `read_error` is set (and verification stops) if any segment cannot be
+    read — callers must report that as "unverifiable", never as "no anomaly".
+
+    What this does NOT detect (honest limits): the hash is unkeyed, so
+    anyone who can write the log can recompute every hash after editing;
+    and removing records from the END of the log (truncation) leaves a
+    valid shorter chain. Nothing here is compared against a record kept
+    elsewhere.
+    """
+    out: dict[str, Any] = {"files": [], "read_error": None, "results": []}
+    results: list[dict[str, Any]] = out["results"]
+    expected: Optional[str] = None  # last chained record's (claimed) hash
+    segs = log_segments(path)
+    for si, seg in enumerate(segs):
+        out["files"].append(seg.name)
+        newest = si == len(segs) - 1
+        try:
+            with seg.open("rb") as f:
+                for ln, raw in enumerate(f):
+                    if not raw.strip():
+                        continue
+                    loc: dict[str, Any] = {"file": seg.name, "line": ln}
+                    try:
+                        rec = json.loads(raw.decode("utf-8"))
+                    except ValueError:
+                        if newest and not raw.endswith(b"\n"):
+                            results.append({**loc, "status": "partial"})
+                        else:
+                            results.append({**loc, "status": "corrupted", "reason": "not valid UTF-8 JSON"})
+                        continue
+                    if not isinstance(rec, dict):
+                        results.append({**loc, "status": "corrupted", "reason": "not a JSON object"})
+                        continue
+                    if "record_hash" not in rec and "prev_hash" not in rec:
+                        results.append({**loc, "status": "legacy" if expected is None else "legacy_after_chain"})
+                        continue
+                    rh, ph = rec.get("record_hash"), rec.get("prev_hash")
+                    if not (_is_hash(rh) and _is_hash(ph)):
+                        results.append({**loc, "status": "corrupted", "reason": "malformed hash fields"})
+                        continue
+                    bare = {k: v for k, v in rec.items() if k not in ("record_hash", "prev_hash")}
+                    try:
+                        matches = _record_hash(ph, bare) == rh
+                    except ValueError:
+                        matches = False
+                    if not matches:
+                        results.append({**loc, "status": "corrupted", "reason": "content does not match record_hash"})
+                    elif expected is None:
+                        results.append({**loc, "status": "ok" if ph == GENESIS_HASH else "head_missing"})
+                    elif ph != expected:
+                        results.append({**loc, "status": "chain_break"})
+                    else:
+                        results.append({**loc, "status": "ok"})
+                    # Keep following the claimed hash so damage stays localised
+                    # to the edited line instead of cascading.
+                    expected = rh
+        except OSError as e:
+            out["read_error"] = f"{seg.name}: {e.__class__.__name__}: {e}"
+            return out
+    return out
