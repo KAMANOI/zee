@@ -177,26 +177,90 @@ def test_missing_rotated_segment_is_detected(tmp_path: Path, monkeypatch):
     assert _statuses(log.events_path) == ["head_missing"]
 
 
-def test_rotation_never_overwrites_a_same_second_segment(tmp_path: Path, monkeypatch):
-    class _Frozen(datetime):
+def _clock(monkeypatch, *instants):
+    """Make events_log's datetime.now() return `instants` in turn (last repeats)."""
+    seq = list(instants)
+
+    class _Fake(datetime):
         @classmethod
         def now(cls, tz=None):
-            return datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc)
+            return seq.pop(0) if len(seq) > 1 else seq[0]
 
-    monkeypatch.setattr(el, "datetime", _Frozen)
+    monkeypatch.setattr(el, "datetime", _Fake)
+
+
+def test_rotation_never_overwrites_a_same_second_segment(tmp_path: Path, monkeypatch):
+    _clock(monkeypatch, datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc))
     p = tmp_path / "events.jsonl"
     for i in range(3):
         p.write_text(f"segment {i}\n")
         EventLog._rotate_if_needed(p, max_bytes=0)
-    names = sorted(x.name for x in tmp_path.glob("events.jsonl.*"))
+    names = [x.name for x in el.log_segments(p)]
     assert names == [
-        "events.jsonl.20261001_000000",
-        "events.jsonl.20261001_000000_001",
-        "events.jsonl.20261001_000000_002",
+        "events.jsonl.r000001_20261001_000000",
+        "events.jsonl.r000002_20261001_000000",
+        "events.jsonl.r000003_20261001_000000",
     ]
     assert [(tmp_path / n).read_text() for n in names] == [
         "segment 0\n", "segment 1\n", "segment 2\n",
     ]
+
+
+def test_clock_going_backwards_keeps_segment_order_and_chain(tmp_path: Path, monkeypatch):
+    # Codex re-review #2: A rotated at 00:00:02, then B at 00:00:01 (clock
+    # stepped back). Order and chaining must follow rotation order, not time.
+    _clock(
+        monkeypatch,
+        datetime(2026, 10, 1, 0, 0, 2, tzinfo=timezone.utc),
+        datetime(2026, 10, 1, 0, 0, 1, tzinfo=timezone.utc),
+        datetime(2026, 10, 1, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    _force_rotation(monkeypatch)
+    log = EventLog(log_dir=tmp_path)
+    for name in ("A", "B", "C"):
+        log.record_event(_event(name))
+    v = verify_chain(log.events_path)
+    assert [r["status"] for r in v["results"]] == ["ok", "ok", "ok"]
+    assert v["files"][0].startswith("events.jsonl.r000001_")
+    assert v["files"][1].startswith("events.jsonl.r000002_")
+
+
+def test_legacy_named_segments_sort_before_sequenced_ones(tmp_path: Path, monkeypatch):
+    p = tmp_path / "events.jsonl"
+    (tmp_path / "events.jsonl.20991231_235959").write_text("x\n")  # Zee <= 0.10.x name
+    (tmp_path / "events.jsonl.r000001_20000101_000000").write_text("y\n")
+    (tmp_path / "events.jsonl.bak").write_text("not a segment\n")
+    assert [x.name for x in el.log_segments(p)] == [
+        "events.jsonl.20991231_235959", "events.jsonl.r000001_20000101_000000",
+    ]
+
+
+def test_unlistable_directory_is_a_read_error_not_no_records(tmp_path: Path, monkeypatch):
+    # Codex re-review #3
+    log = _seed(tmp_path, 1)
+
+    def boom(_):
+        raise PermissionError("simulated: cannot list directory")
+
+    monkeypatch.setattr(el.os, "scandir", boom)
+    v = verify_chain(log.events_path)
+    assert v["read_error"] and "cannot list" in v["read_error"]
+
+
+def test_short_writes_are_completed(tmp_path: Path, monkeypatch):
+    # Codex re-review #4: os.write may write fewer bytes than asked.
+    real = os.write
+    monkeypatch.setattr(el, "_raw_write", lambda fd, b: real(fd, bytes(b[:20])))
+    log = _seed(tmp_path, 3)
+    assert _statuses(log.events_path) == ["ok", "ok", "ok"]
+
+
+def test_no_progress_write_is_logged_as_failure(tmp_path: Path, monkeypatch, caplog):
+    monkeypatch.setattr(el, "_raw_write", lambda fd, b: 0)
+    log = EventLog(log_dir=tmp_path)
+    log.record_event(_event("lost"))  # must not raise
+    assert "failed to append evidence record" in caplog.text
+    assert "no progress" in caplog.text
 
 
 def test_concurrent_thread_appends_keep_the_chain(tmp_path: Path):

@@ -63,10 +63,16 @@ class EventReader:
     # ---- raw → canonical -------------------------------------------------
 
     def _iter_raw(self):
-        # Rotated segments (events.jsonl.YYYYMMDD_HHMMSS) first, then the
+        # Rotated segments (events.jsonl.rNNNNNN_*, legacy events.jsonl.YYYYMMDD_HHMMSS) first, then the
         # current file — otherwise events older than the last 10 MB
         # rotation silently vanish from queries and from `zee export`.
-        for seg in log_segments(self.events_path):
+        try:
+            segs = log_segments(self.events_path)
+        except OSError:
+            # Directory not listable: verify_chain reports the same failure
+            # as read_error ("unverifiable") in the export.
+            segs = [self.events_path] if self.events_path.exists() else []
+        for seg in segs:
             try:
                 with seg.open(encoding="utf-8", errors="replace") as f:
                     lines = list(f)

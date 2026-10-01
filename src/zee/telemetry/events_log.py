@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,8 +52,14 @@ _LOG_ROTATE_MAX_BYTES: int = 10 * 1024 * 1024  # 10 MB
 GENESIS_HASH: str = "0" * 64
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
-# Rotated segment names written by _rotate_if_needed: <name>.YYYYMMDD_HHMMSS[_NNN]
-_ROTATED_SUFFIX = re.compile(r"\.\d{8}_\d{6}(_\d{3,})?")
+# Rotated segment names.
+#   current: <name>.rNNNNNN_YYYYMMDD_HHMMSS — ordered by the sequence number
+#            (max existing + 1), never by the wall clock, so a clock step
+#            backwards cannot reorder segments. The timestamp is for humans.
+#   legacy:  <name>.YYYYMMDD_HHMMSS[_NNN] — written by Zee <= 0.10.x; sorted by
+#            name and always placed before every sequence-numbered segment.
+_ROTATED_SEQ = re.compile(r"\.r(\d{6,})_\d{8}_\d{6}")
+_ROTATED_LEGACY = re.compile(r"\.\d{8}_\d{6}(_\d{3,})?")
 # How far back from EOF the writer looks for the last chained record.
 # ponytail: a record is a few hundred bytes; if 64 KiB of trailing garbage
 # hides every hash, the next record restarts at GENESIS and verify_chain
@@ -61,6 +68,13 @@ _TAIL_WINDOW: int = 64 * 1024
 # ponytail: one in-process lock for every log file; per-path locks if
 # contention between events.jsonl and metrics.jsonl ever matters.
 _APPEND_LOCK = threading.Lock()
+# Upper bound on waiting for either lock. A stuck holder (another thread, or
+# another process holding the flock) must not stall notify / containment:
+# on timeout the evidence record is logged as failed and the defence goes on.
+_LOCK_TIMEOUT_SEC: float = 2.0
+# Indirection so tests can simulate short writes / ENOSPC without patching
+# os.write for the whole interpreter.
+_raw_write = os.write
 
 # verify_chain statuses that mean "something is wrong with the evidence".
 TAMPER_STATUSES = frozenset({"corrupted", "chain_break", "head_missing", "legacy_after_chain"})
@@ -84,22 +98,39 @@ def _is_hash(v: Any) -> bool:
     return isinstance(v, str) and _HEX64.fullmatch(v) is not None
 
 
+def _rotated_segments(path: Path) -> list[Path]:
+    """Rotated segments of `path`, oldest first. Raises OSError if the
+    directory cannot be listed (a missing directory means "none")."""
+    try:
+        entries = list(os.scandir(path.parent))
+    except FileNotFoundError:
+        return []
+    keyed: list[tuple[tuple[int, int, str], Path]] = []
+    prefix = path.name + "."
+    for e in entries:
+        if not e.name.startswith(prefix):
+            continue
+        suffix = e.name[len(path.name):]
+        m = _ROTATED_SEQ.fullmatch(suffix)
+        if m:
+            key = (1, int(m.group(1)), "")
+        elif _ROTATED_LEGACY.fullmatch(suffix):
+            key = (0, 0, e.name)
+        else:
+            continue
+        if e.is_file():
+            keyed.append((key, Path(e.path)))
+    keyed.sort(key=lambda kp: kp[0])
+    return [p for _, p in keyed]
+
+
 def log_segments(path: Path) -> list[Path]:
     """Rotated segments of `path` (oldest first) followed by `path` itself.
 
-    Rotation names sort chronologically as plain strings (zero-padded
-    UTC timestamp, zero-padded collision counter), so reading in this
-    order reconstructs the original append order.
+    Raises OSError when the directory cannot be listed — callers must treat
+    that as "unverifiable", never as "no records".
     """
-    rotated: list[Path] = []
-    try:
-        for p in path.parent.glob(path.name + ".*"):
-            if _ROTATED_SUFFIX.fullmatch(p.name[len(path.name):]) and p.is_file():
-                rotated.append(p)
-    except OSError:
-        pass
-    rotated.sort(key=lambda p: p.name)
-    return rotated + ([path] if path.exists() else [])
+    return _rotated_segments(path) + ([path] if path.exists() else [])
 
 
 def _tail(path: Path) -> tuple[Optional[str], bool, bool]:
@@ -140,46 +171,78 @@ def _tail(path: Path) -> tuple[Optional[str], bool, bool]:
 def _chain_tail(path: Path) -> tuple[Optional[str], bool]:
     """(hash to chain the next record from, current file needs a leading newline).
 
-    Falls back to the newest rotated segment only while the current file
-    is missing/empty (i.e. right after a rotation).
+    Looks at the current file first; only when it is missing/empty does it
+    fall back to the newest rotated segment (directory listed only then).
     """
-    needs_nl = False
-    for i, seg in enumerate(reversed(log_segments(path))):
-        h, nonempty, ends_nl = _tail(seg)
-        if i == 0 and seg == path:
-            needs_nl = nonempty and not ends_nl
+    h, nonempty, ends_nl = _tail(path)
+    if h is not None or nonempty:
+        return h, nonempty and not ends_nl
+    for seg in reversed(_rotated_segments(path)):
+        h, nonempty, _ = _tail(seg)
         if h is not None or nonempty:
-            return h, needs_nl
-    return None, needs_nl
+            return h, False
+    return None, False
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """os.write until every byte is written; no progress → OSError."""
+    view = memoryview(data)
+    while view:
+        n = _raw_write(fd, view)
+        if not n or n < 0:
+            raise OSError(f"write made no progress ({len(view)} bytes left)")
+        view = view[n:]
 
 
 @contextmanager
 def _locked(path: Path) -> Iterator[None]:
     """Serialise tail-read + rotate + append across threads AND processes.
 
-    The lock lives in a sidecar file (dot-prefixed, so it never matches
-    the rotated-segment pattern) because rotation renames the data file.
+    Both locks are bounded by _LOCK_TIMEOUT_SEC; on timeout this raises
+    TimeoutError (caught in `_append`, so the defence continues). The file
+    lock lives in a sidecar file (dot-prefixed, so it never matches the
+    rotated-segment patterns) because rotation renames the data file.
     """
-    lock_path = path.parent / f".{path.name}.lock"
-    with _APPEND_LOCK:
+    timeout = _LOCK_TIMEOUT_SEC
+    deadline = time.monotonic() + timeout
+    if not _APPEND_LOCK.acquire(timeout=timeout):
+        raise TimeoutError(f"zee log lock (in-process) not acquired within {timeout}s")
+    try:
+        lock_path = path.parent / f".{path.name}.lock"
         fd = os.open(
             lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600
         )
         try:
-            if fcntl is not None:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-            elif msvcrt is not None:  # pragma: no cover - Windows
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-            yield
-        finally:
+            while True:
+                try:
+                    if fcntl is not None:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    elif msvcrt is not None:  # pragma: no cover - Windows
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    break
+                except BlockingIOError:
+                    pass
+                except OSError:
+                    if fcntl is not None:
+                        raise
+                    # pragma: no cover - msvcrt reports "locked" as OSError
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        f"zee log lock ({lock_path.name}) not acquired within {timeout}s"
+                    )
+                time.sleep(0.01)
             try:
+                yield
+            finally:
                 if fcntl is not None:
                     fcntl.flock(fd, fcntl.LOCK_UN)
                 elif msvcrt is not None:  # pragma: no cover - Windows
                     os.lseek(fd, 0, os.SEEK_SET)
                     msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            finally:
-                os.close(fd)
+        finally:
+            os.close(fd)
+    finally:
+        _APPEND_LOCK.release()
 
 
 def default_log_dir() -> Path:
@@ -293,47 +356,51 @@ class EventLog:
 
     @staticmethod
     def _rotate_if_needed(path: Path, max_bytes: int = _LOG_ROTATE_MAX_BYTES) -> None:
-        """Rename path → path.YYYYMMDD_HHMMSS[_NNN] when it exceeds max_bytes.
+        """Rename path → path.rNNNNNN_YYYYMMDD_HHMMSS when it exceeds max_bytes.
 
-        Old files are kept indefinitely — logs are evidence and must not be
-        deleted automatically. A name collision (two rotations within one
-        second) gets a counter suffix instead of silently replacing the
-        older segment. Rotation failure is swallowed so it never blocks
-        event recording. Called only under `_locked(path)`.
+        NNNNNN is the highest existing sequence number + 1, so segment order
+        never depends on the wall clock. Old files are kept indefinitely —
+        logs are evidence and must not be deleted automatically. Rotation
+        failure is swallowed so it never blocks event recording. Called
+        only under `_locked(path)`.
         """
         try:
             if path.exists() and path.stat().st_size >= max_bytes:
+                seq = 1 + max(
+                    (int(m.group(1)) for p in _rotated_segments(path)
+                     if (m := _ROTATED_SEQ.fullmatch(p.name[len(path.name):]))),
+                    default=0,
+                )
                 ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-                rotated = path.parent / f"{path.name}.{ts}"
-                n = 0
-                while rotated.exists():
-                    n += 1
-                    rotated = path.parent / f"{path.name}.{ts}_{n:03d}"
-                path.rename(rotated)
+                rotated = path.parent / f"{path.name}.r{seq:06d}_{ts}"
+                if not rotated.exists():
+                    path.rename(rotated)
         except OSError:
             pass
 
     @staticmethod
     def _append(path: Path, record: dict[str, Any]) -> None:
-        """Append one hash-chained record. NEVER raises.
+        """Append one hash-chained record. NEVER raises, never blocks for long.
 
         Every record_* call — including record_event(), which
         responder.sequence.handle() calls BEFORE notifying and cutting —
-        routes through here. A broken, unreadable or full evidence log must
-        not stop the defence: the failure is logged and swallowed, and the
-        missing/broken record shows up later in verify_chain / zee export.
+        routes through here. A broken, unreadable, full or locked evidence
+        log must not stop the defence: lock waits are bounded, the failure
+        is logged and swallowed, and the missing/broken record shows up
+        later in verify_chain / zee export.
         """
         try:
             with _locked(path):
-                # Rotate first: _chain_tail() falls back to the just-rotated
-                # segment when the current file is empty, so the chain
-                # continues across the rotation boundary.
-                EventLog._rotate_if_needed(path)
+                # Read the tail BEFORE rotating and carry it over, so the new
+                # segment chains from the record that was really last.
                 try:
                     prev_hash, needs_nl = _chain_tail(path)
                 except Exception:  # noqa: BLE001 - evidence side only
                     logger.exception("zee: could not read the tail of %s", path)
                     prev_hash, needs_nl = None, False
+                EventLog._rotate_if_needed(path)
+                if not path.exists():
+                    needs_nl = False  # fresh segment after rotation
                 prev_hash = prev_hash or GENESIS_HASH
                 chained = dict(record)
                 chained["prev_hash"] = prev_hash
@@ -347,7 +414,7 @@ class EventLog:
                 # O_CREAT with 0600 → owner-only from the first byte.
                 fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
                 try:
-                    os.write(fd, line.encode("utf-8"))
+                    _write_all(fd, line.encode("utf-8"))
                 finally:
                     os.close(fd)
         except Exception:  # noqa: BLE001 - never block notify/containment
@@ -399,7 +466,11 @@ def verify_chain(path: Path) -> dict[str, Any]:
     out: dict[str, Any] = {"files": [], "read_error": None, "results": []}
     results: list[dict[str, Any]] = out["results"]
     expected: Optional[str] = None  # last chained record's (claimed) hash
-    segs = log_segments(path)
+    try:
+        segs = log_segments(path)
+    except OSError as e:
+        out["read_error"] = f"{path.parent}: cannot list log segments: {e.__class__.__name__}: {e}"
+        return out
     for si, seg in enumerate(segs):
         out["files"].append(seg.name)
         newest = si == len(segs) - 1
