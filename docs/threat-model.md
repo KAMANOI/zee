@@ -98,7 +98,7 @@ In CI, pin the Action as `uses: KAMANOI/zee@<tag|sha>`.
 ## Evidence store and containment export
 
 Covers `events.jsonl` / `metrics.jsonl` (including rotated
-`*.YYYYMMDD_HHMMSS` segments), `zee export`, and the MCP tool
+`*.rNNNNNN_YYYYMMDD_HHMMSS` segments, ordered by sequence number, not by clock; legacy `*.YYYYMMDD_HHMMSS` names are read first), `zee export`, and the MCP tool
 `query_containment_report`.
 
 | Threat | What Zee does | Limit |
@@ -106,7 +106,7 @@ Covers `events.jsonl` / `metrics.jsonl` (including rotated
 | A local attacker edits, deletes or reorders a log line | Each record carries `prev_hash` / `record_hash` (SHA-256 chain, starting at a fixed genesis value). `zee export` verifies all segments in order and reports `corrupted`, `chain_break`, `head_missing`, `legacy_after_chain`. | The hash is **unkeyed**. Zee assumes the attacker is on the host (ARCHITECTURE.md), and an attacker who can write the log can recompute every hash. Detection holds only against edits that do not recompute the chain. |
 | Records removed from the end of the log | — | **Not detected.** A truncated chain is still a valid chain. Nothing is anchored outside the host. |
 | Older rotated segments moved away | Reported as `head_missing`. | Cannot tell an operator's clean-up from an attacker's. |
-| A corrupted or unreadable log blocks containment | Every append is wrapped: failures are logged and swallowed, so `responder.sequence.handle()` still notifies and cuts. Concurrent appends (threads and processes) are serialised with a lock; only the last 64 KiB is read per append. | A failed append loses that evidence record (it is logged to the Zee logger only). |
+| A corrupted or unreadable log blocks containment | Every append is wrapped: failures are logged and swallowed, so `responder.sequence.handle()` still notifies and cuts. Concurrent appends (threads and processes) are serialised with a lock whose wait is bounded (2 s); a held lock, short write or full disk makes that one record fail, not the defence. Only the last 64 KiB is read per append. | A failed append loses that evidence record (it is logged to the Zee logger only). A stuck lock holder can delay notification by up to the lock timeout. |
 | Export output overwrites or leaks a file | Output is written to `O_EXCL` + `O_NOFOLLOW` temp files at 0600 and moved into place only after both are complete; an existing file or symlink at the target stops the export (Z701) unless `--force`, which replaces the link itself, never its target. | A failed run can leave a 0600 temp file next to the target (named in the error). |
 | Recipient trusts the export as proof | `chain_verification` states what was checked; `export_sha256` covers the export itself. | The export carries no per-line hashes, so the recipient cannot re-verify the chain; they rely on Zee's local result. `export_sha256` shows only that the export was not changed after it was produced (if a copy was kept elsewhere). |
 | Sensitive data in the export | `detail` (may contain paths) is masked unless `--no-redact`. MCP follows the server's redaction setting and returns at most `limit` events (default 50). | `asset_id` is not masked. Operators must not put personal or customer names in asset ids. |

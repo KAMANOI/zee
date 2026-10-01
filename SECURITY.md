@@ -141,7 +141,9 @@ honestly-published boundaries of what Zee is and is not:
   long-running deployments.** `events.jsonl` and `metrics.jsonl`
   accumulate every trap event and latency record indefinitely. Zee
   auto-rotates each file on next write when it exceeds 10 MB (renaming
-  it to `<file>.YYYYMMDD_HHMMSS` and starting a fresh log); rotated files
+  it to `<file>.rNNNNNN_YYYYMMDD_HHMMSS` — a sequence number that does not
+  depend on the clock — and starting a fresh log; Zee <= 0.10.x used
+  `<file>.YYYYMMDD_HHMMSS`, which is still read); rotated files
   are kept permanently — never auto-deleted — because they are
   evidence. For deployments that expect high event volume, also plan
   a manual archiving schedule.

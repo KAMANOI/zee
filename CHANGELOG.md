@@ -17,7 +17,10 @@ releases.
   link itself), and `--since` / `--until` are parsed strictly (`Z702`; no
   timezone = UTC, date only = 00:00 UTC). `detail` is masked unless
   `--no-redact`. Exit code 1 when the chain check finds a problem or the
-  log cannot be read ("unverifiable").
+  log (or its directory listing) cannot be read ("unverifiable"). An
+  empty `--since ""` is rejected, not treated as "no limit". Without
+  `--force`, publishing uses a hard link, so a file created at the target
+  during the run is never overwritten.
 - **MCP `query_containment_report`** — same content, read-only, at most
   `limit` events (default 50, max 1000); counts always cover the whole
   period.
@@ -36,7 +39,13 @@ releases.
 - Appends to the evidence log are serialised across threads and
   processes, read only the last 64 KiB, and never raise: a broken,
   unreadable or full log no longer stops notification or containment.
-- Rotation never overwrites a segment rotated in the same second.
+- Rotated segments are named `<file>.rNNNNNN_YYYYMMDD_HHMMSS` and ordered
+  by the sequence number, so a clock step backwards cannot reorder them;
+  the last hash is read before rotating and carried into the new file.
+  Older `<file>.YYYYMMDD_HHMMSS` segments are still read (first).
+- Waiting for the log locks is bounded (2 s); short writes are retried
+  until complete. Either failure loses that one record (logged), never the
+  notification or the cut.
 - Constructing `CutStateLog` no longer creates or chmods the state
   directory (read paths such as `zee status` and MCP stay side-effect free).
 
