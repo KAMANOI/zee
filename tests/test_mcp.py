@@ -339,6 +339,8 @@ def test_containment_report_tool_caps_events_but_counts_all(tmp_path):
     "args",
     [
         {"since": "garbage"},
+        {"since": ""},
+        {"until": "0001-01-01T00:00:00+09:00"},
         {"since": "2026-12-01T00:00:00+00:00", "until": "2026-01-01T00:00:00+00:00"},
     ],
 )

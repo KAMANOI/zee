@@ -169,21 +169,47 @@ def test_export_write_error_is_z701_and_partial_is_0600(tmp_path, monkeypatch, c
     _setup(tmp_path, monkeypatch)
     import zee.cli as cli
 
-    real_replace = os.replace
+    real_link = os.link
     calls = []
 
-    def flaky_replace(src, dst):
+    def flaky_link(src, dst, **kw):
         calls.append(dst)
         if len(calls) == 2:
             raise OSError("simulated failure on the second file")
-        return real_replace(src, dst)
+        return real_link(src, dst, **kw)
 
-    monkeypatch.setattr(cli.os, "replace", flaky_replace)
+    monkeypatch.setattr(cli.os, "link", flaky_link)
     rc = main(["export", "--out", str(tmp_path / "report")])
     assert rc != 0 and "Z701" in capsys.readouterr().err
     for p in tmp_path.iterdir():
         if p.is_file():
             assert p.stat().st_mode & 0o077 == 0, f"{p} readable by others"
+
+
+def test_export_never_overwrites_a_file_created_during_the_run(tmp_path, monkeypatch, capsys):
+    # Codex re-review #5: a file planted after the existence check but
+    # before publishing must survive without --force.
+    _setup(tmp_path, monkeypatch)
+    import zee.cli as cli
+
+    real_link = os.link
+
+    def racing_link(src, dst, **kw):
+        Path(dst).write_text("planted by someone else")
+        return real_link(src, dst, **kw)
+
+    monkeypatch.setattr(cli.os, "link", racing_link)
+    rc = main(["export", "--out", str(tmp_path / "report")])
+    assert rc != 0 and "Z701" in capsys.readouterr().err
+    assert (tmp_path / "report.json").read_text() == "planted by someone else"
+
+
+def test_export_leaves_no_temp_files_on_success(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch)
+    assert main(["export", "--out", str(tmp_path / "report")]) == 0
+    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == [
+        "report.json", "report.txt",
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -200,7 +226,12 @@ def _seed_at(log_dir: Path, *stamps: str) -> None:
         ))
 
 
-@pytest.mark.parametrize("bad", ["not-a-date", "2026-13-01", "yesterday"])
+@pytest.mark.parametrize(
+    "bad",
+    # "" : an unset shell variable must not silently mean "everything" (re-review #6)
+    # 0001-01-01T00:00:00+09:00 : OverflowError when converted to UTC (re-review #7)
+    ["not-a-date", "2026-13-01", "yesterday", "", "0001-01-01T00:00:00+09:00"],
+)
 def test_export_rejects_malformed_since(tmp_path, monkeypatch, capsys, bad):
     _setup(tmp_path, monkeypatch)
     rc = main(["export", "--out", str(tmp_path / "r"), "--since", bad])

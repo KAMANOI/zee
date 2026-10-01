@@ -60,15 +60,18 @@ def _canonical(obj: Any) -> str:
 
 
 def _parse_bound(name: str, value: Optional[str]) -> Optional[datetime]:
-    if value is None or value == "":
+    # Only None means "no bound". An explicit "" (e.g. `--since "$UNSET"`)
+    # is an error, never "everything".
+    if value is None:
         return None
     try:
         dt = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        raise ZeeError(Z702_INVALID_TIME_RANGE, f"{name}={value!r} は ISO8601 として解釈できません")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)  # TZ省略 = UTC（日付のみ = その日 00:00 UTC）
-    return dt.astimezone(timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)  # TZ省略 = UTC（日付のみ = その日 00:00 UTC）
+        return dt.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: e.g. 0001-01-01T00:00:00+09:00 falls before year 1 in UTC.
+        raise ZeeError(Z702_INVALID_TIME_RANGE, f"{name}={value!r} は ISO8601 の日時として扱えません")
 
 
 def parse_period(since: Optional[str], until: Optional[str]) -> tuple[Optional[str], Optional[str]]:

@@ -258,12 +258,13 @@ def _write_private_files(outputs: list[tuple[Path, str]], force: bool) -> None:
     2. Write every payload to a sibling temp file created
        O_CREAT|O_EXCL|O_NOFOLLOW at 0600, so partial content is never
        readable by other users and a pre-planted link is never followed.
-    3. Only after ALL temps are complete, move each into place with
-       os.replace (which replaces a link itself, never its target).
-       Without --force the final name is first claimed O_EXCL, so a file
-       that appeared after step 1 is still not overwritten.
+    3. Only after ALL temps are complete, publish each one.
+       Without --force: os.link(temp, target), which fails atomically if
+       the target exists by then (a file or link that appeared after step
+       1 is never overwritten); the temp name is then released.
+       With --force: os.replace (replaces a link itself, never its target).
     On failure, already-written temp files stay behind at 0600 and are
-    named in the error (Zee does not delete files).
+    named in the error.
     """
     from .errors import Z701_EXPORT_OUTPUT_NOT_WRITABLE
 
@@ -284,9 +285,19 @@ def _write_private_files(outputs: list[tuple[Path, str]], force: bool) -> None:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(text)
         for tmp, final in temps:
-            if not force:
-                os.close(os.open(final, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600))
-            os.replace(tmp, final)
+            if force:
+                os.replace(tmp, final)
+            else:
+                os.link(tmp, final, follow_symlinks=False)
+                # Only drops the temp NAME of the file just published at `final`.
+                os.unlink(tmp)
+    except FileExistsError as e:
+        left = [str(t) for t, _ in temps if os.path.lexists(t)]
+        raise ZeeError(
+            Z701_EXPORT_OUTPUT_NOT_WRITABLE,
+            f"書き込み中に出力先が作られました（上書きしません）: {e.filename}"
+            + (f"（一時ファイル・所有者のみ読み取り可: {', '.join(left)}）" if left else ""),
+        ) from e
     except OSError as e:
         left = [str(t) for t, _ in temps if os.path.lexists(t)]
         hint = f"（書きかけの一時ファイル・所有者のみ読み取り可: {', '.join(left)}）" if left else ""
