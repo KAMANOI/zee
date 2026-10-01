@@ -343,7 +343,10 @@ def test_event_just_inside_30d_boundary_included(tmp_path):
     """An event 10 s inside the 30d window must be included (boundary-inclusive)."""
     # Add a 10s margin so compute()'s fresh datetime.now() doesn't push the
     # cutoff past this timestamp.
-    ts_inside = NOW - timedelta(days=30) + timedelta(seconds=10)
+    # Use a fresh "now", not the module-level NOW: NOW is taken at import
+    # (collection) time, and once the suite runs longer than the margin
+    # (it did on Windows CI: 12.6 s) the "inside" event falls outside.
+    ts_inside = datetime.now(timezone.utc) - timedelta(days=30) + timedelta(seconds=10)
     events_path = tmp_path / "events.jsonl"
     _write_events(events_path, [
         _trap("host-a", "change", ts_inside.isoformat()),
