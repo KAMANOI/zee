@@ -289,6 +289,34 @@ def test_read_tools_have_readonly_hint(tmp_path):
     tools = {t.name: t for t in asyncio.run(mcp.list_tools())}
     assert getattr(tools["query_events"].annotations, "readOnlyHint", None) is True
     assert getattr(tools["health_check"].annotations, "readOnlyHint", None) is True
+    assert (
+        getattr(tools["query_containment_report"].annotations, "readOnlyHint", None)
+        is True
+    )
     # propose tools are present
     assert "propose_release" in tools
     assert "propose_restore" in tools
+
+
+# --------------------------------------------------------------------------
+# query_containment_report: read-only, writes nothing, respects redaction
+# --------------------------------------------------------------------------
+
+def test_containment_report_tool_writes_no_files(tmp_path):
+    _write_event(tmp_path)
+    before = set(tmp_path.iterdir())
+    mcp = build_server(config=McpConfig(), log_dir=tmp_path, config_path=None)
+    report = _call(mcp, "query_containment_report", {})
+    after = set(tmp_path.iterdir())
+    # mcp_audit.jsonl is expected (every access is audited); nothing else appears.
+    assert after - before <= {tmp_path / "mcp_audit.jsonl"}
+    assert report["schema_version"] == "1"
+    assert len(report["events"]) == 1
+    assert "export_sha256" in report
+
+
+def test_containment_report_tool_redacts_by_default(tmp_path):
+    _write_event(tmp_path)
+    mcp = build_server(config=McpConfig(), log_dir=tmp_path, config_path=None)
+    report = _call(mcp, "query_containment_report", {})
+    assert report["events"][0]["detail"] == "[redacted]"

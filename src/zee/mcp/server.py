@@ -157,6 +157,31 @@ def build_server(
         audit.record("tool:health_check")
         return reader.health_check()
 
+    @mcp.tool(annotations=_RO)
+    def query_containment_report(
+        since: Optional[str] = None, until: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Build a containment-report export (same content as `zee export`)
+        and return it inline — read-only, writes nothing to disk. Zee does
+        not access, contact, or neutralise attacker infrastructure (that
+        is limited by law to the police / Self-Defense Forces); this is
+        evidence for a report the human chooses to file, never a
+        submission itself. Paths in `detail` are redacted per this
+        server's configuration, same as `query_events`."""
+        audit.record(
+            "tool:query_containment_report", {"since": since, "until": until}
+        )
+        from ..telemetry.report_export import attach_digest, build_export
+
+        export = build_export(
+            log_dir=reader.log_dir,
+            since=since,
+            until=until,
+            redact_paths=cfg.redact_paths,
+        )
+        export, _digest = attach_digest(export)
+        return export
+
     # ---- Propose tools (never execute in v0.6.0) ------------------------
 
     def _proposal_only() -> bool:

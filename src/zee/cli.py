@@ -249,6 +249,66 @@ def _cmd_cut(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    """Containment report export — read-only, writes local files only.
+
+    Zee does not access, contact, or neutralise an attacker's
+    infrastructure (that is limited by law to the police / Self-Defense
+    Forces since 2026-10-01, see README 法制度との関係). This packages
+    what Zee already recorded — hash-chain-verified containment
+    events — into a file the operator can choose to hand to whoever
+    they report to. It never submits anything itself.
+    """
+    import json as _json
+
+    from .errors import Z701_EXPORT_OUTPUT_NOT_WRITABLE, Z702_INVALID_TIME_RANGE
+    from .telemetry.events_log import default_log_dir
+    from .telemetry.report_export import attach_digest, build_export, render_text
+
+    if args.since and args.until and args.since > args.until:
+        raise ZeeError(Z702_INVALID_TIME_RANGE, f"since={args.since} until={args.until}")
+
+    export = build_export(
+        log_dir=default_log_dir(),
+        since=args.since,
+        until=args.until,
+        redact_paths=not args.no_redact,
+    )
+    export, digest = attach_digest(export)
+
+    out_json = Path(args.out).with_suffix(".json")
+    out_text = Path(args.out).with_suffix(".txt")
+    try:
+        out_json.write_text(
+            _json.dumps(export, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        out_text.write_text(render_text(export), encoding="utf-8")
+    except OSError as e:
+        raise ZeeError(Z701_EXPORT_OUTPUT_NOT_WRITABLE, str(e)) from e
+
+    print(f"[zee export] wrote {out_json}", file=sys.stderr)
+    print(f"[zee export] wrote {out_text}", file=sys.stderr)
+    print(f"[zee export] export_sha256: {digest}", file=sys.stderr)
+    print(
+        "[zee export] record that digest somewhere OTHER than these two "
+        "files (e.g. in your submission email) — a copy stored next to "
+        "the export proves nothing if the export itself was replaced.",
+        file=sys.stderr,
+    )
+    tamper = (
+        export["chain_verification"]["events_jsonl"]["tamper_suspected"]
+        or export["chain_verification"]["metrics_jsonl"]["tamper_suspected"]
+    )
+    if tamper:
+        print(
+            "[zee export] WARNING: hash-chain verification found a "
+            "corrupted or missing record in the local log — see "
+            "chain_verification in the JSON output.",
+            file=sys.stderr,
+        )
+    return 1 if tamper else 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     from .telemetry.status import compute, render
     report = compute()
@@ -444,6 +504,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_status.set_defaults(func=_cmd_status)
 
+    p_export = sub.add_parser(
+        "export",
+        help="export containment evidence for a report to police / "
+        "JPCERT/CC / your own compliance process (read-only, local "
+        "files only — Zee never submits anything itself)",
+    )
+    p_export.add_argument(
+        "--out", required=True,
+        help="output path prefix; writes <prefix>.json and <prefix>.txt",
+    )
+    p_export.add_argument(
+        "--since", default=None,
+        help="ISO8601 timestamp; only include events at or after this time",
+    )
+    p_export.add_argument(
+        "--until", default=None,
+        help="ISO8601 timestamp; only include events at or before this time",
+    )
+    p_export.add_argument(
+        "--no-redact", action="store_true",
+        help="include unmasked free-text detail (paths) in the export; "
+        "default masks it, matching the MCP layer's default",
+    )
+    p_export.set_defaults(func=_cmd_export)
+
     p_cap = sub.add_parser(
         "capability", help="print the detection-capability matrix for this OS"
     )
@@ -550,6 +635,7 @@ _USER_INPUT_CODES = frozenset({
     "Z602",  # restore token required
     "Z603",  # restore token not initialised
     "Z604",  # restore token invalid
+    "Z702",  # export: invalid --since/--until
 })
 
 

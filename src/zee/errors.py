@@ -7,6 +7,7 @@ Code ranges:
     Z4xx — responder (containment)
     Z5xx — notifier
     Z6xx — recovery
+    Z7xx — containment report export
     Z9xx — unexpected internal errors
 
 User-reported issues should be traceable from the code alone.
@@ -43,6 +44,10 @@ Z601_RESTORE_FAILED = ("Z601", "復旧コマンドの実行に失敗しました
 Z602_RESTORE_TOKEN_REQUIRED = ("Z602", "復旧トークンが必要です。--token または ZEE_RESTORE_TOKEN を指定してください")
 Z603_RESTORE_TOKEN_NOT_INITIALIZED = ("Z603", "復旧トークンが未初期化です。`zee init-restore-token` を最初に実行してください")
 Z604_RESTORE_TOKEN_INVALID = ("Z604", "復旧トークンが一致しません")
+
+# Z7xx
+Z701_EXPORT_OUTPUT_NOT_WRITABLE = ("Z701", "エクスポート出力先に書き込めません")
+Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正、または since が until より後です")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")
