@@ -1,0 +1,3 @@
+# Disposable per-run sandbox dirs created by run_demo.sh — fake files only,
+# never worth committing.
+.run/

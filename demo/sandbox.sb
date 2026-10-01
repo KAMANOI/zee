@@ -1,0 +1,43 @@
+; Zee demo isolation profile (macOS sandbox-exec / Seatbelt).
+;
+; Same technique Zee's own entry gate already uses to detonate untrusted
+; code safely (src/zee/gate/sandbox/profile.py) — reused here instead of
+; a Docker/VM layer because neither is installed on this machine and this
+; host has very little free memory to spare for a new hypervisor/daemon
+; (see demo/README.md "隔離環境の選定" for the measurement and reasoning).
+;
+; Effect: the wrapped process can read ordinary system files (so the
+; Python interpreter loads normally) but CANNOT read anywhere under
+; /Users except SANDBOX_DIR, CANNOT write anywhere except SANDBOX_DIR,
+; and CANNOT reach the network at all. Launch with:
+;   sandbox-exec -D SANDBOX_DIR=<realpath> -f demo/sandbox.sb <command...>
+;
+; Note (learned from Zee's own profile): sandbox-exec matches the
+; *resolved* path, so SANDBOX_DIR must be passed as a realpath, and SBPL
+; uses "last matching rule wins" — the two file-read* lines below are
+; ordered deliberately (broad allow, then deny homes, then re-allow just
+; the sandbox).
+
+(version 1)
+(deny default)
+(allow process-fork)
+(allow process-exec*)
+(allow signal (target self))
+(allow sysctl-read)
+(allow mach-lookup)
+
+(allow file-read*)
+(deny file-read*
+    (subpath "/Users")
+    (subpath "/private/var/root"))
+(allow file-read* (subpath (param "SANDBOX_DIR")))
+(allow file-write* (subpath (param "SANDBOX_DIR")))
+
+(allow file-write-data
+    (literal "/dev/null")
+    (literal "/dev/tty")
+    (literal "/dev/stdout")
+    (literal "/dev/stderr"))
+(allow file-ioctl (literal "/dev/tty"))
+
+(deny network*)
