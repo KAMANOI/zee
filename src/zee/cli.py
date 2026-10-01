@@ -283,6 +283,15 @@ def _cmd_export(args: argparse.Namespace) -> int:
             _json.dumps(export, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         out_text.write_text(render_text(export), encoding="utf-8")
+        # Same owner-only policy as events.jsonl/metrics.jsonl (events_log.py):
+        # this contains the same event details (asset ids, timestamps, and
+        # unredacted paths if --no-redact), so it gets the same 0600, not
+        # the 0644 default write_text() leaves under a typical umask.
+        for p in (out_json, out_text):
+            try:
+                os.chmod(p, 0o600)
+            except (OSError, NotImplementedError):
+                pass
     except OSError as e:
         raise ZeeError(Z701_EXPORT_OUTPUT_NOT_WRITABLE, str(e)) from e
 

@@ -42,6 +42,10 @@ def test_export_writes_json_and_text(tmp_path: Path, monkeypatch):
     assert doc["chain_verification"]["events_jsonl"]["tamper_suspected"] is False
     assert "export_sha256" in doc
     assert (tmp_path / "report.txt").exists()
+    # Same owner-only policy as events.jsonl/metrics.jsonl: the export
+    # carries the same event details, not world-readable 0644.
+    assert (tmp_path / "report.json").stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "report.txt").stat().st_mode & 0o777 == 0o600
 
 
 def test_export_redacts_detail_by_default(tmp_path: Path, monkeypatch):
