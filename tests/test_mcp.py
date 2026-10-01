@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -320,3 +321,52 @@ def test_containment_report_tool_redacts_by_default(tmp_path):
     mcp = build_server(config=McpConfig(), log_dir=tmp_path, config_path=None)
     report = _call(mcp, "query_containment_report", {})
     assert report["events"][0]["detail"] == "[redacted]"
+
+
+def test_containment_report_tool_caps_events_but_counts_all(tmp_path):
+    for _ in range(60):
+        _write_event(tmp_path)
+    mcp = build_server(config=McpConfig(), log_dir=tmp_path, config_path=None)
+    report = _call(mcp, "query_containment_report", {})
+    assert report["events_total"] == 60
+    assert report["events_included"] == 50 == len(report["events"])
+    assert report["events_truncated"] is True
+    report = _call(mcp, "query_containment_report", {"limit": 5})
+    assert len(report["events"]) == 5
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"since": "garbage"},
+        {"since": "2026-12-01T00:00:00+00:00", "until": "2026-01-01T00:00:00+00:00"},
+    ],
+)
+def test_containment_report_tool_rejects_bad_period_in_band(tmp_path, args):
+    _write_event(tmp_path)
+    mcp = build_server(config=McpConfig(), log_dir=tmp_path, config_path=None)
+    report = _call(mcp, "query_containment_report", args)
+    assert report.get("code") == "Z702"
+    assert "events" not in report
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0, reason="root ignores modes"
+)
+def test_containment_report_tool_does_not_chmod_the_state_dir(tmp_path):
+    # Codex #10: reading active containments used to construct CutStateLog,
+    # whose constructor did mkdir + chmod(0700) on the state directory.
+    # A file-listing diff cannot see that; compare the mode instead.
+    _write_event(tmp_path)
+    (tmp_path / "cut_state.jsonl").write_text(
+        json.dumps({"type": "cut", "asset_id": "client-files",
+                    "cut_at": "2026-10-01T00:00:00+00:00", "method": "egress",
+                    "platform": "darwin", "modified": ["en0"]}) + "\n"
+    )
+    tmp_path.chmod(0o755)
+    mcp = build_server(
+        config=McpConfig(audit=False), log_dir=tmp_path, config_path=None
+    )
+    report = _call(mcp, "query_containment_report", {})
+    assert len(report["active_containments"]) == 1
+    assert tmp_path.stat().st_mode & 0o777 == 0o755

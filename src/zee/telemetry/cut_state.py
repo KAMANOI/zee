@@ -51,12 +51,10 @@ class CutStateLog:
     """Append-only JSON Lines log of ``cut`` and ``resolved`` events."""
 
     def __init__(self, path: Optional[Path] = None) -> None:
+        # No filesystem side effects here: readers (`zee status`, the
+        # read-only MCP layer) construct this too. The directory is
+        # created / tightened only when a record is actually written.
         self.path = path or default_cut_state_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(self.path.parent, 0o700)
-        except (OSError, NotImplementedError):
-            pass
 
     def record_cut(
         self,
@@ -134,6 +132,11 @@ class CutStateLog:
         return candidate
 
     def _append(self, rec: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.path.parent, 0o700)
+        except (OSError, NotImplementedError):
+            pass
         existed = self.path.exists()
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")

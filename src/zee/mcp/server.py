@@ -159,26 +159,37 @@ def build_server(
 
     @mcp.tool(annotations=_RO)
     def query_containment_report(
-        since: Optional[str] = None, until: Optional[str] = None
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        limit: int = 50,
     ) -> dict[str, Any]:
         """Build a containment-report export (same content as `zee export`)
-        and return it inline — read-only, writes nothing to disk. Zee does
-        not access, contact, or neutralise attacker infrastructure (that
-        is limited by law to the police / Self-Defense Forces); this is
-        evidence for a report the human chooses to file, never a
-        submission itself. Paths in `detail` are redacted per this
-        server's configuration, same as `query_events`."""
+        and return it inline — read-only, writes nothing except this
+        server's own audit line. since/until are ISO8601 (no timezone =
+        UTC; date only = 00:00 UTC). `events` holds at most `limit`
+        newest events (default 50, max 1000); counts cover the whole
+        period and `events_truncated` says when the list was capped.
+        Zee does not access or act on attacker machines; this is evidence
+        for a report the human chooses to file, never a submission.
+        Paths in `detail` are redacted per this server's configuration."""
         audit.record(
-            "tool:query_containment_report", {"since": since, "until": until}
+            "tool:query_containment_report",
+            {"since": since, "until": until, "limit": limit},
         )
+        from ..errors import ZeeError
         from ..telemetry.report_export import attach_digest, build_export
 
-        export = build_export(
-            log_dir=reader.log_dir,
-            since=since,
-            until=until,
-            redact_paths=cfg.redact_paths,
-        )
+        limit = min(limit, 1000) if limit > 0 else 50
+        try:
+            export = build_export(
+                log_dir=reader.log_dir,
+                since=since,
+                until=until,
+                redact_paths=cfg.redact_paths,
+                limit=limit,
+            )
+        except ZeeError as e:
+            return {"error": str(e), "code": e.code}
         export, _digest = attach_digest(export)
         return export
 
