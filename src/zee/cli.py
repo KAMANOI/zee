@@ -249,25 +249,65 @@ def _cmd_cut(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _write_private_files(outputs: list[tuple[Path, str]], force: bool) -> None:
+    """Write each (path, text) owner-only (0600) without ever following a
+    symlink or truncating an existing file in place.
+
+    1. Refuse (Z701) if any target already exists — including a symlink
+       or dangling symlink — unless `force`. Nothing is written then.
+    2. Write every payload to a sibling temp file created
+       O_CREAT|O_EXCL|O_NOFOLLOW at 0600, so partial content is never
+       readable by other users and a pre-planted link is never followed.
+    3. Only after ALL temps are complete, move each into place with
+       os.replace (which replaces a link itself, never its target).
+       Without --force the final name is first claimed O_EXCL, so a file
+       that appeared after step 1 is still not overwritten.
+    On failure, already-written temp files stay behind at 0600 and are
+    named in the error (Zee does not delete files).
+    """
+    from .errors import Z701_EXPORT_OUTPUT_NOT_WRITABLE
+
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not force:
+        existing = [str(p) for p, _ in outputs if os.path.lexists(p)]
+        if existing:
+            raise ZeeError(
+                Z701_EXPORT_OUTPUT_NOT_WRITABLE,
+                f"既に存在します: {', '.join(existing)}（上書きするなら --force）",
+            )
+    temps: list[tuple[Path, Path]] = []
+    try:
+        for final, text in outputs:
+            tmp = final.parent / f".{final.name}.{os.getpid()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600)
+            temps.append((tmp, final))
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+        for tmp, final in temps:
+            if not force:
+                os.close(os.open(final, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow, 0o600))
+            os.replace(tmp, final)
+    except OSError as e:
+        left = [str(t) for t, _ in temps if os.path.lexists(t)]
+        hint = f"（書きかけの一時ファイル・所有者のみ読み取り可: {', '.join(left)}）" if left else ""
+        raise ZeeError(Z701_EXPORT_OUTPUT_NOT_WRITABLE, f"{e}{hint}") from e
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
     """Containment report export — read-only, writes local files only.
 
-    Zee does not access, contact, or neutralise an attacker's
-    infrastructure (that is limited by law to the police / Self-Defense
-    Forces since 2026-10-01, see README 法制度との関係). This packages
-    what Zee already recorded — hash-chain-verified containment
-    events — into a file the operator can choose to hand to whoever
-    they report to. It never submits anything itself.
+    Zee does not access or act on an attacker's machines (the statutory
+    power for that — サイバー危害防止措置 — belongs to police / SDF
+    officers, see README 法制度との関係). This packages what Zee already
+    recorded into files the operator can choose to hand to whoever they
+    report to. It never submits anything itself.
     """
     import json as _json
 
-    from .errors import Z701_EXPORT_OUTPUT_NOT_WRITABLE, Z702_INVALID_TIME_RANGE
     from .telemetry.events_log import default_log_dir
     from .telemetry.report_export import attach_digest, build_export, render_text
 
-    if args.since and args.until and args.since > args.until:
-        raise ZeeError(Z702_INVALID_TIME_RANGE, f"since={args.since} until={args.until}")
-
+    # Z702 on malformed / reversed --since/--until (raised inside).
     export = build_export(
         log_dir=default_log_dir(),
         since=args.since,
@@ -276,46 +316,47 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     export, digest = attach_digest(export)
 
-    out_json = Path(args.out).with_suffix(".json")
-    out_text = Path(args.out).with_suffix(".txt")
-    try:
-        out_json.write_text(
-            _json.dumps(export, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        out_text.write_text(render_text(export), encoding="utf-8")
-        # Same owner-only policy as events.jsonl/metrics.jsonl (events_log.py):
-        # this contains the same event details (asset ids, timestamps, and
-        # unredacted paths if --no-redact), so it gets the same 0600, not
-        # the 0644 default write_text() leaves under a typical umask.
-        for p in (out_json, out_text):
-            try:
-                os.chmod(p, 0o600)
-            except (OSError, NotImplementedError):
-                pass
-    except OSError as e:
-        raise ZeeError(Z701_EXPORT_OUTPUT_NOT_WRITABLE, str(e)) from e
+    # Append, never replace, the extension: `--out report.2026` must not
+    # collide with `--out report.2025` (Path.with_suffix would).
+    out_json = Path(str(args.out) + ".json")
+    out_text = Path(str(args.out) + ".txt")
+    _write_private_files(
+        [
+            (out_json, _json.dumps(export, ensure_ascii=False, indent=2)),
+            (out_text, render_text(export)),
+        ],
+        force=args.force,
+    )
 
     print(f"[zee export] wrote {out_json}", file=sys.stderr)
     print(f"[zee export] wrote {out_text}", file=sys.stderr)
     print(f"[zee export] export_sha256: {digest}", file=sys.stderr)
     print(
         "[zee export] record that digest somewhere OTHER than these two "
-        "files (e.g. in your submission email) — a copy stored next to "
-        "the export proves nothing if the export itself was replaced.",
+        "files (e.g. in your submission email). It only shows the export "
+        "was not changed after this moment; it says nothing about the log "
+        "before export.",
         file=sys.stderr,
     )
-    tamper = (
-        export["chain_verification"]["events_jsonl"]["tamper_suspected"]
-        or export["chain_verification"]["metrics_jsonl"]["tamper_suspected"]
-    )
-    if tamper:
-        print(
-            "[zee export] WARNING: hash-chain verification found a "
-            "corrupted or missing record in the local log — see "
-            "chain_verification in the JSON output.",
-            file=sys.stderr,
-        )
-    return 1 if tamper else 0
+    rc = 0
+    for name, key in (("events.jsonl", "events_jsonl"), ("metrics.jsonl", "metrics_jsonl")):
+        c = export["chain_verification"][key]
+        if c["status"] == "unverifiable":
+            print(
+                f"[zee export] WARNING: {name} could not be read — evidence is "
+                f"UNVERIFIABLE ({c['read_error']}).",
+                file=sys.stderr,
+            )
+            rc = 1
+        elif c["status"] == "tamper_suspected":
+            print(
+                f"[zee export] WARNING: hash-chain verification of {name} found "
+                "an edited, missing or out-of-place record — see "
+                "chain_verification in the JSON output.",
+                file=sys.stderr,
+            )
+            rc = 1
+    return rc
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -515,21 +556,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_export = sub.add_parser(
         "export",
-        help="export containment evidence for a report to police / "
-        "JPCERT/CC / your own compliance process (read-only, local "
-        "files only — Zee never submits anything itself)",
+        help="export recorded containment evidence to local files you can "
+        "attach to a report of your choosing (read-only over the logs; "
+        "Zee never submits anything itself)",
     )
     p_export.add_argument(
         "--out", required=True,
-        help="output path prefix; writes <prefix>.json and <prefix>.txt",
+        help="output path prefix; writes <prefix>.json and <prefix>.txt "
+        "(owner-only 0600; refuses to overwrite existing files or links)",
+    )
+    p_export.add_argument(
+        "--force", action="store_true",
+        help="replace existing <prefix>.json / <prefix>.txt (a symlink is "
+        "replaced itself, never followed)",
     )
     p_export.add_argument(
         "--since", default=None,
-        help="ISO8601 timestamp; only include events at or after this time",
+        help="ISO8601; only events at or after this instant. No timezone = "
+        "UTC; date only (2026-10-01) = 00:00 UTC of that day",
     )
     p_export.add_argument(
         "--until", default=None,
-        help="ISO8601 timestamp; only include events at or before this time",
+        help="ISO8601; only events at or before this instant. No timezone = "
+        "UTC; date only = 00:00 UTC of that day (so it EXCLUDES that day — "
+        "use the next day to include it)",
     )
     p_export.add_argument(
         "--no-redact", action="store_true",
