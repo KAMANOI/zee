@@ -13,6 +13,15 @@ from zee.cli import main
 from zee.events import TrapEvent
 from zee.telemetry.events_log import EventLog
 
+# Windows has no POSIX permission bits (st_mode reports 0o666 for any
+# writable file); owner-only there comes from the profile directory's ACL.
+POSIX_MODES = os.name != "nt"
+
+
+def _mode(p: Path) -> int:
+    """Permission bits, or 0o600 on Windows where they do not exist."""
+    return p.stat().st_mode & 0o777 if POSIX_MODES else 0o600
+
 
 def _seed_events(log_dir: Path) -> None:
     log = EventLog(log_dir=log_dir)
@@ -37,7 +46,7 @@ def test_export_writes_json_and_text(tmp_path: Path, monkeypatch):
     rc = main(["export", "--out", str(out_prefix)])
     assert rc == 0
 
-    doc = json.loads((tmp_path / "report.json").read_text())
+    doc = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert doc["schema_version"] == "1"
     assert len(doc["events"]) == 2
     assert doc["chain_verification"]["events_jsonl"]["tamper_suspected"] is False
@@ -45,8 +54,8 @@ def test_export_writes_json_and_text(tmp_path: Path, monkeypatch):
     assert (tmp_path / "report.txt").exists()
     # Same owner-only policy as events.jsonl/metrics.jsonl: the export
     # carries the same event details, not world-readable 0644.
-    assert (tmp_path / "report.json").stat().st_mode & 0o777 == 0o600
-    assert (tmp_path / "report.txt").stat().st_mode & 0o777 == 0o600
+    assert _mode(tmp_path / "report.json") == 0o600
+    assert _mode(tmp_path / "report.txt") == 0o600
 
 
 def test_export_redacts_detail_by_default(tmp_path: Path, monkeypatch):
@@ -55,7 +64,7 @@ def test_export_redacts_detail_by_default(tmp_path: Path, monkeypatch):
     _seed_events(log_dir / "zee")
 
     main(["export", "--out", str(tmp_path / "report")])
-    doc = json.loads((tmp_path / "report.json").read_text())
+    doc = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert all(e["detail"] == "[redacted]" for e in doc["events"])
 
 
@@ -65,7 +74,7 @@ def test_export_no_redact_keeps_detail(tmp_path: Path, monkeypatch):
     _seed_events(log_dir / "zee")
 
     main(["export", "--out", str(tmp_path / "report"), "--no-redact"])
-    doc = json.loads((tmp_path / "report.json").read_text())
+    doc = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
     assert any("secret.txt" in e["detail"] for e in doc["events"])
 
 
@@ -75,7 +84,7 @@ def test_export_exit_1_on_tampered_log(tmp_path: Path, monkeypatch, capsys):
     events_path = log_dir / "zee" / "events.jsonl"
     _seed_events(log_dir / "zee")
 
-    lines = events_path.read_text().splitlines()
+    lines = events_path.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[0])
     rec["detail"] = "attacker edited this"
     lines[0] = json.dumps(rec)
@@ -119,7 +128,7 @@ def test_export_refuses_existing_file_and_leaves_it_untouched(tmp_path, monkeypa
     rc = main(["export", "--out", str(tmp_path / "report")])
     assert rc != 0
     assert "Z701" in capsys.readouterr().err
-    assert existing.read_text() == "precious"
+    assert existing.read_text(encoding="utf-8") == "precious"
     assert not (tmp_path / "report.txt").exists()  # nothing written at all
 
 
@@ -130,14 +139,14 @@ def test_export_never_follows_a_symlink(tmp_path, monkeypatch, capsys):
     (tmp_path / "report.txt").symlink_to(victim)
     rc = main(["export", "--out", str(tmp_path / "report")])
     assert rc != 0 and "Z701" in capsys.readouterr().err
-    assert victim.read_text() == "do not touch"
+    assert victim.read_text(encoding="utf-8") == "do not touch"
 
     # --force replaces the link itself, never its target.
     rc = main(["export", "--out", str(tmp_path / "report"), "--force"])
     assert rc == 0
-    assert victim.read_text() == "do not touch"
+    assert victim.read_text(encoding="utf-8") == "do not touch"
     assert not (tmp_path / "report.txt").is_symlink()
-    assert (tmp_path / "report.txt").stat().st_mode & 0o777 == 0o600
+    assert _mode(tmp_path / "report.txt") == 0o600
 
 
 def test_export_appends_extension_instead_of_replacing_it(tmp_path, monkeypatch):
@@ -162,7 +171,7 @@ def test_export_failure_leaves_no_world_readable_partial(tmp_path, monkeypatch):
     assert not (tmp_path / "report.json").exists()
     for p in tmp_path.iterdir():
         if p.is_file():
-            assert p.stat().st_mode & 0o077 == 0, f"{p} readable by others"
+            assert _mode(p) & 0o077 == 0, f"{p} readable by others"
 
 
 def test_export_write_error_is_z701_and_partial_is_0600(tmp_path, monkeypatch, capsys):
@@ -183,7 +192,7 @@ def test_export_write_error_is_z701_and_partial_is_0600(tmp_path, monkeypatch, c
     assert rc != 0 and "Z701" in capsys.readouterr().err
     for p in tmp_path.iterdir():
         if p.is_file():
-            assert p.stat().st_mode & 0o077 == 0, f"{p} readable by others"
+            assert _mode(p) & 0o077 == 0, f"{p} readable by others"
 
 
 def test_export_never_overwrites_a_file_created_during_the_run(tmp_path, monkeypatch, capsys):
@@ -201,7 +210,7 @@ def test_export_never_overwrites_a_file_created_during_the_run(tmp_path, monkeyp
     monkeypatch.setattr(cli.os, "link", racing_link)
     rc = main(["export", "--out", str(tmp_path / "report")])
     assert rc != 0 and "Z701" in capsys.readouterr().err
-    assert (tmp_path / "report.json").read_text() == "planted by someone else"
+    assert (tmp_path / "report.json").read_text(encoding="utf-8") == "planted by someone else"
 
 
 def test_export_leaves_no_temp_files_on_success(tmp_path, monkeypatch):
@@ -265,7 +274,7 @@ def test_export_period_filter_tz_and_date_only(tmp_path, monkeypatch):
         "export", "--out", str(tmp_path / "r"),
         "--since", "2026-10-01", "--until", "2026-10-02T00:00:00",
     ]) == 0
-    doc = json.loads((tmp_path / "r.json").read_text())
+    doc = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert doc["events_total"] == 2
     assert doc["period"]["since"] == "2026-10-01T00:00:00+00:00"
 
@@ -281,7 +290,7 @@ def test_export_includes_rotated_segments(tmp_path, monkeypatch):
     _seed_at(log_dir / "zee", "2026-09-01T00:00:00+00:00", "2026-10-01T00:00:00+00:00")
     assert list((log_dir / "zee").glob("events.jsonl.*"))
     assert main(["export", "--out", str(tmp_path / "r"), "--until", "2026-09-15"]) == 0
-    doc = json.loads((tmp_path / "r.json").read_text())
+    doc = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert doc["events_total"] == 1
     assert doc["chain_verification"]["events_jsonl"]["status"] == "ok"
     assert len(doc["chain_verification"]["events_jsonl"]["files"]) == 2
@@ -300,14 +309,14 @@ def test_export_unreadable_log_is_unverifiable_and_nonzero(tmp_path, monkeypatch
         ev.chmod(0o600)
     assert rc == 1
     assert "UNVERIFIABLE" in capsys.readouterr().err
-    doc = json.loads((tmp_path / "r.json").read_text())
+    doc = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))
     assert doc["chain_verification"]["events_jsonl"]["status"] == "unverifiable"
-    assert "検証不能" in (tmp_path / "r.txt").read_text()
+    assert "検証不能" in (tmp_path / "r.txt").read_text(encoding="utf-8")
 
 
 def test_export_summary_does_not_claim_a_cut(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch)
     main(["export", "--out", str(tmp_path / "r")])
-    s = json.loads((tmp_path / "r.json").read_text())["report_fields"]["incident_summary_auto"]
+    s = json.loads((tmp_path / "r.json").read_text(encoding="utf-8"))["report_fields"]["incident_summary_auto"]
     assert "遮断を行い" not in s and "自動遮断のみを行い" not in s
     assert "dry_run" in s

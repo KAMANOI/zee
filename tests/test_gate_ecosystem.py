@@ -128,7 +128,7 @@ def test_action_yml_passes_inputs_via_env_not_interpolation():
     import re
 
     repo_root = pathlib.Path(__file__).resolve().parents[1]
-    action = (repo_root / "action.yml").read_text()
+    action = (repo_root / "action.yml").read_text(encoding="utf-8")
     # In every step that uses inputs, the reference must be an env mapping
     # (`  NAME: ${{ inputs.x }}`), never spliced into a `run:` script line.
     env_mapping = re.compile(r'^\s*[A-Za-z_][A-Za-z0-9_]*:\s*\$\{\{\s*inputs\.')

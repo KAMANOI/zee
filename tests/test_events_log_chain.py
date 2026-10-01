@@ -53,13 +53,13 @@ def test_chain_all_ok_on_untouched_log(tmp_path: Path):
 
 def test_first_record_chains_from_genesis(tmp_path: Path):
     log = _seed(tmp_path, 1)
-    rec = json.loads(log.events_path.read_text().splitlines()[0])
+    rec = json.loads(log.events_path.read_text(encoding="utf-8").splitlines()[0])
     assert rec["prev_hash"] == GENESIS_HASH
 
 
 def test_rewriting_a_record_is_detected_and_localised(tmp_path: Path):
     log = _seed(tmp_path)
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     tampered = json.loads(lines[1])
     tampered["detail"] = "attacker edited this"  # record_hash left stale
     lines[1] = json.dumps(tampered)
@@ -69,7 +69,7 @@ def test_rewriting_a_record_is_detected_and_localised(tmp_path: Path):
 
 def test_deleting_a_middle_record_is_detected(tmp_path: Path):
     log = _seed(tmp_path)
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     del lines[1]
     _rewrite(log.events_path, lines)
     assert _statuses(log.events_path) == ["ok", "chain_break"]
@@ -77,7 +77,7 @@ def test_deleting_a_middle_record_is_detected(tmp_path: Path):
 
 def test_deleting_the_first_record_is_detected(tmp_path: Path):
     log = _seed(tmp_path)
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     del lines[0]
     _rewrite(log.events_path, lines)
     assert _statuses(log.events_path) == ["head_missing", "ok"]
@@ -87,7 +87,7 @@ def test_truncating_the_tail_is_NOT_detected(tmp_path: Path):
     # Documented limit (README / chain_verification.note): a shorter chain
     # is still a valid chain. This test pins the limit so the docs stay honest.
     log = _seed(tmp_path)
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     _rewrite(log.events_path, lines[:-1])
     assert _statuses(log.events_path) == ["ok", "ok"]
 
@@ -95,7 +95,7 @@ def test_truncating_the_tail_is_NOT_detected(tmp_path: Path):
 def test_stripping_hashes_mid_chain_is_not_accepted_as_legacy(tmp_path: Path):
     # Codex #1 repro: previously ok, legacy, ok (the edit went unnoticed).
     log = _seed(tmp_path)
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[1])
     del rec["record_hash"], rec["prev_hash"]
     rec["detail"] = "rewritten"
@@ -106,7 +106,7 @@ def test_stripping_hashes_mid_chain_is_not_accepted_as_legacy(tmp_path: Path):
 
 def test_removing_only_record_hash_is_corrupted(tmp_path: Path):
     log = _seed(tmp_path)
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     rec = json.loads(lines[1])
     del rec["record_hash"]
     lines[1] = json.dumps(rec)
@@ -125,13 +125,13 @@ def test_pre_chain_lines_are_legacy_not_tampered(tmp_path: Path):
     log.events_path.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
     log.record_event(_event("first chained record"))
     assert _statuses(log.events_path) == ["legacy", "ok"]
-    second = json.loads(log.events_path.read_text().splitlines()[1])
+    second = json.loads(log.events_path.read_text(encoding="utf-8").splitlines()[1])
     assert second["prev_hash"] == GENESIS_HASH
 
 
 def test_partial_last_line_is_reported_separately_then_isolated(tmp_path: Path):
     log = _seed(tmp_path, 2)
-    good_last = json.loads(log.events_path.read_text().splitlines()[-1])["record_hash"]
+    good_last = json.loads(log.events_path.read_text(encoding="utf-8").splitlines()[-1])["record_hash"]
     with log.events_path.open("a") as f:
         f.write('{"type": "trap_ev')  # crash mid-write, no newline
     v = verify_chain(log.events_path)
@@ -140,7 +140,7 @@ def test_partial_last_line_is_reported_separately_then_isolated(tmp_path: Path):
     # The next append must not glue onto the torn line, and must chain
     # from the last GOOD record.
     log.record_event(_event("after crash"))
-    lines = log.events_path.read_text().splitlines()
+    lines = log.events_path.read_text(encoding="utf-8").splitlines()
     assert lines[2] == '{"type": "trap_ev'
     assert json.loads(lines[3])["prev_hash"] == good_last
     assert _statuses(log.events_path) == ["ok", "ok", "corrupted", "ok"]
@@ -156,12 +156,12 @@ def _force_rotation(monkeypatch):
 
 def test_chain_survives_rotation_and_verifies_across_segments(tmp_path: Path, monkeypatch):
     log = _seed(tmp_path, 1)
-    before_hash = json.loads(log.events_path.read_text().splitlines()[0])["record_hash"]
+    before_hash = json.loads(log.events_path.read_text(encoding="utf-8").splitlines()[0])["record_hash"]
     _force_rotation(monkeypatch)
     log.record_event(_event("after rotation"))
     rotated = list(tmp_path.glob("events.jsonl.*"))
     assert rotated, "rotation did not run"
-    after = json.loads(log.events_path.read_text().splitlines()[0])
+    after = json.loads(log.events_path.read_text(encoding="utf-8").splitlines()[0])
     assert after["prev_hash"] == before_hash
     v = verify_chain(log.events_path)
     assert v["files"] == [rotated[0].name, "events.jsonl"]
@@ -201,7 +201,7 @@ def test_rotation_never_overwrites_a_same_second_segment(tmp_path: Path, monkeyp
         "events.jsonl.r000002_20261001_000000",
         "events.jsonl.r000003_20261001_000000",
     ]
-    assert [(tmp_path / n).read_text() for n in names] == [
+    assert [(tmp_path / n).read_text(encoding="utf-8") for n in names] == [
         "segment 0\n", "segment 1\n", "segment 2\n",
     ]
 

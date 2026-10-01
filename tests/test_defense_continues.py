@@ -94,7 +94,7 @@ def test_failure_inside_append_is_swallowed_and_logged(tmp_path: Path, monkeypat
     assert notified and len(cuts) == 1
     assert "simulated tail failure" in caplog.text
     # The record is still written (chained from GENESIS → visible as a break later).
-    assert log.events_path.read_text().strip()
+    assert log.events_path.read_text(encoding="utf-8").strip()
 
 
 def test_held_file_lock_does_not_stop_notify_or_cut(tmp_path: Path, monkeypatch, caplog):
