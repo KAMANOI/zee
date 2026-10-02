@@ -147,3 +147,17 @@ def test_seeder_skips_canary_when_registry_unconfigured(tmp_path):
     reg = CanaryTokenRegistry()  # no base_url
     content = _seed_one(tmp_path, "service.env", registry=reg)
     assert "https://" not in content
+
+
+def test_token_id_never_spells_origin_word(tmp_path, monkeypatch):
+    from zee.decoy import canary_token as ct
+
+    draws = iter(["abcZEExyz0123456789abc", "plainTokenValue0123456"])
+    monkeypatch.setattr(ct.secrets, "token_urlsafe", lambda n: next(draws))
+    reg = CanaryTokenRegistry(
+        base_url="https://ops.example.com",
+        registry_path=tmp_path / "canary_tokens.jsonl",
+    )
+    content = _seed_one(tmp_path, "credentials", registry=reg)
+    assert "plainTokenValue0123456" in content
+    assert "zee" not in content.lower()

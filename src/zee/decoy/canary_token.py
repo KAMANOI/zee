@@ -45,6 +45,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+_ORIGIN_WORDS = ("zee", "canary", "tripwire", "decoy")
+
+
 @dataclass(frozen=True)
 class CanaryToken:
     token_id: str
@@ -161,7 +164,11 @@ class CanaryTokenRegistry:
     # ── persistence ────────────────────────────────────────────────────
 
     def _mint_token(self, purpose: str) -> CanaryToken:
+        # Re-draw if the random id happens to spell a Zee-origin word
+        # (e.g. "...zee...") — that would be a marker an attacker can grep for.
         token_id = secrets.token_urlsafe(16)
+        while any(w in token_id.lower() for w in _ORIGIN_WORDS):
+            token_id = secrets.token_urlsafe(16)
         # No "/c/" prefix: the URL is just base_url/<token_id>. Operator
         # picks the base_url freely so the path shape is theirs, not
         # Zee's, and there is no Zee-specific marker for an attacker to
