@@ -81,7 +81,7 @@ safe to share:
 | **`ZEE_CANARY_BASE_URL` (env var)** | shell profile / launcher | **Do not share.** It identifies the operator's external receiver and the URL shape an attacker would dereference |
 | Reference implementation source code | `src/zee/`, `tests/`, `docs/` | **Share freely** — MIT-licensed and the whole point of the project |
 | Maintenance write-ups | GitHub Discussions, Wiki | **Share freely, please** — OS version, locale, redacted error message, redacted diff, "what fixed it" |
-| Industry deployment notes | GitHub Discussions / Wiki | **Share freely** — anonymised business type, decoy directory shape (e.g. `~/Documents/zee-decoys/<files>`), webhook receiver choice (Canarytokens.org / self-hosted / Lambda) |
+| Industry deployment notes | GitHub Discussions / Wiki | **Share freely** — anonymised business type, decoy directory shape (e.g. `~/.local/share/zee-decoys/<files>`), webhook receiver choice (Canarytokens.org / self-hosted / Lambda) |
 
 **Before posting to Discussions or pasting into an AI session**, run
 your text through the redaction checklist in

@@ -1,10 +1,10 @@
-"""Seed a handful of decoys under ~/Documents/zee-decoys/ for a demo run.
+"""Seed a handful of decoys under ~/.local/share/zee-decoys/ for a demo run.
 
 Usage:
     python examples/seed_demo_decoys.py [--canary-base-url URL] [--target DIR]
 
 What it does:
-    1. Creates the target directory (defaults to ~/Documents/zee-decoys/)
+    1. Creates the target directory (defaults to ~/.local/share/zee-decoys/)
        with mode 0700 if Zee created it.
     2. Writes 3 plausible-looking decoy files (env / credentials / notes).
     3. Optionally embeds canary URLs if --canary-base-url is supplied;
@@ -43,8 +43,8 @@ def main() -> int:
     ap.add_argument(
         "--target",
         type=Path,
-        default=Path.home() / "Documents" / "zee-decoys",
-        help="directory to write decoys into (default: ~/Documents/zee-decoys/)",
+        default=Path.home() / ".local" / "share" / "zee-decoys",
+        help="directory to write decoys into (default: ~/.local/share/zee-decoys/)",
     )
     ap.add_argument(
         "--canary-base-url",

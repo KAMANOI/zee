@@ -7,6 +7,16 @@ releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **Example decoy directory moved from `~/Documents/zee-decoys/` to
+  `~/.local/share/zee-decoys/`** (README, STARTER_GUIDE, `examples/assets.example.toml`,
+  `examples/seed_demo_decoys.py`). On machines with iCloud "Desktop & Documents"
+  or OneDrive folder backup enabled, `~/Documents` is synced to the cloud, which
+  copies the decoys and their embedded canary URLs off the machine. Existing
+  `assets.toml` files are not touched — move your decoys if they live under a
+  synced folder.
+
 ### Added
 
 - **`zee export`** — writes the trap events of a period and the

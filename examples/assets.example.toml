@@ -3,11 +3,13 @@
 # Promote response_mode to "auto" only after confirming zero false positives.
 #
 # decoy_paths NOTE — the paths below intentionally live under a Zee-only
-# directory (~/Documents/zee-decoys/), NOT inside real tool directories
+# directory (~/.local/share/zee-decoys/), NOT inside real tool directories
 # such as ~/.aws/ or ~/.ssh/. Real tools (AWS CLI, ssh-agent, IDEs) walk
 # their own dot-directories and will produce false positives if decoys
-# share those paths. Keeping decoys in a dedicated directory you also
-# exclude from backup / AV / indexer scans (see README "decoy placement")
+# share those paths. Also keep them out of ~/Documents and ~/Desktop: iCloud
+# "Desktop & Documents" / OneDrive folder backup copy those folders to the
+# cloud. Keeping decoys in a dedicated directory you also exclude from
+# backup / AV / indexer scans (see README "decoy placement")
 # is the configuration that the v0.1 trigger-limited responder is
 # designed for.
 
@@ -18,8 +20,8 @@ id = "front-desk-pc"
 type = "workstation"
 overnight_active = false
 decoy_paths = [
-    "~/Documents/zee-decoys/aws-credentials.decoy",
-    "~/Documents/zee-decoys/.env",
+    "~/.local/share/zee-decoys/aws-credentials.decoy",
+    "~/.local/share/zee-decoys/.env",
 ]
 response_mode = "notify"   # auto / staged / notify  (start with notify)
 cut_method = "full"        # full / egress  (only used when mode != notify)
@@ -29,7 +31,7 @@ id = "edit-laptop"
 type = "workstation"
 overnight_active = true
 decoy_paths = [
-    "~/Documents/zee-decoys/id_rsa.decoy",
+    "~/.local/share/zee-decoys/id_rsa.decoy",
 ]
 response_mode = "notify"
 cut_method = "egress"

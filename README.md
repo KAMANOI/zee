@@ -125,7 +125,9 @@ pip install -e .
 # 1. 資産プロファイルを作成
 cp examples/assets.example.toml ./assets.toml
 # 編集して decoy_paths を自組織のパスに置き換える
-# 既定では Zee 専用ディレクトリ（~/Documents/zee-decoys/）を例示
+# 既定では Zee 専用ディレクトリ（~/.local/share/zee-decoys/）を例示
+# ※ ~/Documents や ~/Desktop は避ける：macOS の iCloud「デスクトップと書類」や Windows の OneDrive
+#   フォルダー同期が有効だと、おとりと埋め込んだ canary URL がクラウドに複製される
 
 # 2.（任意）macOS / Windows での「読み取り検知」を有効化する
 #    自前 webhook 受信器 / Canarytokens.org / AWS Lambda 等の外部
@@ -141,7 +143,7 @@ zee init-restore-token   # 表示されたトークンを安全な場所に控�
 zee watch -c ./assets.toml
 
 # 5. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換えてみる
-echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
+echo "tampered $(date)" >> ~/.local/share/zee-decoys/.env
 #  → 変更系の接触（modify）として高信頼イベントを 3 OS 共通で記録します。
 #  Linux では `cat <decoy>` のような読み取りだけでも記録します（inotify が
 #  open/read を直接観察するため）。

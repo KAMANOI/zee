@@ -116,7 +116,9 @@ pip install -e .
 # 1. Create an asset profile
 cp examples/assets.example.toml ./assets.toml
 # Edit decoy_paths to point at your own paths
-# The default example uses a Zee-only directory (~/Documents/zee-decoys/)
+# The default example uses a Zee-only directory (~/.local/share/zee-decoys/)
+# Avoid ~/Documents and ~/Desktop: with iCloud "Desktop & Documents" (macOS) or OneDrive
+#   folder backup (Windows) enabled, decoys and their embedded canary URLs get copied to the cloud
 
 # 2. (Optional) Wire read detection on macOS / Windows
 #    Point ZEE_CANARY_BASE_URL at an external endpoint you control
@@ -132,7 +134,7 @@ zee init-restore-token   # capture the printed token somewhere safe
 zee watch -c ./assets.toml
 
 # 5. In another window, simulate an attacker tampering with the decoy
-echo "tampered $(date)" >> ~/Documents/zee-decoys/.env
+echo "tampered $(date)" >> ~/.local/share/zee-decoys/.env
 #  -> change-class touch (modify); Zee records a high-confidence event
 #     on all three OSes. On Linux, `cat <decoy>` (read-only) also fires
 #     because inotify observes open/read directly. On macOS / Windows,

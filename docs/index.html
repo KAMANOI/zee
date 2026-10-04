@@ -318,7 +318,7 @@ export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 zee init-restore-token   <span class="c"># 表示されたトークンを安全な場所に控える</span>
 
 <span class="c"># 6. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
-echo "tampered $(date)" &gt;&gt; ~/Documents/zee-decoys/.env
+echo "tampered $(date)" &gt;&gt; ~/.local/share/zee-decoys/.env
 <span class="c">#   → 変更系の接触として 3 OS 共通で高信頼イベントを記録します。</span>
 <span class="c">#   Linux では `cat &lt;decoy&gt;` の読み取りだけでも記録します。</span>
 <span class="c">#   macOS / Windows の読み取りは ZEE_CANARY_BASE_URL 設定時のみ</span>
