@@ -20,6 +20,7 @@ from ..errors import (
     Z806_WEAK_SEED,
     Z807_INVALID_COUNT,
     Z808_OUTPUT_EXISTS,
+    Z809_ADDRESS_POOL_EXHAUSTED,
     Z901_INTERNAL,
     ZeeError,
 )
@@ -113,6 +114,8 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
         # Retry on an in-batch address collision (same chiban/town +
         # building + room drawn twice) rather than ever silently writing
         # two different "people" at an identical address in one batch.
+        # Exhausting retries means the eligible pool is too small for the
+        # requested --count — fail rather than write the duplicate anyway.
         for _attempt in range(50):
             if use_layer2:
                 parcel = rng.choice(eligible_parcels)
@@ -124,8 +127,10 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
             if address not in used_addresses:
                 used_addresses.add(address)
                 break
+        else:
+            raise ZeeError(Z809_ADDRESS_POOL_EXHAUSTED)
 
-        postal_code = zip_for_town(town, zip_by_town, cfg.fallback_zip)
+        postal_code = zip_for_town(rng, town, zip_by_town, cfg.fallback_zip)
         email = _email_for(rng, cfg)
 
         fields = {

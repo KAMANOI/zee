@@ -29,5 +29,14 @@ def load_zip_by_town(path: Path) -> dict[str, str]:
     return out
 
 
-def zip_for_town(town: str, zip_by_town: dict[str, str], fallback: str) -> str:
-    return zip_by_town.get(town, fallback)
+def zip_for_town(rng, town: str, zip_by_town: dict[str, str], fallback: str) -> str:
+    """A zip for ``town``, or — if unmatched (always true for a Layer-1
+    fictional town) — a real zip drawn from the same dataset rather than
+    a fixed placeholder. A constant fallback (e.g. "0000000") would be a
+    value-level tell: every Layer-1 row would carry an identical,
+    obviously-fake zip, greppable without even needing the ledger."""
+    if town in zip_by_town:
+        return zip_by_town[town]
+    if zip_by_town:
+        return rng.choice(sorted(set(zip_by_town.values())))
+    return fallback

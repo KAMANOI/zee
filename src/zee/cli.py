@@ -788,6 +788,7 @@ _USER_INPUT_CODES = frozenset({
     "Z806",  # dilute-generate: --seed too short
     "Z807",  # dilute-generate: --count must be positive
     "Z808",  # dilute-generate: --out already has output files
+    "Z809",  # dilute-generate: address pool exhausted for requested --count
 })
 
 

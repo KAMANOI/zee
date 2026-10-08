@@ -28,6 +28,7 @@ from zee.dilution import ledger as ledger_mod
 from zee.dilution.generate import DiluteConfig, run
 from zee.dilution.geometry import point_in_polygon, polygon_fully_inside
 from zee.dilution.parcels import find_nonresidential_parcels, load_parcels, load_public_land
+from zee.dilution.postal import load_zip_by_town, zip_for_town
 from zee.dilution.towns import generate_fictional_town_name, is_real_town, load_real_town_names
 from zee.errors import ZeeError
 
@@ -134,6 +135,18 @@ def test_fictional_town_never_collides_with_real_master():
         assert not is_real_town(name, real_towns)
 
 
+def test_unmatched_town_gets_a_real_zip_not_a_constant_placeholder():
+    """Regression (advisor-caught, post-review): a fixed fallback zip
+    (e.g. "0000000") on every unmatched town is itself a value-level tell
+    — every Layer-1 row would carry an identical, obviously-fake zip,
+    greppable without the ledger. Must draw a real zip from the dataset."""
+    zip_by_town = load_zip_by_town(FIXTURES / "zipcodes.csv")
+    rng = random.Random("zip-fallback-seed")
+    seen = {zip_for_town(rng, "架空台一丁目", zip_by_town, "0000000") for _ in range(20)}
+    assert "0000000" not in seen
+    assert seen <= set(zip_by_town.values())
+
+
 def test_empty_town_master_is_rejected(tmp_path):
     empty = tmp_path / "empty_towns.csv"
     empty.write_text("", encoding="utf-8")
@@ -171,6 +184,7 @@ def test_generate_no_marker_on_records(tmp_path):
     assert fieldnames == {"surname", "given_name", "gender", "age",
                            "postal_code", "address", "phone", "email"}
     assert len(rows) == 30
+    assert all(row["postal_code"] != "0000000" for row in rows)
 
 
 def test_generate_all_layer2_addresses_passed_check(tmp_path):
@@ -271,6 +285,15 @@ def test_invalid_count_rejected(tmp_path):
         run(_base_cfg(tmp_path, seed=SEED_A, count=0))
     with pytest.raises(ZeeError):
         run(_base_cfg(tmp_path, seed=SEED_A, count=-5))
+
+
+def test_address_pool_exhaustion_fails_closed_instead_of_duplicating(tmp_path):
+    """Only 2 eligible parcels + a handful of building/room combos — asking
+    for far more unique layer-2 addresses than the pool can produce must
+    fail rather than silently write two different people at one address."""
+    cfg = _base_cfg(tmp_path, seed=SEED_A, layer="real-nonresidential", count=5000)
+    with pytest.raises(ZeeError):
+        run(cfg)
 
 
 def test_refuses_to_overwrite_existing_output(tmp_path):
