@@ -53,6 +53,9 @@ class _Handler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:  # noqa: N802
         self._record_hit()
 
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self._record_hit()
+
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         pass  # suppress default stderr access log; our JSONL is the record
 

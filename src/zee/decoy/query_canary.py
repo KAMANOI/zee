@@ -26,6 +26,7 @@ than building a parallel registry.
 
 from __future__ import annotations
 
+import json
 import secrets
 from dataclasses import dataclass
 from typing import Literal
@@ -132,11 +133,40 @@ def is_known_value(registry: CanaryTokenRegistry, value: str, kind: QueryCanaryK
     job can call this before touching a value to skip known decoys
     instead of firing on its own canaries. No second ledger file.
 
-    "url" values key on the registry's own token_id (``lookup``);
-    "email"/"hostname" key on our safe token, stored as decoy_path
-    (``lookup_for_decoy``) — see ``issue_query_canary``.
+    "url" values key on the registry's own token_id (``lookup``), which
+    IS base_url-scoped by design (a stale URL under a rotated base_url
+    is correctly treated as dead — see
+    test_rehydrate_skips_records_with_different_base_url in
+    test_canary_token.py).
+
+    "email"/"hostname" key on our safe token, stored as decoy_path. These
+    must NOT be base_url-scoped: an email/hostname canary doesn't point
+    at base_url at all (only "url" kind does), so rotating
+    ZEE_CANARY_BASE_URL for the webhook receiver must not strand
+    previously-issued email/hostname canaries out of the exclusion check
+    (found in independent review 2026-10-09 — registry.lookup_for_decoy
+    only sees records loaded for the *current* base_url, via
+    CanaryTokenRegistry._load_from_file's base_url filter). We read
+    canary_tokens.jsonl directly for decoy_path matches instead of going
+    through the registry's in-memory, base_url-filtered map.
     """
     label = extract_label(value, kind)
     if kind == "url":
         return registry.lookup(label) is not None
-    return registry.lookup_for_decoy(label) is not None
+    return _decoy_path_ever_persisted(registry.registry_path, label)
+
+
+def _decoy_path_ever_persisted(registry_path, decoy_path: str) -> bool:
+    if not registry_path.exists():
+        return False
+    for raw_line in registry_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("decoy_path") == decoy_path:
+            return True
+    return False

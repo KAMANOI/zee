@@ -89,8 +89,20 @@
   `decoy_path` に§3の安全なトークン文字列そのものを格納する。
 - 利用者（代表・運用者）自身の名寄せ・到達確認パイプラインは、処理対象の値を触る前に
   `is_known_value(registry, value, kind)` を呼べば、その値が自分が発行した照会カナリア
-  かどうかを判定できる（`registry.lookup_for_decoy()` / `registry.lookup()` を使う
-  だけで、2つ目のファイルを読む必要がない）。
+  かどうかを判定できる。
+- **独立レビューで発見・修正した不整合（2026-10-09）**：`CanaryTokenRegistry.
+  _load_from_file()` は、レコードの `base_url` が現在設定中の `base_url` と一致しない
+  行を無条件で読み飛ばす（url型のWebhook URLが失効したことを表す、既存の意図的な設計・
+  `test_rehydrate_skips_records_with_different_base_url` で保証）。email/hostname型は
+  そもそも`base_url`と無関係（Webhook URLを含まない）にもかかわらず同じフィルタを
+  経由していたため、運用者が`ZEE_CANARY_BASE_URL`（Webhook受け口）をローテーションする
+  と、既発行のemail/hostname型カナリアが除外判定から消え、運用者自身のパイプラインが
+  自分のカナリアに誤発火する不整合があった。修正：email/hostname型の除外判定は
+  `registry`の内部マップ（base_urlでフィルタ済み）を経由せず、`canary_tokens.jsonl`を
+  直接読んで`decoy_path`の一致だけを見る（`query_canary.py::_decoy_path_ever_persisted`）。
+  url型は既存どおりbase_url依存のままでよい（Webhook先が変われば古いURLが死ぬのは
+  正しい挙動のため）。回帰テスト：
+  `test_email_exclusion_survives_base_url_rotation`。
 - ダミー混入案の `ledger.jsonl`（HMAC台帳）とは**意図的に別物**：あちら台帳はHMACで
   「台帳自体が流出しても実データを逆引きできない」ことを狙っている（守るべき対象＝
   ダミーが紐づく実データの存在そのもの）。照会カナリアの値はそもそも乱数トークンで実データ
@@ -176,9 +188,14 @@ ai-virtual-corp の decisions.md・WORKLOG を検索したが該当記録が見�
 - `examples/query_canary_http_receiver.py`：url型の参考受け口。`http.server`のみ。
 - `examples/query_canary_dns_receiver.py`：hostname型の参考受け口。生DNSパケットを
   `socket`で解釈・NXDOMAINのみ返す最小実装（本格的な権威DNSサーバーの代替ではない）。
-- `tests/test_query_canary.py`：17件。値の形・ドメイン拒否・除外台帳の永続化後の再読込・
-  HTTP受け口への実際のリクエスト到達とログ記録・DNS受け口への実際のクエリ到達と
-  NXDOMAIN応答・ログ記録、を実機（localhost）で検証。
+- `tests/test_query_canary.py`：21件。値の形・ドメイン拒否・除外台帳の永続化後の再読込・
+  base_urlローテーション後も除外判定が生き残ること・HTTP受け口への実際のリクエスト
+  到達とログ記録（GET/POST/OPTIONS）・DNS受け口への実際のクエリ到達とNXDOMAIN応答
+  （ANCOUNT=0・応答長の厳密一致まで確認）・ログ記録・壊れたDNSパケットを受けても
+  サーバーが死なず次のクエリに応答すること、を実機（localhost）で検証。
+- 社内独立レビュー（reviewer・2026-10-09）：高0件・中1件（上記、修正済み・回帰テスト
+  追加済み）・低3件（DNS異常入力の自動回帰テスト欠落／HTTP受け口がOPTIONSを記録
+  しない／NXDOMAIN応答の厳密なアサート不足）。低3件も全て修正・テスト追加済み。
 
 ### 未対応・次フェーズへの申し送り
 
@@ -187,6 +204,9 @@ ai-virtual-corp の decisions.md・WORKLOG を検索したが該当記録が見�
 - SMTP RCPT TOレベルの到達確認に対応する最小SMTPサーバー（受け口候補の1つ、email型の
   証跡をより強くする）は未試作（v1はDNS/HTTPのみ）。
 - §6の統合（ダミー混入CLIへの接続）は申し送りのみで未実装。
+- DNS受け口はクエリ内のドメイン名圧縮（0xC0ポインタ）を実装していない（最小参考実装の
+  既知の限界。本番は圧縮に対応した本格的な権威DNSサーバー（PowerDNS/BIND）を使う前提
+  のため実害は小さいが、§5.4のThinkst Canarytokens併用案はこの限界自体を回避できる）。
 
 ## 目的判定（事前チェックへの回答）
 

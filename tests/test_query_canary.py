@@ -117,6 +117,20 @@ def test_exclusion_survives_reload(tmp_path):
     assert is_known_value(reg2, val.value, "hostname") is True
 
 
+def test_email_exclusion_survives_base_url_rotation(tmp_path):
+    """Independent review (2026-10-09): email/hostname canaries don't
+    point at base_url at all, so rotating the webhook's base_url (e.g.
+    after an incident) must not strand already-issued email/hostname
+    canaries out of the operator's own exclusion check — only "url"
+    kind is allowed to go stale when base_url changes."""
+    registry_path = tmp_path / "canary_tokens.jsonl"
+    reg_old = CanaryTokenRegistry(base_url="https://old.canary.example.com", registry_path=registry_path)
+    val = issue_query_canary(reg_old, "email", "p", domain="example-corp.test")
+
+    reg_new = CanaryTokenRegistry(base_url="https://new.canary.example.com", registry_path=registry_path)
+    assert is_known_value(reg_new, val.value, "email") is True
+
+
 # ── HTTP receiver (url kind) ────────────────────────────────────────────
 
 
@@ -166,6 +180,20 @@ def test_http_receiver_returns_no_payload_on_post_too(running_http_receiver):
     assert resp.read() == b""
 
 
+def test_http_receiver_logs_options_too(running_http_receiver):
+    """A link-checker that probes with OPTIONS before GET must still be
+    logged — stdlib's default OPTIONS handler (501) would otherwise
+    silently drop the hit (independent review, low-severity finding)."""
+    server, log_path = running_http_receiver
+    port = server.server_address[1]
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/opts-token", method="OPTIONS")
+    resp = urllib.request.urlopen(req, timeout=5)
+    assert resp.status == 204
+    rec = json.loads(log_path.read_text().strip().splitlines()[-1])
+    assert rec["token"] == "opts-token"
+    assert rec["method"] == "OPTIONS"
+
+
 # ── DNS receiver (hostname kind) ────────────────────────────────────────
 
 
@@ -208,8 +236,12 @@ def test_dns_query_is_logged_and_gets_nxdomain(running_dns_receiver):
     client.close()
 
     rcode = response[3] & 0x0F
-    assert rcode == 3  # NXDOMAIN — no A/AAAA record handed back
+    assert rcode == 3  # NXDOMAIN
     assert response[0:2] == struct.pack(">H", 0x1234)  # echoes query id
+    ancount, nscount, arcount = struct.unpack(">HHH", response[6:12])
+    assert (ancount, nscount, arcount) == (0, 0, 0)  # no A/AAAA or any other record attached
+    # response is exactly header(12) + the echoed question, nothing appended
+    assert len(response) == 12 + (len(_dns_query_packet(qname)) - 12)
 
     deadline = time.time() + 2
     while time.time() < deadline and not log_path.exists():
@@ -226,3 +258,30 @@ def test_parse_qname_roundtrip():
     qname, end = dns_receiver.parse_qname(packet)
     assert qname == "tok.example-corp.test"
     assert end == len(packet)
+
+
+def test_parse_qname_rejects_truncated_packet():
+    """A label length byte claiming more bytes than the packet has left
+    (truncated packet, or a DNS compression pointer 0xC0.. which this
+    minimal parser does not implement) must fail loudly, not hang or
+    silently decode garbage. The caller (serve()) already catches
+    IndexError and drops the packet — this pins that contract."""
+    truncated = struct.pack(">H", 1) + b"\x00" * 10 + bytes([200])  # claims a 200-byte label, 0 bytes follow
+    with pytest.raises(IndexError):
+        dns_receiver.parse_qname(truncated)
+
+
+def test_malformed_dns_packet_is_dropped_not_crashed(running_dns_receiver):
+    """serve()'s IndexError guard (query_canary_dns_receiver.py) must
+    keep the receiver alive after a garbage packet, so a legitimate
+    query sent right after is still answered."""
+    port, log_path = running_dns_receiver
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.settimeout(5)
+    client.sendto(b"\x00\x01garbage, too short", ("127.0.0.1", port))
+
+    qname = "stillalive.example-corp.test"
+    client.sendto(_dns_query_packet(qname), ("127.0.0.1", port))
+    response, _ = client.recvfrom(512)
+    client.close()
+    assert response[3] & 0x0F == 3
