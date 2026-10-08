@@ -27,6 +27,7 @@ than building a parallel registry.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Literal
@@ -38,7 +39,7 @@ QueryCanaryKind = Literal["email", "hostname", "url"]
 # Words that would tell a curious attacker "this domain exists to catch
 # me" if they showed up in the operator's canary domain name. _ORIGIN_WORDS
 # guards the *token*; this guards the *domain* the operator picks.
-_DOMAIN_ORIGIN_WORDS = (*_ORIGIN_WORDS, "hdr", "honeypot", "trap", "sting")
+_DOMAIN_ORIGIN_WORDS = (*_ORIGIN_WORDS, "hdr", "honeypot", "trap")
 
 
 @dataclass(frozen=True)
@@ -49,9 +50,12 @@ class QueryCanaryValue:
 
 
 def _check_domain(domain: str) -> None:
-    low = domain.lower()
+    # Whole-word match on labels split at '.'/'-', not substring: a naive
+    # substring check on "sting"/"trap" would reject legitimate domains
+    # like "myhostingco.test" or "bootstrap-corp.test" (found in review).
+    words = re.split(r"[^a-z0-9]+", domain.lower())
     for word in _DOMAIN_ORIGIN_WORDS:
-        if word in low:
+        if word in words:
             raise ValueError(
                 f"canary domain must not contain an origin-revealing word "
                 f"({word!r} found in {domain!r}); pick an unrelated domain."

@@ -92,6 +92,19 @@ def test_domain_origin_words_rejected(tmp_path, word):
         issue_query_canary(reg, "hostname", "p", domain=f"my-{word}-domain.test")
 
 
+@pytest.mark.parametrize(
+    "domain",
+    ["myhostingco.test", "bootstrap-corp.test", "existing-client.test", "testing-vendor.test"],
+)
+def test_domain_check_is_whole_word_not_substring(tmp_path, domain):
+    """'trap' is a substring of "bootstrap"; a naive substring check on
+    _DOMAIN_ORIGIN_WORDS would wrongly reject ordinary domains like these
+    (independent review finding) — the check must split on '.'/'-' and
+    match whole labels only."""
+    reg = _registry(tmp_path)
+    issue_query_canary(reg, "hostname", "p", domain=domain)  # must not raise
+
+
 # ── exclusion ledger (reuses canary_tokens.jsonl, no second file) ──────
 
 
