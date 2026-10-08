@@ -78,18 +78,36 @@ class DilutionSummary:
         return self.leaked_total - self.dummy_matched
 
 
+_SUPPORTED_EXPORT_SCHEMA_VERSIONS = {"1"}
+
+
 def load_export(path: Path) -> dict[str, Any]:
     """Read a `zee export --out <prefix>` JSON file and sanity-check its shape."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
         raise ZeeError(Z1004_EXPORT_FILE_REQUIRED, f"{path}: {e}") from e
-    if not isinstance(data, dict) or "schema_version" not in data or "report_fields" not in data:
+    if (
+        not isinstance(data, dict)
+        or data.get("schema_version") not in _SUPPORTED_EXPORT_SCHEMA_VERSIONS
+        or not isinstance(data.get("report_fields"), dict)
+    ):
         raise ZeeError(
             Z1004_EXPORT_FILE_REQUIRED,
-            f"{path} は zee export の出力（schema_version・report_fields を含むJSON）ではありません",
+            f"{path} は zee export の出力（対応する schema_version・dict の report_fields を"
+            "含むJSON）ではありません",
         )
     return data
+
+
+def _parse_ts(ts: Any, context: str) -> datetime:
+    if not isinstance(ts, str):
+        raise ZeeError(Z1002_INVALID_CANARY_HITS_FILE, f"{context}: 'ts' は文字列（ISO8601）である必要があります")
+    try:
+        dt = datetime.fromisoformat(ts)
+    except ValueError as e:
+        raise ZeeError(Z1002_INVALID_CANARY_HITS_FILE, f"{context}: 'ts'={ts!r} をISO8601として解析できません: {e}") from e
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
 def load_canary_hits(paths: list[Path]) -> list[dict[str, Any]]:
@@ -98,21 +116,23 @@ def load_canary_hits(paths: list[Path]) -> list[dict[str, Any]]:
     for p in paths:
         try:
             lines = Path(p).read_text(encoding="utf-8").splitlines()
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             raise ZeeError(Z1002_INVALID_CANARY_HITS_FILE, f"{p}: {e}") from e
         for i, raw in enumerate(lines, start=1):
             line = raw.strip()
             if not line:
                 continue
+            context = f"{p}:{i}"
             try:
                 rec = json.loads(line)
             except json.JSONDecodeError as e:
-                raise ZeeError(Z1002_INVALID_CANARY_HITS_FILE, f"{p}:{i}: {e}") from e
-            if not isinstance(rec, dict) or "ts" not in rec or "token" not in rec:
+                raise ZeeError(Z1002_INVALID_CANARY_HITS_FILE, f"{context}: {e}") from e
+            if not isinstance(rec, dict) or not isinstance(rec.get("token"), str) or not rec.get("token"):
                 raise ZeeError(
                     Z1002_INVALID_CANARY_HITS_FILE,
-                    f"{p}:{i}: 'ts' と 'token' を含む1行1JSONの形式ではありません",
+                    f"{context}: 'token'（空でない文字列）を含む1行1JSONの形式ではありません",
                 )
+            _parse_ts(rec.get("ts"), context)  # validates; original string is kept for display
             hits.append(rec)
     return hits
 
@@ -120,11 +140,11 @@ def load_canary_hits(paths: list[Path]) -> list[dict[str, Any]]:
 def _canary_summary(hits: list[dict[str, Any]]) -> dict[str, Any]:
     if not hits:
         return {"count": 0, "first_seen": None, "last_seen": None, "unique_tokens": 0, "hits": []}
-    times = sorted(h["ts"] for h in hits)
+    ordered = sorted(hits, key=lambda h: _parse_ts(h["ts"], "canary_hit"))
     return {
         "count": len(hits),
-        "first_seen": times[0],
-        "last_seen": times[-1],
+        "first_seen": ordered[0]["ts"],
+        "last_seen": ordered[-1]["ts"],
         "unique_tokens": len({h["token"] for h in hits}),
         "hits": hits,
     }
@@ -155,6 +175,9 @@ def build_incident_report(
             "detected_at_last": rf.get("detected_at_last"),
             "affected_asset_ids": rf.get("affected_asset_ids", []),
             "events_total": export.get("events_total", 0),
+            "events_included": export.get("events_included", 0),
+            "events_truncated": export.get("events_truncated", False),
+            "events": export.get("events", []),
             "active_containments": export.get("active_containments", []),
             "chain_verification": export.get("chain_verification", {}),
         },
@@ -236,6 +259,12 @@ def render_text(doc: dict[str, Any]) -> str:
     lines.append(ce["incident_summary_auto"] or "（記録なし）")
     lines.append(f"検知期間: {ce['detected_at_first'] or '不明'} 〜 {ce['detected_at_last'] or '不明'}")
     lines.append(f"対象資産: {', '.join(ce['affected_asset_ids']) or '（なし）'}")
+    lines.append(
+        f"検知イベント件数: {ce['events_total']}"
+        f"（この文書のJSONに{ce['events_included']}件を収録"
+        + ("・新しい順に一部のみ" if ce["events_truncated"] else "")
+        + "。個別イベントの時刻・操作種別・検知元は <out>.json の containment_export.events を参照）"
+    )
     lines.append(f"解除されていない遮断記録: {len(ce['active_containments'])} 件")
     for name, key in (("events.jsonl", "events_jsonl"), ("metrics.jsonl", "metrics_jsonl")):
         c = ce["chain_verification"].get(key, {})
@@ -249,6 +278,12 @@ def render_text(doc: dict[str, Any]) -> str:
             f"発火件数: {qc['count']}（ユニークトークン {qc['unique_tokens']}、"
             f"{qc['first_seen']} 〜 {qc['last_seen']}）"
         )
+        lines.append(
+            "個別ヒット（時刻・接続元・トークン。hostname型はDNSリゾルバのIPである"
+            "可能性が高い点に注意 — query-canary.md §2.1）:"
+        )
+        for h in qc["hits"]:
+            lines.append(f"- {h['ts']} remote_ip={h.get('remote_ip', '不明')} token={h['token']}")
     else:
         lines.append("添付なし")
     lines.append("")
@@ -287,6 +322,8 @@ def render_text(doc: dict[str, Any]) -> str:
 
 
 def _esc(s: Any) -> str:
+    """Text-node escaping only — does not escape quotes, so not safe for
+    embedding into an HTML attribute value (only used inside <body> text here)."""
     return (
         str(s)
         .replace("&", "&amp;")

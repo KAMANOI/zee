@@ -378,6 +378,7 @@ def _cmd_incident_report(args: argparse.Namespace) -> int:
     """
     import json as _json
 
+    from .errors import Z1003_DILUTION_COUNT_INCONSISTENT, Z1005_OUTPUT_COLLIDES_WITH_INPUT
     from .report.incident_report import (
         DilutionSummary,
         build_incident_report,
@@ -387,13 +388,36 @@ def _cmd_incident_report(args: argparse.Namespace) -> int:
         render_text,
     )
 
-    export = load_export(Path(args.export_json))
-    canary_hits = load_canary_hits([Path(p) for p in (args.canary_hits or [])])
+    export_path = Path(args.export_json)
+    canary_paths = [Path(p) for p in (args.canary_hits or [])]
+    out_json = Path(str(args.out) + ".json")
+    out_text = Path(str(args.out) + ".txt")
+    out_html = Path(str(args.out) + ".html")
+
+    # Input files are read-only evidence; never let --force make them an
+    # output target (found in external review 2026-10-09).
+    inputs = {export_path.resolve(), *(p.resolve() for p in canary_paths)}
+    outputs = {out_json, out_text, out_html}
+    for out_p in outputs:
+        if out_p.exists() and out_p.resolve() in inputs:
+            raise ZeeError(Z1005_OUTPUT_COLLIDES_WITH_INPUT, str(out_p))
+
+    export = load_export(export_path)
+    canary_hits = load_canary_hits(canary_paths)
     dilution = None
-    if args.dilution_leaked is not None or args.dilution_dummy_matched is not None:
+    leaked_given = args.dilution_leaked is not None
+    matched_given = args.dilution_dummy_matched is not None
+    if leaked_given != matched_given:
+        # Found in independent review: `None or 0` silently turned a
+        # half-specified flag into a confirmed "0 real victims" claim.
+        raise ZeeError(
+            Z1003_DILUTION_COUNT_INCONSISTENT,
+            "--dilution-leaked と --dilution-dummy-matched は両方指定するか、両方省略してください",
+        )
+    if leaked_given and matched_given:
         dilution = DilutionSummary(
-            leaked_total=args.dilution_leaked or 0,
-            dummy_matched=args.dilution_dummy_matched or 0,
+            leaked_total=args.dilution_leaked,
+            dummy_matched=args.dilution_dummy_matched,
         )
 
     report = build_incident_report(
@@ -404,9 +428,6 @@ def _cmd_incident_report(args: argparse.Namespace) -> int:
         incident_label=args.incident_label,
     )
 
-    out_json = Path(str(args.out) + ".json")
-    out_text = Path(str(args.out) + ".txt")
-    out_html = Path(str(args.out) + ".html")
     _write_private_files(
         [
             (out_json, _json.dumps(report, ensure_ascii=False, indent=2)),
@@ -809,6 +830,7 @@ _USER_INPUT_CODES = frozenset({
     "Z1002",  # incident-report: bad --canary-hits file
     "Z1003",  # incident-report: inconsistent dilution counts
     "Z1004",  # incident-report: bad/missing --export-json
+    "Z1005",  # incident-report: --out collides with an input file
 })
 
 

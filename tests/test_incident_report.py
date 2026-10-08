@@ -114,6 +114,77 @@ def test_canary_hits_missing_required_fields_rejected(tmp_path: Path):
     assert e.value.code == "Z1002"
 
 
+def test_canary_hit_with_non_string_token_rejected(tmp_path: Path):
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps({"ts": "2026-10-09T00:00:00+00:00", "token": ["a"]}) + "\n", encoding="utf-8")
+    with pytest.raises(ZeeError) as e:
+        load_canary_hits([bad])
+    assert e.value.code == "Z1002"
+
+
+def test_canary_hit_with_unparseable_ts_rejected(tmp_path: Path):
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps({"ts": "not-a-timestamp", "token": "aaa"}) + "\n", encoding="utf-8")
+    with pytest.raises(ZeeError) as e:
+        load_canary_hits([bad])
+    assert e.value.code == "Z1002"
+
+
+def test_canary_summary_orders_by_instant_not_string(tmp_path: Path):
+    # 09:00+09:00 == 00:00 UTC, which is BEFORE 01:00+00:00 — a naive
+    # string sort would get this backwards (found in external review).
+    from zee.report.incident_report import _canary_summary
+
+    hits = [
+        {"ts": "2026-10-09T01:00:00+00:00", "token": "later"},
+        {"ts": "2026-10-09T09:00:00+09:00", "token": "earlier"},
+    ]
+    summary = _canary_summary(hits)
+    assert summary["first_seen"] == "2026-10-09T09:00:00+09:00"
+    assert summary["last_seen"] == "2026-10-09T01:00:00+00:00"
+
+
+def test_export_with_null_report_fields_rejected(tmp_path: Path):
+    bad = tmp_path / "bad_export.json"
+    bad.write_text(json.dumps({"schema_version": "1", "report_fields": None}), encoding="utf-8")
+    with pytest.raises(ZeeError) as e:
+        load_export(bad)
+    assert e.value.code == "Z1004"
+
+
+def test_export_with_unsupported_schema_version_rejected(tmp_path: Path):
+    bad = tmp_path / "bad_export.json"
+    bad.write_text(json.dumps({"schema_version": "99", "report_fields": {}}), encoding="utf-8")
+    with pytest.raises(ZeeError) as e:
+        load_export(bad)
+    assert e.value.code == "Z1004"
+
+
+def test_output_cannot_collide_with_input_export_file(tmp_path: Path, monkeypatch):
+    export_path = _make_export(tmp_path, monkeypatch)
+    out_prefix = Path(str(export_path)[: -len(".json")])  # same stem as the export
+    assert out_prefix.with_suffix(".json") == export_path
+
+    rc = main([
+        "incident-report",
+        "--export-json", str(export_path),
+        "--recipient", "police",
+        "--out", str(out_prefix),
+        "--force",
+    ])
+    assert rc != 0
+    # The original evidence file must survive untouched.
+    original = json.loads(export_path.read_text(encoding="utf-8"))
+    assert "events" in original
+
+
+def test_report_includes_full_event_detail(tmp_path: Path, monkeypatch):
+    export = load_export(_make_export(tmp_path, monkeypatch))
+    doc = build_incident_report(export=export, recipient="police")
+    assert len(doc["containment_export"]["events"]) == 1
+    assert doc["containment_export"]["events"][0]["asset_id"] == "t-host"
+
+
 def test_dilution_count_inconsistent_rejected():
     with pytest.raises(ZeeError) as e:
         DilutionSummary(leaked_total=5, dummy_matched=10)
