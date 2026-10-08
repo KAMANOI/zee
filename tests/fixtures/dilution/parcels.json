@@ -1,5 +1,6 @@
 {
   "_comment": "Fixture only — NOT real MOJ 登記所備付地図データ. Schema stand-in for prototype/test purposes (design doc §10). Coordinates are an arbitrary local planar grid, not a real Japan Plane Rectangular CS zone.",
+  "crs": "fixture-local-grid-v1",
   "parcels": [
     {
       "chiban": "サンプル町一丁目45番",

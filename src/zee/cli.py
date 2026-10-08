@@ -514,14 +514,24 @@ def _cmd_dilute_generate(args: argparse.Namespace) -> int:
     touch any database, backup, or network; mixing the output into a
     backup/export is the operator's own step.
     """
+    import secrets
+
     from .dilution.generate import DiluteConfig, run
+
+    seed = args.seed or os.environ.get("ZEE_DILUTE_SEED")
+    if not seed:
+        # design doc §5: unspecified seed is auto-generated and shown
+        # once, on stdout only — never written to a file or log.
+        seed = secrets.token_hex(32)
+        print(f"generated seed (save this — it is the only way to re-run "
+              f"identically or recognize these dummies later): {seed}")
 
     records_path, ledger_path = run(DiluteConfig(
         parcels_path=Path(args.parcels) if args.parcels else None,
         public_land_path=Path(args.public_land) if args.public_land else None,
         abr_towns_path=Path(args.abr_towns),
         zipcode_path=Path(args.zipcode_data),
-        seed=args.seed,
+        seed=seed,
         count=args.count,
         layer=args.layer,
         email_mode=args.email_mode,
@@ -736,9 +746,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="町字マスター CSV (real town names, one per line)")
     p_dilute.add_argument("--zipcode-data", required=True,
                           help="日本郵便 KEN_ALL.CSV / utf_all.csv (or a same-shaped subset)")
-    p_dilute.add_argument("--seed", required=True,
-                          help="your own secret — reusing the same seed reproduces the "
-                          "same output deterministically; do not share it")
+    p_dilute.add_argument("--seed", default=None,
+                          help="your own secret, min 16 chars — reusing the same seed "
+                          "reproduces the same output deterministically; do not share "
+                          "it, and prefer ZEE_DILUTE_SEED over this flag (shell "
+                          "history / process list exposure). Omit both to auto-generate "
+                          "one (printed once, to stdout only)")
     p_dilute.add_argument("--count", type=int, default=100)
     p_dilute.add_argument("--email-mode", choices=("omit", "user-domain"), default="omit")
     p_dilute.add_argument("--email-domain", default=None,
@@ -768,6 +781,13 @@ _USER_INPUT_CODES = frozenset({
     "Z603",  # restore token not initialised
     "Z604",  # restore token invalid
     "Z702",  # export: invalid --since/--until
+    "Z802",  # dilute-generate: --email-domain required for user-domain mode
+    "Z803",  # dilute-generate: --parcels/--public-land required for this --layer
+    "Z804",  # dilute-generate: parcels/public-land crs mismatch
+    "Z805",  # dilute-generate: empty town master
+    "Z806",  # dilute-generate: --seed too short
+    "Z807",  # dilute-generate: --count must be positive
+    "Z808",  # dilute-generate: --out already has output files
 })
 
 

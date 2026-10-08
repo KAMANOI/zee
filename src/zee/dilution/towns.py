@@ -13,6 +13,8 @@ import csv
 import random
 from pathlib import Path
 
+from ..errors import Z805_EMPTY_TOWN_MASTER, ZeeError
+
 _FICTIONAL_STEMS = (
     "架空台", "仮称野", "試作丘", "見本原", "雛形沢", "模擬坂",
 )
@@ -21,7 +23,13 @@ _CHOME = ("一丁目", "二丁目", "三丁目", "四丁目")
 
 def load_real_town_names(path: Path) -> frozenset[str]:
     with Path(path).open(encoding="utf-8", newline="") as f:
-        return frozenset(row[0].strip() for row in csv.reader(f) if row and row[0].strip())
+        towns = frozenset(row[0].strip() for row in csv.reader(f) if row and row[0].strip())
+    if not towns:
+        # An empty master makes is_real_town() vacuously true for every
+        # candidate — the Layer-1 "absent from the real master" guarantee
+        # would mean nothing. Refuse rather than generate unverified names.
+        raise ZeeError(Z805_EMPTY_TOWN_MASTER)
+    return towns
 
 
 def is_real_town(name: str, real_towns: frozenset[str]) -> bool:

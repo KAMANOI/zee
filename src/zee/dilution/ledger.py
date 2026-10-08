@@ -5,13 +5,17 @@ record_hmac is HMAC-SHA256 keyed on the operator's secret seed, over a
 canonical join of the record's fields. Leaking the ledger alone (without
 the seed) does not let anyone recompute which real-looking rows are
 dummies, and the public generator source code alone doesn't either.
+
+The ledger carries nothing but the HMAC list — no separate id that
+could itself correlate back to a record (e.g. if that id were ever also
+embedded in the record, as an earlier draft of this module's caller
+mistakenly did for the user-domain email option; see generate.py).
 """
 
 from __future__ import annotations
 
 import hmac
 import json
-from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
@@ -29,17 +33,15 @@ def record_hmac(fields: dict[str, str], seed: str) -> str:
     return hmac.new(key, msg, sha256).hexdigest()
 
 
-@dataclass(frozen=True)
-class LedgerEntry:
-    dummy_id: str
-    record_hmac: str
-
-
-def write_ledger(path: Path, entries: list[LedgerEntry]) -> None:
+def write_ledger(path: Path, hmacs: list[str]) -> None:
     with Path(path).open("w", encoding="utf-8") as f:
-        for e in entries:
-            f.write(json.dumps({"dummy_id": e.dummy_id, "record_hmac": e.record_hmac},
-                                ensure_ascii=False) + "\n")
+        for h in hmacs:
+            f.write(json.dumps({"record_hmac": h}, ensure_ascii=False) + "\n")
+
+
+def load_ledger_hmacs(path: Path) -> frozenset[str]:
+    with Path(path).open(encoding="utf-8") as f:
+        return frozenset(json.loads(line)["record_hmac"] for line in f if line.strip())
 
 
 def is_dummy(fields: dict[str, str], seed: str, ledger_hmacs: frozenset[str]) -> bool:

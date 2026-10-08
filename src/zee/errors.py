@@ -54,6 +54,11 @@ Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正�
 Z801_NO_ELIGIBLE_PARCEL = ("Z801", "公園・河川区域に完全に含まれる地番が1件も見つかりませんでした（fail-closed）")
 Z802_EMAIL_DOMAIN_REQUIRED = ("Z802", "--email-mode=user-domain には --email-domain の指定が必要です")
 Z803_MISSING_LAYER2_INPUT = ("Z803", "--layer に real-nonresidential/both を指定する場合は --parcels と --public-land の両方が必要です")
+Z804_CRS_MISMATCH = ("Z804", "地番データと公有地データの座標系(crs)が一致しません")
+Z805_EMPTY_TOWN_MASTER = ("Z805", "町字マスターが空です。架空町名の非実在確認ができないため生成を拒否します")
+Z806_WEAK_SEED = ("Z806", "--seed が短すぎます（最低16文字）。弱いseedはHMAC台帳の安全性を損ないます")
+Z807_INVALID_COUNT = ("Z807", "--count は1以上の整数を指定してください")
+Z808_OUTPUT_EXISTS = ("Z808", "出力先に records.csv / ledger.jsonl が既に存在します。上書きしません。別の --out を指定してください")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import csv
 import random
-import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +17,10 @@ from ..errors import (
     Z801_NO_ELIGIBLE_PARCEL,
     Z802_EMAIL_DOMAIN_REQUIRED,
     Z803_MISSING_LAYER2_INPUT,
+    Z806_WEAK_SEED,
+    Z807_INVALID_COUNT,
+    Z808_OUTPUT_EXISTS,
+    Z901_INTERNAL,
     ZeeError,
 )
 from .address import layer1_address, layer2_address
@@ -28,6 +31,8 @@ from .towns import generate_fictional_town_name, load_real_town_names
 
 _RECORD_FIELDS = ("surname", "given_name", "gender", "age", "postal_code",
                    "address", "phone", "email")
+
+MIN_SEED_LENGTH = 16
 
 
 @dataclass(frozen=True)
@@ -45,18 +50,36 @@ class DiluteConfig:
     out_dir: Path
 
 
-def _email_for(dummy_id: str, cfg: DiluteConfig) -> str:
+def _email_for(rng: random.Random, cfg: DiluteConfig) -> str:
     if cfg.email_mode == "omit":
         return ""
     if cfg.email_mode == "user-domain":
         if not cfg.email_domain:
             raise ZeeError(Z802_EMAIL_DOMAIN_REQUIRED)
-        return f"dummy+{dummy_id}@{cfg.email_domain}"
-    raise ValueError(f"unknown email_mode: {cfg.email_mode!r}")
+        # Derived from the seeded rng (not secrets.token_hex): must be
+        # reproducible under the same --seed like every other field, and
+        # must NOT reuse any id that also lives in the ledger — otherwise
+        # a leaked ledger alone (no seed needed) could match this email
+        # straight back to its row, defeating the HMAC-key protection.
+        token = format(rng.getrandbits(64), "016x")
+        return f"d{token}@{cfg.email_domain}"
+    raise ZeeError(Z901_INTERNAL, f"unknown email_mode: {cfg.email_mode!r}")
 
 
 def run(cfg: DiluteConfig) -> tuple[Path, Path]:
+    if cfg.count <= 0:
+        raise ZeeError(Z807_INVALID_COUNT)
+    if len(cfg.seed) < MIN_SEED_LENGTH:
+        raise ZeeError(Z806_WEAK_SEED)
+    if cfg.email_mode == "user-domain" and not cfg.email_domain:
+        raise ZeeError(Z802_EMAIL_DOMAIN_REQUIRED)
+
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
+    records_path = cfg.out_dir / "records.csv"
+    ledger_path = cfg.out_dir / "ledger.jsonl"
+    if records_path.exists() or ledger_path.exists():
+        raise ZeeError(Z808_OUTPUT_EXISTS)
+
     rng = random.Random(cfg.seed)
 
     real_towns = load_real_town_names(cfg.abr_towns_path)
@@ -66,14 +89,17 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
     if cfg.layer in ("real-nonresidential", "both"):
         if cfg.parcels_path is None or cfg.public_land_path is None:
             raise ZeeError(Z803_MISSING_LAYER2_INPUT)
-        parcels = load_parcels(cfg.parcels_path)
-        public_land = load_public_land(cfg.public_land_path)
-        eligible_parcels = find_nonresidential_parcels(parcels, public_land)
+        parcels, parcels_crs = load_parcels(cfg.parcels_path)
+        public_land, public_land_crs = load_public_land(cfg.public_land_path)
+        eligible_parcels = find_nonresidential_parcels(
+            parcels, parcels_crs, public_land, public_land_crs, real_towns,
+        )
         if not eligible_parcels:
             raise ZeeError(Z801_NO_ELIGIBLE_PARCEL)
 
     rows: list[dict[str, str]] = []
-    ledger_entries: list[ledger_mod.LedgerEntry] = []
+    hmacs: list[str] = []
+    used_addresses: set[str] = set()
 
     for _ in range(cfg.count):
         person = generate_person(rng)
@@ -84,16 +110,23 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
         else:
             use_layer2 = rng.random() < 0.5
 
-        if use_layer2:
-            parcel = rng.choice(eligible_parcels)
-            address = layer2_address(rng, parcel)
-            town = parcel.town
-        else:
-            town = generate_fictional_town_name(rng, real_towns)
-            address = layer1_address(rng, town)
+        # Retry on an in-batch address collision (same chiban/town +
+        # building + room drawn twice) rather than ever silently writing
+        # two different "people" at an identical address in one batch.
+        for _attempt in range(50):
+            if use_layer2:
+                parcel = rng.choice(eligible_parcels)
+                address = layer2_address(rng, parcel)
+                town = parcel.town
+            else:
+                town = generate_fictional_town_name(rng, real_towns)
+                address = layer1_address(rng, town)
+            if address not in used_addresses:
+                used_addresses.add(address)
+                break
 
         postal_code = zip_for_town(town, zip_by_town, cfg.fallback_zip)
-        dummy_id = secrets.token_hex(8)
+        email = _email_for(rng, cfg)
 
         fields = {
             "surname": person.surname,
@@ -103,25 +136,18 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
             "postal_code": postal_code,
             "address": address,
             "phone": "",
-            "email": _email_for(dummy_id, cfg),
+            "email": email,
         }
-        # rows carries ONLY the plain PII fields — no id/marker column.
-        # dummy_id lives in the ledger only, purely as a human-readable
-        # label for that ledger line; it is never written into records.csv
+        # rows carries ONLY the plain PII fields — no id/marker column
         # (design doc §5: the record itself must carry no tell).
         rows.append(dict(fields))
-        ledger_entries.append(ledger_mod.LedgerEntry(
-            dummy_id=dummy_id,
-            record_hmac=ledger_mod.record_hmac(fields, cfg.seed),
-        ))
+        hmacs.append(ledger_mod.record_hmac(fields, cfg.seed))
 
-    records_path = cfg.out_dir / "records.csv"
     with records_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(_RECORD_FIELDS))
         writer.writeheader()
         writer.writerows(rows)
 
-    ledger_path = cfg.out_dir / "ledger.jsonl"
-    ledger_mod.write_ledger(ledger_path, ledger_entries)
+    ledger_mod.write_ledger(ledger_path, hmacs)
 
     return records_path, ledger_path
