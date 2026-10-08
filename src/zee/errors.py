@@ -8,6 +8,7 @@ Code ranges:
     Z5xx — notifier
     Z6xx — recovery
     Z7xx — containment report export
+    Z8xx — decoy PII dilution (value-dilution dummy records)
     Z9xx — unexpected internal errors
 
 User-reported issues should be traceable from the code alone.
@@ -48,6 +49,11 @@ Z604_RESTORE_TOKEN_INVALID = ("Z604", "復旧トークンが一致しません")
 # Z7xx
 Z701_EXPORT_OUTPUT_NOT_WRITABLE = ("Z701", "エクスポート出力先に書き込めません")
 Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正、または since が until より後です")
+
+# Z8xx
+Z801_NO_ELIGIBLE_PARCEL = ("Z801", "公園・河川区域に完全に含まれる地番が1件も見つかりませんでした（fail-closed）")
+Z802_EMAIL_DOMAIN_REQUIRED = ("Z802", "--email-mode=user-domain には --email-domain の指定が必要です")
+Z803_MISSING_LAYER2_INPUT = ("Z803", "--layer に real-nonresidential/both を指定する場合は --parcels と --public-land の両方が必要です")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")

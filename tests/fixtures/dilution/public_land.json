@@ -1,0 +1,13 @@
+{
+  "_comment": "Fixture only — NOT real 国土数値情報 都市公園/河川区域 data. Same planar grid as parcels.json.",
+  "polygons": [
+    {
+      "kind": "park",
+      "vertices": [[0, 0], [100, 0], [100, 100], [0, 100]]
+    },
+    {
+      "kind": "river",
+      "vertices": [[200, 0], [220, 0], [220, 100], [200, 100]]
+    }
+  ]
+}

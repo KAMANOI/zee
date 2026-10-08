@@ -1,0 +1,29 @@
+{
+  "_comment": "Fixture only — NOT real MOJ 登記所備付地図データ. Schema stand-in for prototype/test purposes (design doc §10). Coordinates are an arbitrary local planar grid, not a real Japan Plane Rectangular CS zone.",
+  "parcels": [
+    {
+      "chiban": "サンプル町一丁目45番",
+      "town": "サンプル町一丁目",
+      "vertices": [[10, 10], [20, 10], [20, 20], [10, 20]],
+      "representative_point": [15, 15]
+    },
+    {
+      "chiban": "サンプル町一丁目46番",
+      "town": "サンプル町一丁目",
+      "vertices": [[30, 30], [40, 30], [40, 40], [30, 40]],
+      "representative_point": [35, 35]
+    },
+    {
+      "chiban": "サンプル町二丁目10番",
+      "town": "サンプル町二丁目",
+      "vertices": [[150, 150], [160, 150], [160, 160], [150, 160]],
+      "representative_point": [155, 155]
+    },
+    {
+      "chiban": "サンプル町一丁目50番",
+      "town": "サンプル町一丁目",
+      "vertices": [[90, 90], [110, 90], [110, 110], [90, 110]],
+      "representative_point": [100, 100]
+    }
+  ]
+}

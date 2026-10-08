@@ -507,6 +507,34 @@ def _cmd_gate_audit(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def _cmd_dilute_generate(args: argparse.Namespace) -> int:
+    """Generate dummy PII records + a holder-only ledger (value dilution).
+
+    Writes files only — see docs/design/decoy-pii-dilution.md. Does not
+    touch any database, backup, or network; mixing the output into a
+    backup/export is the operator's own step.
+    """
+    from .dilution.generate import DiluteConfig, run
+
+    records_path, ledger_path = run(DiluteConfig(
+        parcels_path=Path(args.parcels) if args.parcels else None,
+        public_land_path=Path(args.public_land) if args.public_land else None,
+        abr_towns_path=Path(args.abr_towns),
+        zipcode_path=Path(args.zipcode_data),
+        seed=args.seed,
+        count=args.count,
+        layer=args.layer,
+        email_mode=args.email_mode,
+        email_domain=args.email_domain,
+        fallback_zip=args.fallback_zip,
+        out_dir=Path(args.out),
+    ))
+    print(f"wrote {records_path}")
+    print(f"wrote {ledger_path}  (keep separately from records.csv; "
+          f"this is how you tell your own dummies apart later)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="zee",
@@ -685,6 +713,40 @@ def build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", help="emit the audit report as JSON"
     )
     p_gate_audit.set_defaults(func=_cmd_gate_audit)
+
+    p_dilute = sub.add_parser(
+        "dilute-generate",
+        help="generate dummy PII records + a holder-only ledger (value "
+        "dilution for exfiltrated data); writes files only — see "
+        "docs/design/decoy-pii-dilution.md",
+    )
+    p_dilute.add_argument(
+        "--layer", choices=("fictional-town", "real-nonresidential", "both"),
+        default="fictional-town",
+        help="fictional-town: real-looking but non-existent town name "
+        "(no extra inputs needed). real-nonresidential: real town + a "
+        "chiban confirmed fully inside park/river public land, requires "
+        "--parcels and --public-land. both: mix of the two.",
+    )
+    p_dilute.add_argument("--parcels", default=None,
+                          help="地番 parcel extract (required for real-nonresidential/both)")
+    p_dilute.add_argument("--public-land", default=None,
+                          help="都市公園・河川区域 extract (required for real-nonresidential/both)")
+    p_dilute.add_argument("--abr-towns", required=True,
+                          help="町字マスター CSV (real town names, one per line)")
+    p_dilute.add_argument("--zipcode-data", required=True,
+                          help="日本郵便 KEN_ALL.CSV / utf_all.csv (or a same-shaped subset)")
+    p_dilute.add_argument("--seed", required=True,
+                          help="your own secret — reusing the same seed reproduces the "
+                          "same output deterministically; do not share it")
+    p_dilute.add_argument("--count", type=int, default=100)
+    p_dilute.add_argument("--email-mode", choices=("omit", "user-domain"), default="omit")
+    p_dilute.add_argument("--email-domain", default=None,
+                          help="a domain you control; required with --email-mode=user-domain")
+    p_dilute.add_argument("--fallback-zip", default="0000000",
+                          help="used when a town has no match in --zipcode-data")
+    p_dilute.add_argument("--out", required=True, help="output directory")
+    p_dilute.set_defaults(func=_cmd_dilute_generate)
 
     return parser
 
