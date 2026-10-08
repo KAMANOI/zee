@@ -100,11 +100,11 @@ def classify(event: TrapEvent, asset: AssetProfile) -> TierResult:
     confirmed: list[str] = []
     if sens_key == "unknown":
         confirmed.append("パス種別は未確認")
-    else:
-        confirmed.append(f"種別: {_SENSITIVITY_LABELS[sens_key]}")
     confirmed.append(
-        "資産は共有/常時稼働領域" if asset.type != "workstation" else "資産は単一ワークステーション"
+        "資産は共有領域" if asset.type != "workstation" else "資産は単一ワークステーション"
     )
+    if asset.overnight_active:
+        confirmed.append("夜間も稼働")
 
     return TierResult(
         level=level,
@@ -132,11 +132,12 @@ def safe_classify(event: TrapEvent, asset: AssetProfile) -> TierResult:
 
 def reason_line(result: TierResult, *, action: str) -> str:
     """action: one of 'detect' / 'contain' / 'contain_failed' / 'dry_run'."""
+    axes = "、".join(result.confirmed_axes)
+    if action == "contain_failed":
+        return f"{result.sensitivity_category}のパスへの接触を検知。遮断は失敗(手動確認が必要)。{axes}。"
     verb = {
         "detect": "検知",
         "contain": "封じ込め",
-        "contain_failed": "遮断を試行(失敗、手動確認が必要)",
         "dry_run": "検知(dry_run、手動確認可)",
     }[action]
-    axes = "、".join(result.confirmed_axes)
     return f"{result.sensitivity_category}のパスへの接触を{verb}。{axes}。"
