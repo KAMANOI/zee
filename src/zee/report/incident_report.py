@@ -240,8 +240,10 @@ def build_incident_report(
     return doc
 
 
-def _recipient_block(r: Recipient) -> list[str]:
-    lines = [f"## 提出先: {r.agency}", f"参照URL: {r.url}（確認日 {r.as_of}。変わりうるため提出前に再確認してください）"]
+def _recipient_block(r: Recipient, *, heading: str = "提出先") -> list[str]:
+    lines = [f"## {heading}: {r.agency}", f"参照URL: {r.url}（確認日 {r.as_of}。変わりうるため提出前に再確認してください）"]
+    if r.phone:
+        lines.append(f"電話: {r.phone}")
     if r.hours and "未確認" not in r.hours:
         lines.append(f"受付時間: {r.hours}")
     if r.note:
@@ -296,25 +298,31 @@ def render_text(doc: dict[str, Any]) -> str:
         lines.append(d["note"])
         lines.append("")
 
+    from .recipients import POLICE_PHONE_CONSULT
+
     if doc["recipient"] == "police":
         lines.append("## 報告項目（警察向け・任意通報）")
         for k, v in doc["police_fields"].items():
             if k != "note":
                 lines.append(f"- {k}: {v}")
         lines.append(doc["police_fields"]["note"])
-        lines.append("")
-        lines.extend(_recipient_block(BY_NAME["police"]))
-        from .recipients import POLICE_PHONE_CONSULT
-
-        lines.append("")
-        lines.extend(_recipient_block(POLICE_PHONE_CONSULT))
     else:
         lines.append("## 法定報告事項（個人情報保護委員会向け・施行規則第8条）")
         for k in _STATUTORY_PPC_ITEMS_ORDER:
             lines.append(f"- {k}: {doc['ppc_statutory_items'][k]}")
         lines.append(doc["ppc_statutory_items"]["note"])
-        lines.append("")
-        lines.extend(_recipient_block(BY_NAME["ppc"]))
+    lines.append("")
+
+    # 代表指示（2026-10-09）：データ末尾に警視庁サイバー窓口とPPC窓口の両方を入れる。
+    # 本文（上の報告項目）は --recipient で選んだ1件分のみ。末尾の参照窓口は常に
+    # 両方を列挙し、警察の任意通報とPPCの法定報告（個人情報保護法26条）が
+    # 別の手続き・別の期限であることを明記する（混同しない・claude.ai補足6）。
+    lines.append("## 参照窓口（警察とPPCは別の手続き・別の期限です）")
+    lines.extend(_recipient_block(BY_NAME["police"], heading="参照窓口（警察・任意通報）"))
+    lines.append("")
+    lines.extend(_recipient_block(POLICE_PHONE_CONSULT, heading="参照窓口（警察・電話相談）"))
+    lines.append("")
+    lines.extend(_recipient_block(BY_NAME["ppc"], heading="参照窓口（PPC・個人情報保護法26条の報告義務）"))
 
     lines.append("")
     lines.append(doc["submission"]["note"])

@@ -68,8 +68,15 @@ def test_incident_report_police_vs_ppc_switch(tmp_path: Path, monkeypatch):
 
     police_text = render_text(police_doc)
     ppc_text = render_text(ppc_doc)
-    assert "警察" in police_text and "個人情報保護委員会" not in police_text.split("## 提出先")[1]
+    # The body (report_fields / statutory items) must only carry the chosen
+    # lane; the reference footer (代表指示: 末尾に両方) always lists both.
+    police_body = police_text.split("## 参照窓口", 1)[0]
+    assert "警察" in police_body and "個人情報保護委員会" not in police_body
     assert "個人情報保護委員会" in ppc_text
+    for text in (police_text, ppc_text):
+        footer = text.split("## 参照窓口", 1)[1]
+        assert "警察" in footer and "個人情報保護委員会" in footer
+        assert "03-6457-9680" in footer
 
 
 def test_unknown_recipient_rejected(tmp_path: Path, monkeypatch):
