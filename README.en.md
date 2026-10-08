@@ -213,6 +213,14 @@ Every notification carries an op-class hint:
 
 Hints never say "ignore safely". The final call is always the operator's.
 
+**3. Notifications carry an impact tier (for operators with no dedicated security staff)**
+
+Every notification's title and body carry a 4-level impact tier (情報/Info, 注意/Caution, 警戒/Warning, 重大/Critical) plus a one-line reason. No security background is needed to judge severity at a glance.
+
+The tier comes from three axes: the sensitivity of the touched path's category (credential/key, data that may contain personal information, general file), how far that category's authority reaches (the asset's type), and the asset's business reach (how many decoys it has, whether it's a shared asset, whether it runs overnight). Notifications show the category name only, never the actual path or filename.
+
+This tier is display-only. **It is never used by the auto-cut decision in section 2 above.** Removing the tier display does not change whether a cut fires (enforced by tests).
+
 For reference: to ever add a process-name allowlist that actually works at detect time, Zee would need a privileged backend (Linux fanotify / macOS Endpoint Security / Windows minifilter). That is incompatible with the MVP's lightweight, low-privilege scope. It will be designed separately if and when needed.
 
 ---
