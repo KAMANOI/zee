@@ -291,6 +291,14 @@ See the [CHANGELOG.md](./CHANGELOG.md) [0.3.0] entry for the full migration note
 
 ---
 
+## Security
+
+To report a vulnerability, see what to expect, and learn how to receive
+fixed releases: [SECURITY.md](./SECURITY.md) (also available in
+[Japanese](./SECURITY.ja.md)).
+
+---
+
 ## License
 
 [MIT License](./LICENSE). Everything in this repository is open.

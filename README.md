@@ -298,6 +298,13 @@ zee init-restore-token
 
 ---
 
+## セキュリティ
+
+脆弱性を見つけた場合の報告方法・対応の目安・修正版の受け取り方は
+[SECURITY.ja.md](./SECURITY.ja.md)（[英語版 SECURITY.md](./SECURITY.md)）を参照してください。
+
+---
+
 ## ライセンス
 
 [MIT License](./LICENSE)。このリポジトリにあるものはすべてオープンです。

@@ -1,5 +1,7 @@
 # Security Policy
 
+> 🌐 日本語版: [SECURITY.ja.md](./SECURITY.ja.md) — if the two disagree, this English file is authoritative.
+
 ## Reporting a Vulnerability
 
 Zee is an Early Public / Research Project, but it is a security project.
@@ -147,3 +149,8 @@ honestly-published boundaries of what Zee is and is not:
   are kept permanently — never auto-deleted — because they are
   evidence. For deployments that expect high event volume, also plan
   a manual archiving schedule.
+
+## How security fixes are documented
+
+Releases that fix a vulnerability are called out under a **Security**
+heading in both [CHANGELOG.md](./CHANGELOG.md) and the GitHub release notes.
