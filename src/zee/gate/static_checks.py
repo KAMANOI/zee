@@ -128,6 +128,7 @@ _EXTRA_INVISIBLE = (
 _HOMOGLYPHS = dict(zip(
     map(ord, "аеорсхуіѕјԁһӏАВЕКМНОРСТХУІЅЈαοριντκΑΒΕΖΗΙΚΜΝΟΡΤΥΧ"),
     "aeopcxyisjdhlABEKMHOPCTXYISJaopivtkABEZHIKMNOPTYX",
+    strict=True,
 ))
 
 
@@ -165,7 +166,7 @@ _CUE_WINDOW = 400
 # 無効にしないで / 隠さず / 無視せず / 無効ではありません / 無視することは禁止.
 _JA_NEG = (
     r"(?!(?:に|では?)?(?:し|さ)?(?:ない|ず|ません|せず|ありません)"
-    r"|(?:する|すること|し)?(?:は|を)?(?:禁止|いけ|なら|だめ|ダメ))"
+    r"|に?(?:する|すること|して|し)?(?:は|を)?(?:禁止|いけ|なら|だめ|ダメ))"
 )
 _JA_DOC = r"(?:指示|命令|指令|プロンプト)(?!書)"
 _CUES: dict[str, re.Pattern[str]] = {
@@ -211,7 +212,6 @@ _EN_NEG = re.compile(
     re.I,
 )
 _EN_NEG_IN = re.compile(r"\b(?:not|never)\b|n't\b", re.I)
-_MAX_CUE_HITS = 1000  # per cue; bounds the pair check on pathological input
 
 
 def _cue_hits(cue: str, view: str) -> list[re.Match[str]]:
@@ -221,15 +221,16 @@ def _cue_hits(cue: str, view: str) -> list[re.Match[str]]:
             continue  # "Earlier guidance is not obsolete"
         if _EN_NEG.search(view[max(0, m.start() - 40):m.start()]):
             continue  # "Do not treat earlier guidance as obsolete"
-        out.append(m)
-        if len(out) >= _MAX_CUE_HITS:
-            break
+        out.append(m)  # no cap: a cap lets cue padding hide the real pair
     return out
 
 
 def _g501_context(view: str) -> str | None:
     """Evidence when two different cues sit within _CUE_WINDOW chars."""
-    hits = {c: _cue_hits(c, view) for c in _CUES}
+    hits = {c: _cue_hits(c, view) for c in "AC"}
+    if not (hits["A"] or hits["C"]):
+        return None  # every pair needs A or C; skip the B/D scans
+    hits.update({c: _cue_hits(c, view) for c in "BD"})
     for a, b in _CUE_PAIRS:
         starts = [m.start() for m in hits[b]]
         for ma in hits[a]:
