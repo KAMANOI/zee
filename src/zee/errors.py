@@ -8,6 +8,7 @@ Code ranges:
     Z5xx — notifier
     Z6xx — recovery
     Z7xx — containment report export
+    Z10xx — incident report bundling (police/PPC handoff documents)
     Z9xx — unexpected internal errors
 
 User-reported issues should be traceable from the code alone.
@@ -48,6 +49,13 @@ Z604_RESTORE_TOKEN_INVALID = ("Z604", "復旧トークンが一致しません")
 # Z7xx
 Z701_EXPORT_OUTPUT_NOT_WRITABLE = ("Z701", "エクスポート出力先に書き込めません")
 Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正、または since が until より後です")
+
+# Z10xx
+Z1001_UNKNOWN_RECIPIENT = ("Z1001", "--recipient は police / ppc のいずれかを指定してください")
+Z1002_INVALID_CANARY_HITS_FILE = ("Z1002", "--canary-hits のファイルが存在しない、またはJSON Lines形式として読めません")
+Z1003_DILUTION_COUNT_INCONSISTENT = ("Z1003", "--dilution-dummy-matched が --dilution-leaked を超えている、または負の値です")
+Z1004_EXPORT_FILE_REQUIRED = ("Z1004", "--export-json が未指定、または zee export が書くスキーマと一致しません")
+Z1005_OUTPUT_COLLIDES_WITH_INPUT = ("Z1005", "--out の出力先が --export-json / --canary-hits の入力ファイルと同じです（--force でも上書きしません）")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")

@@ -370,6 +370,83 @@ def _cmd_export(args: argparse.Namespace) -> int:
     return rc
 
 
+def _cmd_incident_report(args: argparse.Namespace) -> int:
+    """Bundle a zee export + optional canary-hit logs + dilution counts into
+    a document for the operator to hand to police or the PPC. Read-only
+    over its inputs, writes local files only, never submits anything
+    (see src/zee/report/incident_report.py module docstring).
+    """
+    import json as _json
+
+    from .errors import Z1003_DILUTION_COUNT_INCONSISTENT, Z1005_OUTPUT_COLLIDES_WITH_INPUT
+    from .report.incident_report import (
+        DilutionSummary,
+        build_incident_report,
+        load_canary_hits,
+        load_export,
+        render_html,
+        render_text,
+    )
+
+    export_path = Path(args.export_json)
+    canary_paths = [Path(p) for p in (args.canary_hits or [])]
+    out_json = Path(str(args.out) + ".json")
+    out_text = Path(str(args.out) + ".txt")
+    out_html = Path(str(args.out) + ".html")
+
+    # Input files are read-only evidence; never let --force make them an
+    # output target (found in external review 2026-10-09).
+    inputs = {export_path.resolve(), *(p.resolve() for p in canary_paths)}
+    outputs = {out_json, out_text, out_html}
+    for out_p in outputs:
+        if out_p.exists() and out_p.resolve() in inputs:
+            raise ZeeError(Z1005_OUTPUT_COLLIDES_WITH_INPUT, str(out_p))
+
+    export = load_export(export_path)
+    canary_hits = load_canary_hits(canary_paths)
+    dilution = None
+    leaked_given = args.dilution_leaked is not None
+    matched_given = args.dilution_dummy_matched is not None
+    if leaked_given != matched_given:
+        # Found in independent review: `None or 0` silently turned a
+        # half-specified flag into a confirmed "0 real victims" claim.
+        raise ZeeError(
+            Z1003_DILUTION_COUNT_INCONSISTENT,
+            "--dilution-leaked と --dilution-dummy-matched は両方指定するか、両方省略してください",
+        )
+    if leaked_given and matched_given:
+        dilution = DilutionSummary(
+            leaked_total=args.dilution_leaked,
+            dummy_matched=args.dilution_dummy_matched,
+        )
+
+    report = build_incident_report(
+        export=export,
+        recipient=args.recipient,
+        canary_hits=canary_hits,
+        dilution=dilution,
+        incident_label=args.incident_label,
+    )
+
+    _write_private_files(
+        [
+            (out_json, _json.dumps(report, ensure_ascii=False, indent=2)),
+            (out_text, render_text(report)),
+            (out_html, render_html(report)),
+        ],
+        force=args.force,
+    )
+    print(f"[zee incident-report] wrote {out_json}", file=sys.stderr)
+    print(f"[zee incident-report] wrote {out_text}", file=sys.stderr)
+    print(f"[zee incident-report] wrote {out_html}", file=sys.stderr)
+    print(
+        "[zee incident-report] this is a document to attach when YOU report "
+        "— zee does not submit it anywhere.",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     from .telemetry.status import compute, render
     report = compute()
@@ -611,6 +688,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_export.set_defaults(func=_cmd_export)
 
+    p_incident = sub.add_parser(
+        "incident-report",
+        help="bundle a zee export (and optional canary-hit logs / dilution "
+        "counts) into a document to attach when reporting to police or "
+        "the PPC; read-only over its inputs, never submits anything itself",
+    )
+    p_incident.add_argument(
+        "--export-json", required=True,
+        help="path to the <prefix>.json written by `zee export`",
+    )
+    p_incident.add_argument(
+        "--recipient", required=True, choices=("police", "ppc"),
+        help="which handoff document to produce (Z1001 on anything else)",
+    )
+    p_incident.add_argument(
+        "--canary-hits", action="append", metavar="FILE",
+        help="a query-canary receiver's hit log (JSON Lines); repeatable",
+    )
+    p_incident.add_argument(
+        "--dilution-leaked", type=int, default=None,
+        help="rows in a leaked dataset the operator checked against their "
+        "own decoy-PII ledger (count only — never pass the ledger itself)",
+    )
+    p_incident.add_argument(
+        "--dilution-dummy-matched", type=int, default=None,
+        help="of those rows, how many matched the operator's dummy ledger",
+    )
+    p_incident.add_argument(
+        "--incident-label", default=None,
+        help="free-text label for this incident bundle (operator's own reference)",
+    )
+    p_incident.add_argument(
+        "--out", required=True,
+        help="output path prefix; writes <prefix>.json / .txt / .html "
+        "(owner-only 0600; refuses to overwrite existing files or links)",
+    )
+    p_incident.add_argument(
+        "--force", action="store_true",
+        help="replace existing <prefix>.{json,txt,html} (a symlink is "
+        "replaced itself, never followed)",
+    )
+    p_incident.set_defaults(func=_cmd_incident_report)
+
     p_cap = sub.add_parser(
         "capability", help="print the detection-capability matrix for this OS"
     )
@@ -718,6 +838,11 @@ _USER_INPUT_CODES = frozenset({
     "Z603",  # restore token not initialised
     "Z604",  # restore token invalid
     "Z702",  # export: invalid --since/--until
+    "Z1001",  # incident-report: unknown --recipient
+    "Z1002",  # incident-report: bad --canary-hits file
+    "Z1003",  # incident-report: inconsistent dilution counts
+    "Z1004",  # incident-report: bad/missing --export-json
+    "Z1005",  # incident-report: --out collides with an input file
 })
 
 
