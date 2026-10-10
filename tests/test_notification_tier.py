@@ -170,7 +170,7 @@ def test_reason_line_has_no_counts_and_no_raw_path():
 
 
 def test_reason_line_does_not_claim_containment_when_cut_failed(monkeypatch):
-    """Codex review (20261009): cut_fn can return ok=False (e.g. the cut
+    """cut_fn can return ok=False (e.g. the cut
     backend lacks privileges). The notification must not say '封じ込め'
     (contained) in that case."""
     import zee.responder.sequence as seq

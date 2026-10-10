@@ -18,9 +18,7 @@ from zee.cli import main
 from zee.errors import ZeeError
 from zee.events import TrapEvent
 from zee.report.incident_report import (
-    DilutionSummary,
     build_incident_report,
-    load_canary_hits,
     load_export,
     render_html,
     render_text,
@@ -49,12 +47,6 @@ def _make_export(tmp_path: Path, monkeypatch) -> Path:
     return Path(str(export_prefix) + ".json")
 
 
-def _canary_hits_file(tmp_path: Path, name: str, rows: list[dict]) -> Path:
-    p = tmp_path / name
-    p.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
-    return p
-
-
 def test_incident_report_police_vs_ppc_switch(tmp_path: Path, monkeypatch):
     export_path = _make_export(tmp_path, monkeypatch)
     export = load_export(export_path)
@@ -69,7 +61,7 @@ def test_incident_report_police_vs_ppc_switch(tmp_path: Path, monkeypatch):
     police_text = render_text(police_doc)
     ppc_text = render_text(ppc_doc)
     # The body (report_fields / statutory items) must only carry the chosen
-    # lane; the reference footer (代表指示: 末尾に両方) always lists both.
+    # lane; the reference footer always lists both.
     police_body = police_text.split("## 参照窓口", 1)[0]
     assert "警察" in police_body and "個人情報保護委員会" not in police_body
     assert "個人情報保護委員会" in ppc_text
@@ -84,71 +76,6 @@ def test_unknown_recipient_rejected(tmp_path: Path, monkeypatch):
     with pytest.raises(ZeeError) as e:
         build_incident_report(export=export, recipient="fbi")
     assert e.value.code == "Z1001"
-
-
-def test_canary_hits_bundled_across_multiple_files(tmp_path: Path):
-    f1 = _canary_hits_file(tmp_path, "hits1.jsonl", [
-        {"ts": "2026-10-08T00:00:00+00:00", "remote_ip": "203.0.113.1", "token": "aaa"},
-    ])
-    f2 = _canary_hits_file(tmp_path, "hits2.jsonl", [
-        {"ts": "2026-10-09T00:00:00+00:00", "remote_ip": "203.0.113.2", "token": "bbb"},
-        {"ts": "2026-10-09T01:00:00+00:00", "remote_ip": "203.0.113.2", "token": "bbb"},
-    ])
-    hits = load_canary_hits([f1, f2])
-    assert len(hits) == 3
-
-    from zee.report.incident_report import _canary_summary
-    summary = _canary_summary(hits)
-    assert summary["count"] == 3
-    assert summary["unique_tokens"] == 2
-    assert summary["first_seen"] == "2026-10-08T00:00:00+00:00"
-    assert summary["last_seen"] == "2026-10-09T01:00:00+00:00"
-
-
-def test_malformed_canary_hits_file_rejected(tmp_path: Path):
-    bad = tmp_path / "bad.jsonl"
-    bad.write_text("not json\n", encoding="utf-8")
-    with pytest.raises(ZeeError) as e:
-        load_canary_hits([bad])
-    assert e.value.code == "Z1002"
-
-
-def test_canary_hits_missing_required_fields_rejected(tmp_path: Path):
-    bad = tmp_path / "bad.jsonl"
-    bad.write_text(json.dumps({"remote_ip": "1.2.3.4"}) + "\n", encoding="utf-8")
-    with pytest.raises(ZeeError) as e:
-        load_canary_hits([bad])
-    assert e.value.code == "Z1002"
-
-
-def test_canary_hit_with_non_string_token_rejected(tmp_path: Path):
-    bad = tmp_path / "bad.jsonl"
-    bad.write_text(json.dumps({"ts": "2026-10-09T00:00:00+00:00", "token": ["a"]}) + "\n", encoding="utf-8")
-    with pytest.raises(ZeeError) as e:
-        load_canary_hits([bad])
-    assert e.value.code == "Z1002"
-
-
-def test_canary_hit_with_unparseable_ts_rejected(tmp_path: Path):
-    bad = tmp_path / "bad.jsonl"
-    bad.write_text(json.dumps({"ts": "not-a-timestamp", "token": "aaa"}) + "\n", encoding="utf-8")
-    with pytest.raises(ZeeError) as e:
-        load_canary_hits([bad])
-    assert e.value.code == "Z1002"
-
-
-def test_canary_summary_orders_by_instant_not_string(tmp_path: Path):
-    # 09:00+09:00 == 00:00 UTC, which is BEFORE 01:00+00:00 — a naive
-    # string sort would get this backwards (found in external review).
-    from zee.report.incident_report import _canary_summary
-
-    hits = [
-        {"ts": "2026-10-09T01:00:00+00:00", "token": "later"},
-        {"ts": "2026-10-09T09:00:00+09:00", "token": "earlier"},
-    ]
-    summary = _canary_summary(hits)
-    assert summary["first_seen"] == "2026-10-09T09:00:00+09:00"
-    assert summary["last_seen"] == "2026-10-09T01:00:00+00:00"
 
 
 def test_export_with_null_report_fields_rejected(tmp_path: Path):
@@ -190,28 +117,6 @@ def test_report_includes_full_event_detail(tmp_path: Path, monkeypatch):
     doc = build_incident_report(export=export, recipient="police")
     assert len(doc["containment_export"]["events"]) == 1
     assert doc["containment_export"]["events"][0]["asset_id"] == "t-host"
-
-
-def test_dilution_count_inconsistent_rejected():
-    with pytest.raises(ZeeError) as e:
-        DilutionSummary(leaked_total=5, dummy_matched=10)
-    assert e.value.code == "Z1003"
-
-    with pytest.raises(ZeeError):
-        DilutionSummary(leaked_total=5, dummy_matched=-1)
-
-
-def test_dilution_upper_bound_reflected_in_ppc_report(tmp_path: Path, monkeypatch):
-    export = load_export(_make_export(tmp_path, monkeypatch))
-    dilution = DilutionSummary(leaked_total=100, dummy_matched=30)
-    doc = build_incident_report(export=export, recipient="ppc", dilution=dilution)
-    assert doc["dilution"]["real_upper_bound"] == 70
-    text = render_text(doc)
-    assert "70" in text
-    # The ledger/seed never enter this module's API at all — only two ints do.
-    import inspect
-    assert "ledger" not in inspect.signature(build_incident_report).parameters
-    assert "seed" not in inspect.signature(build_incident_report).parameters
 
 
 def test_export_file_required_rejects_garbage(tmp_path: Path):
@@ -269,6 +174,114 @@ def test_cli_rejects_bad_recipient(tmp_path: Path, monkeypatch, capsys):
             "--recipient", "fbi",
             "--out", str(tmp_path / "incident"),
         ])
+
+
+def _export_dict(tmp_path: Path, monkeypatch) -> dict:
+    return json.loads(_make_export(tmp_path, monkeypatch).read_text(encoding="utf-8"))
+
+
+def _write_json(tmp_path: Path, name: str, data: dict) -> Path:
+    p = tmp_path / name
+    p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.pop("events_total"),
+    lambda d: d.update(events_total=True),
+    lambda d: d.update(events_total="1"),
+    lambda d: d.update(events_included=-1),
+    lambda d: d.pop("events"),
+    lambda d: d.update(events={"a": 1}),
+    lambda d: d.update(events=["not-an-object"]),
+    lambda d: d.update(active_containments=None),
+    lambda d: d.update(chain_verification=[]),
+    lambda d: d["chain_verification"].pop("events_jsonl"),
+    lambda d: d.update(schema_version=1),
+    lambda d: d.pop("redacted"),
+    lambda d: d.pop("events_truncated"),
+    lambda d: d["report_fields"].update(affected_asset_ids="t-host"),
+    lambda d: d["report_fields"].update(affected_asset_ids=[1]),
+    lambda d: d["report_fields"].pop("affected_asset_ids"),
+    lambda d: d["report_fields"].pop("incident_summary_auto"),
+    lambda d: d["report_fields"].pop("detected_at_first"),
+])
+def test_broken_export_rejected_not_defaulted(tmp_path: Path, monkeypatch, mutate):
+    data = _export_dict(tmp_path, monkeypatch)
+    mutate(data)
+    bad = _write_json(tmp_path, "broken.json", data)
+    with pytest.raises(ZeeError) as e:
+        load_export(bad)
+    assert e.value.code == "Z1004"
+
+
+def test_cli_broken_export_exits_with_z1004(tmp_path: Path, monkeypatch, capsys):
+    data = _export_dict(tmp_path, monkeypatch)
+    del data["events_total"]
+    bad = _write_json(tmp_path, "broken.json", data)
+    rc = main(["incident-report", "--export-json", str(bad), "--recipient", "ppc",
+               "--out", str(tmp_path / "incident")])
+    assert rc != 0
+    assert "Z1004" in capsys.readouterr().err
+    assert not (tmp_path / "incident.txt").exists()
+
+
+def test_newline_in_export_cannot_forge_a_heading(tmp_path: Path, monkeypatch):
+    data = _export_dict(tmp_path, monkeypatch)
+    data["report_fields"]["incident_summary_auto"] = "ok\n## 偽見出し\r\x1b[31m\u0085x"
+    data["report_fields"]["affected_asset_ids"] = ["a\n## 偽資産"]
+    doc = build_incident_report(
+        export=load_export(_write_json(tmp_path, "inj.json", data)),
+        recipient="ppc", incident_label="L\n## 偽ラベル",
+    )
+    text = render_text(doc)
+    for line in text.splitlines():
+        assert not line.startswith("## 偽")
+    assert "ok\\n## 偽見出し\\r\\u001b[31m\\u0085x" in text
+    assert "a\\n## 偽資産" in text and "L\\n## 偽ラベル" in text
+    assert "\x1b" not in text and "\x85" not in text
+    assert "## 偽" not in render_html(doc).replace("\\n## 偽", "")
+
+
+def test_unknown_event_fields_are_not_carried_over(tmp_path: Path, monkeypatch):
+    data = _export_dict(tmp_path, monkeypatch)
+    data["events"][0]["home_dir"] = "/Users/someone"
+    data["events"][0]["api_key"] = "sk-SECRET-should-not-appear"
+    data["active_containments"] = [{"asset_id": "t-host", "method": "full", "cut_at": "x",
+                                    "platform": "darwin", "modified": ["en0"], "token": "SECRET2"}]
+    doc = build_incident_report(export=load_export(_write_json(tmp_path, "extra.json", data)),
+                                recipient="police")
+    blob = json.dumps(doc, ensure_ascii=False) + render_text(doc)
+    for leaked in ("home_dir", "/Users/someone", "api_key", "sk-SECRET", "SECRET2"):
+        assert leaked not in blob
+    assert doc["containment_export"]["events"][0]["asset_id"] == "t-host"
+    assert doc["containment_export"]["active_containments"][0]["modified"] == ["en0"]
+
+
+def test_unredacted_export_is_flagged(tmp_path: Path, monkeypatch, capsys):
+    data = _export_dict(tmp_path, monkeypatch)
+    redacted_doc = build_incident_report(export=load_export(_write_json(tmp_path, "r.json", data)),
+                                         recipient="police")
+    assert redacted_doc["containment_export"]["redacted"] is True
+    assert "--no-redact" not in render_text(redacted_doc)
+
+    data["redacted"] = False
+    raw = _write_json(tmp_path, "raw.json", data)
+    rc = main(["incident-report", "--export-json", str(raw), "--recipient", "police",
+               "--out", str(tmp_path / "incident")])
+    assert rc == 0
+    assert "--no-redact" in capsys.readouterr().err
+    assert "--no-redact" in (tmp_path / "incident.txt").read_text(encoding="utf-8")
+    assert "--no-redact" in (tmp_path / "incident.html").read_text(encoding="utf-8")
+    assert json.loads((tmp_path / "incident.json").read_text(encoding="utf-8"))["containment_export"]["redacted"] is False
+
+
+def test_ppc_cause_mentions_only_decoy_events(tmp_path: Path, monkeypatch):
+    doc = build_incident_report(export=load_export(_make_export(tmp_path, monkeypatch)), recipient="ppc")
+    cause = doc["ppc_statutory_items"]["4 原因"]
+    assert "囮の検知イベント" in cause and "カナリア" not in cause
+    text = render_text(doc)
+    assert "カナリア" not in text and "ダミー" not in text
 
 
 # --- The structural guarantee: this module cannot send anything anywhere. ---

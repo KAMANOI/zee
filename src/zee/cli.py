@@ -371,60 +371,35 @@ def _cmd_export(args: argparse.Namespace) -> int:
 
 
 def _cmd_incident_report(args: argparse.Namespace) -> int:
-    """Bundle a zee export + optional canary-hit logs + dilution counts into
-    a document for the operator to hand to police or the PPC. Read-only
-    over its inputs, writes local files only, never submits anything
-    (see src/zee/report/incident_report.py module docstring).
+    """Bundle a zee export JSON into a document for the operator to hand
+    to police or the PPC. Read-only over its input, writes local files
+    only, never submits anything (see src/zee/report/incident_report.py).
     """
     import json as _json
 
-    from .errors import Z1003_DILUTION_COUNT_INCONSISTENT, Z1005_OUTPUT_COLLIDES_WITH_INPUT
+    from .errors import Z1005_OUTPUT_COLLIDES_WITH_INPUT
     from .report.incident_report import (
-        DilutionSummary,
         build_incident_report,
-        load_canary_hits,
         load_export,
         render_html,
         render_text,
     )
 
     export_path = Path(args.export_json)
-    canary_paths = [Path(p) for p in (args.canary_hits or [])]
     out_json = Path(str(args.out) + ".json")
     out_text = Path(str(args.out) + ".txt")
     out_html = Path(str(args.out) + ".html")
 
-    # Input files are read-only evidence; never let --force make them an
-    # output target (found in external review 2026-10-09).
-    inputs = {export_path.resolve(), *(p.resolve() for p in canary_paths)}
-    outputs = {out_json, out_text, out_html}
-    for out_p in outputs:
-        if out_p.exists() and out_p.resolve() in inputs:
+    # The input file is read-only evidence; never let --force make it an
+    # output target.
+    for out_p in (out_json, out_text, out_html):
+        if out_p.exists() and out_p.resolve() == export_path.resolve():
             raise ZeeError(Z1005_OUTPUT_COLLIDES_WITH_INPUT, str(out_p))
 
     export = load_export(export_path)
-    canary_hits = load_canary_hits(canary_paths)
-    dilution = None
-    leaked_given = args.dilution_leaked is not None
-    matched_given = args.dilution_dummy_matched is not None
-    if leaked_given != matched_given:
-        # Found in independent review: `None or 0` silently turned a
-        # half-specified flag into a confirmed "0 real victims" claim.
-        raise ZeeError(
-            Z1003_DILUTION_COUNT_INCONSISTENT,
-            "--dilution-leaked と --dilution-dummy-matched は両方指定するか、両方省略してください",
-        )
-    if leaked_given and matched_given:
-        dilution = DilutionSummary(
-            leaked_total=args.dilution_leaked,
-            dummy_matched=args.dilution_dummy_matched,
-        )
-
     report = build_incident_report(
         export=export,
         recipient=args.recipient,
-        canary_hits=canary_hits,
-        dilution=dilution,
         incident_label=args.incident_label,
     )
 
@@ -439,6 +414,13 @@ def _cmd_incident_report(args: argparse.Namespace) -> int:
     print(f"[zee incident-report] wrote {out_json}", file=sys.stderr)
     print(f"[zee incident-report] wrote {out_text}", file=sys.stderr)
     print(f"[zee incident-report] wrote {out_html}", file=sys.stderr)
+    if not export["redacted"]:
+        print(
+            "[zee incident-report] WARNING: the input export was made with "
+            "--no-redact; paths are NOT masked in these files. Review them "
+            "before you hand them to anyone.",
+            file=sys.stderr,
+        )
     print(
         "[zee incident-report] this is a document to attach when YOU report "
         "— zee does not submit it anywhere.",
@@ -690,9 +672,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_incident = sub.add_parser(
         "incident-report",
-        help="bundle a zee export (and optional canary-hit logs / dilution "
-        "counts) into a document to attach when reporting to police or "
-        "the PPC; read-only over its inputs, never submits anything itself",
+        help="bundle a zee export into a document to attach when reporting "
+        "to police or the PPC; read-only over its input, never submits "
+        "anything itself",
     )
     p_incident.add_argument(
         "--export-json", required=True,
@@ -700,20 +682,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_incident.add_argument(
         "--recipient", required=True, choices=("police", "ppc"),
-        help="which handoff document to produce (Z1001 on anything else)",
-    )
-    p_incident.add_argument(
-        "--canary-hits", action="append", metavar="FILE",
-        help="a canary hit log (JSON Lines, one hit per line); repeatable",
-    )
-    p_incident.add_argument(
-        "--dilution-leaked", type=int, default=None,
-        help="rows in a leaked dataset the operator checked against their "
-        "own decoy-PII ledger (count only — never pass the ledger itself)",
-    )
-    p_incident.add_argument(
-        "--dilution-dummy-matched", type=int, default=None,
-        help="of those rows, how many matched the operator's dummy ledger",
+        help="which handoff document to produce",
     )
     p_incident.add_argument(
         "--incident-label", default=None,
@@ -839,10 +808,8 @@ _USER_INPUT_CODES = frozenset({
     "Z604",  # restore token invalid
     "Z702",  # export: invalid --since/--until
     "Z1001",  # incident-report: unknown --recipient
-    "Z1002",  # incident-report: bad --canary-hits file
-    "Z1003",  # incident-report: inconsistent dilution counts
-    "Z1004",  # incident-report: bad/missing --export-json
-    "Z1005",  # incident-report: --out collides with an input file
+    "Z1004",  # incident-report: unreadable / non-matching --export-json
+    "Z1005",  # incident-report: --out collides with the --export-json file
 })
 
 

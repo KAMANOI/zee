@@ -20,10 +20,14 @@ releases.
   the chosen recipient's reporting items (PPC: Enforcement Rules of the
   APPI, Art. 8); the footer always lists both the police and PPC contact
   points as separate procedures, with the date they were last checked
-  (2026-10-09). Read-only over its inputs, owner-only (0600) outputs,
-  refuses an output path that equals an input even with `--force`, and
+  (2026-10-09). Read-only over its input, owner-only (0600) outputs,
+  refuses an output path that equals the input even with `--force`, and
   imports no network module (enforced by a test). Nothing is submitted.
-  New error codes Z1001–Z1005 (`docs/design/incident-report.md`).
+  The input export is treated as untrusted: missing or mistyped fields
+  are rejected (Z1004), only known event fields are copied, and control
+  characters are escaped in the txt/html. An export made with
+  `--no-redact` is flagged in the report and on stderr.
+  New error codes Z1001 / Z1004 / Z1005 (`docs/design/incident-report.md`).
 - **Notifications carry a 4-level impact tier** (情報/注意/警戒/重大) and a
   one-line reason, so an operator with no dedicated security staff can
   judge severity at a glance. Based on path sensitivity category
@@ -37,8 +41,10 @@ releases.
 
 - **Notification titles now include the tier label**, e.g.
   `Zee tripwire [警戒] (change): <asset_id>`, `Zee dry_run: would cut [警戒] <asset_id>`,
-  `Zee cut applied [警戒]: <asset_id>`; the body gains the reason line, and the
-  webhook payload gains `tier` and `tier_reason`. **If you filter or parse
+  `Zee cut applied [警戒]: <asset_id>`; the webhook `title` is the same
+  `Zee tripwire [<tier>] (<op_class>): <asset_id>` string. The body gains
+  the reason line, and the webhook payload gains `tier` and
+  `tier_reason`. **If you filter or parse
   notification titles, update that match.** When a cut was attempted but
   failed, the reason line now says so instead of reading as contained.
 

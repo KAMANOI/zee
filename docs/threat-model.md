@@ -110,6 +110,7 @@ Covers `events.jsonl` / `metrics.jsonl` (including rotated
 | Export output overwrites or leaks a file | Output is written to `O_EXCL` + `O_NOFOLLOW` temp files at 0600 and moved into place only after both are complete; an existing file or symlink at the target stops the export (Z701) unless `--force`, which replaces the link itself, never its target. | A failed run can leave a 0600 temp file next to the target (named in the error). |
 | Recipient trusts the export as proof | `chain_verification` states what was checked; `export_sha256` covers the export itself. | The export carries no per-line hashes, so the recipient cannot re-verify the chain; they rely on Zee's local result. `export_sha256` shows only that the export was not changed after it was produced (if a copy was kept elsewhere). |
 | Sensitive data in the export | `detail` (may contain paths) is masked unless `--no-redact`. MCP follows the server's redaction setting and returns at most `limit` events (default 50). | `asset_id` is not masked. Operators must not put personal or customer names in asset ids. |
+| `zee incident-report` is fed a broken or hostile export file | The input is treated as untrusted: missing or mistyped fields stop the run (Z1004) instead of being defaulted; only known event / containment fields are carried over; control characters (including newlines) in its strings are shown as escapes (`\n`, `\uXXXX`) in the txt/html, so they cannot forge a heading. Outputs are 0600 via the same writer as `zee export`, and an output path equal to the input is refused even with `--force` (Z1005). Nothing is sent. | If the export was made with `--no-redact`, raw paths appear in the report; Zee says so in the report and on stderr but does not remove them. |
 | MCP read path changes local state | The report path is read-only; reading containment state no longer creates or chmods the state directory. Only the MCP audit line is written. | — |
 
 Zee never sends the export anywhere and has no code that connects to or acts
@@ -129,7 +130,7 @@ Zee には出口側の囮と入口側の `zee gate` があり、本書は入口�
 ライブ通信監視、即時遮断、リモート取得、署名付き脅威リスト、プロセス特定は対象外です。
 Zee は PyPI・npm・Homebrew では配布されておらず、同名パッケージは無関係です。
 導入時はタグまたは commit SHA、CI では `KAMANOI/zee@<tag|sha>` に固定します。
-証跡ログは鍵なしのハッシュチェーンで、途中の書き換え・削除と先頭の欠落は検知しますが、末尾の切り詰めとホスト上の攻撃者による全ハッシュの再計算は検知できません。`zee export` は 0600・既存ファイルやリンクを上書きしない形で書き出し、何も送信しません。証跡の書き込み失敗は通知・遮断を止めません。
+証跡ログは鍵なしのハッシュチェーンで、途中の書き換え・削除と先頭の欠落は検知しますが、末尾の切り詰めとホスト上の攻撃者による全ハッシュの再計算は検知できません。`zee export` は 0600・既存ファイルやリンクを上書きしない形で書き出し、何も送信しません。証跡の書き込み失敗は通知・遮断を止めません。`zee incident-report` は入力の export を非信頼として扱い（欠落・型違いは Z1004 で拒否、未知の項目は転記しない、改行などの制御文字は見える形にエスケープ）、0600 で書き出し、入力と同じパスには `--force` でも書きません。`--no-redact` の export を使うと生のパスが報告書に載ります（報告書と標準エラーで明示）。
 Zee は既知 CVE のデータベースを持たず、AI アーティファクト固有の脅威（指示のすり込み・過剰な権限要求・Rug Pull）だけを見ます。
 既知脆弱性は Snyk、振る舞いベースのサプライチェーン検知は Socket と役割が異なり、併用が前提です（詳細は gate.md）。
 効果は未測定で、独立検証もありません。本番前に利用環境で確認してください。

@@ -52,10 +52,8 @@ Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正�
 
 # Z10xx
 Z1001_UNKNOWN_RECIPIENT = ("Z1001", "--recipient は police / ppc のいずれかを指定してください")
-Z1002_INVALID_CANARY_HITS_FILE = ("Z1002", "--canary-hits のファイルが存在しない、またはJSON Lines形式として読めません")
-Z1003_DILUTION_COUNT_INCONSISTENT = ("Z1003", "--dilution-dummy-matched が --dilution-leaked を超えている、または負の値です")
-Z1004_EXPORT_FILE_REQUIRED = ("Z1004", "--export-json が未指定、または zee export が書くスキーマと一致しません")
-Z1005_OUTPUT_COLLIDES_WITH_INPUT = ("Z1005", "--out の出力先が --export-json / --canary-hits の入力ファイルと同じです（--force でも上書きしません）")
+Z1004_EXPORT_FILE_REQUIRED = ("Z1004", "--export-json のファイルが zee export が書くスキーマと一致しない、または読めません")
+Z1005_OUTPUT_COLLIDES_WITH_INPUT = ("Z1005", "--out の出力先が --export-json の入力ファイルと同じです（--force でも上書きしません）")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")

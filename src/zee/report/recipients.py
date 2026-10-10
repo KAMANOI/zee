@@ -6,12 +6,10 @@ entry was last checked against a primary source (see
 docs/design/incident-report.md §3); the operator is told to re-check
 before relying on it, not just told once.
 
-2026-10-09: the instruction sheet that commissioned this module listed
-"03-6457-9685" for the PPC phone contact. Two independent primary-source
-checks (an agent fetch and a direct WebFetch of ppc.go.jp) only turned
-up 03-6457-9680. We use the number we could verify and flag the
-discrepancy here and in the design doc instead of silently trusting
-either number.
+2026-10-09: a secondary listing gave "03-6457-9685" for the PPC phone
+contact. Two independent fetches of ppc.go.jp only turned up
+03-6457-9680. We use the number we could verify and note the
+discrepancy here and in the design doc.
 """
 
 from __future__ import annotations
