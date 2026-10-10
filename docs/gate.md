@@ -158,6 +158,14 @@ replace those tools (invariant I4).
 
 ## Limits (invariant I5)
 
+- **G501 paraphrase detection does not generalize.** In a blind test (10
+  injection samples written without sight of the rule), 0.12.0 flagged 0 of
+  10. The context rule only knows a fixed list of words; reworded
+  instructions in English or Japanese pass as LOW. A tutorial that quotes
+  attack phrases can score MEDIUM (false positive). Treat G501 as a filter
+  for known and lightly disguised phrases, not as protection against
+  injection in general.
+
 This is layered risk reduction, not complete detection. Static scanning
 can be evaded by obfuscation; the behavioural sandbox contains writes +
 network and blocks reads of the real user homes, but a TLS body sent

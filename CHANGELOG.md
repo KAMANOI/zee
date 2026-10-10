@@ -9,8 +9,8 @@ releases.
 
 ### Security
 
-- **zee gate G501 (prompt-injection text) catches obfuscated and
-  paraphrased instructions.** A resilience test against v0.11.0 found 6 of
+- **zee gate G501 (prompt-injection text) now sees through formatting
+  tricks on known phrases, and adds a narrow paraphrase rule.** A resilience test against v0.11.0 found 6 of
   8 synthetic injection samples scored LOW. G501 now has two tiers:
   - **HIGH — known phrase after normalization.** The existing phrases are
     also matched in a view with NFKC applied (full-width → ASCII), all
@@ -34,6 +34,13 @@ releases.
   (U+0F73, half-width ﾞ). Cue pairing is O(A+B). Measured on 2 MiB pathological inputs: 0.2–1.0 s on
   an Apple M1, including the pre-existing raw patterns.
   Round-1 samples: 2/8 → 5/8 at HIGH, 8/8 at MEDIUM or above.
+  **Measured limit:** in a second, blind round (10 new injection samples
+  written by a separate model that never saw the rule, 10 benign samples),
+  0.12.0 flagged **0 of 10** injections — the same as 0.11.0 — and raised
+  one new MEDIUM false positive on a tutorial that quotes an attack. The
+  paraphrase rule matches a fixed vocabulary, so freely reworded
+  instructions pass. Do not rely on G501 alone to stop natural-language
+  injection.
 - **zee gate: crafted input could make the existing G203 / G204 checks
   take quadratic time** (present since the rules were added, including
   0.11.0). From every `curl` / `wget` / `exec(` / `eval(` / `atob(` the
