@@ -445,11 +445,13 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
     """Entry gate: fetch (no exec) -> inspect -> verdict -> optional promote.
 
     Exit code is the verdict: LOW=0, MEDIUM=1, HIGH=2 (safeinspect
-    heritage), so the command composes in CI / pre-install hooks.
+    heritage). 3 = verdict over an incomplete inspection, 4 = no verdict
+    at all. Any failure to inspect exits 4, never a pass.
     """
     import json as _json
 
     from .gate.inspector import inspect_source, promote_if_low
+    from .gate.model import EXIT_ERROR, error_payload
 
     try:
         verdict = inspect_source(
@@ -459,15 +461,25 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
             behavioral_timeout=args.timeout,
             import_scans=tuple(args.import_scan or ()),
         )
-    except FileNotFoundError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
+    except Exception as e:  # noqa: BLE001 - every failure here is fail-closed
+        detail = f"{type(e).__name__}: {e}"
+        print(f"error: inspection did not complete ({detail})", file=sys.stderr)
+        if args.json:
+            print(_json.dumps(
+                error_payload(str(args.source), detail),
+                ensure_ascii=False, indent=2,
+            ))
+        return EXIT_ERROR
     if args.json:
         print(_json.dumps(verdict.to_dict(), ensure_ascii=False, indent=2))
     else:
         print(verdict.to_text())
     if args.promote_to:
-        ok, msg = promote_if_low(verdict, args.promote_to)
+        try:
+            ok, msg = promote_if_low(verdict, args.promote_to)
+        except OSError as e:  # e.g. read-only install dir
+            print(f"error: promotion failed ({e})", file=sys.stderr)
+            return EXIT_ERROR
         print(msg, file=sys.stderr)
         if ok:
             # Pin the promoted bytes so `zee gate audit` can later detect a

@@ -12,6 +12,22 @@ statically inspects it, and prints a `LOW` / `MEDIUM` / `HIGH` verdict.
 The **exit code is the verdict** (`LOW=0`, `MEDIUM=1`, `HIGH=2`), so it
 composes anywhere a non-zero exit fails the step.
 
+Two more codes mean the gate could not vouch for the artifact:
+
+| Exit | Meaning |
+|---|---|
+| `3` | A verdict exists, but part of the artifact was **not inspected**: a text file over 2 MiB, a malformed manifest, a `--import-scan` file that could not be read, or `--behavioral` was requested but no isolation backend ran it. Never passes, even at LOW. |
+| `4` | **No verdict**: the inspection failed (missing source, unreadable file, internal error, promotion failed). |
+
+Binary files (images, archives: anything containing NUL bytes) are outside the
+text scan and are not counted as gaps. Text files are scanned whatever their
+extension.
+
+`--json` reports the two axes separately: `inspection.status`
+(`complete` / `partial` / `error`, with `inspection.gaps` listing what was
+skipped) and `risk_level`. A LOW verdict is promoted (`--promote-to`) only
+when the inspection is `complete`.
+
 ## Use it as a pre-install / CI check
 
 ### GitHub Action

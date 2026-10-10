@@ -51,11 +51,20 @@ runs:
         args=( "$SOURCE" --json )
         if [ -n "$KIND" ]; then args+=( --kind "$KIND" ); fi
         if [ -n "$IMPORT_SCAN" ]; then args+=( --import-scan "$IMPORT_SCAN" ); fi
-        # Exit code is the verdict: LOW=0, MEDIUM=1, HIGH=2.
+        verdict_file="${RUNNER_TEMP:-$(mktemp -d)}/zee-verdict.json"
+        # Exit code is the verdict: LOW=0, MEDIUM=1, HIGH=2; 3 = verdict over
+        # an incomplete inspection, 4 = no verdict. 3 and 4 fail at any fail-on.
         set +e
-        python -m zee.cli gate add "${args[@]}"
+        python -m zee.cli gate add "${args[@]}" > "$verdict_file"
         code=$?
         set -e
+        cat "$verdict_file" 2>/dev/null || true
+        # Without a readable verdict the job fails. The exit code alone is not
+        # trusted: an uncaught Python error also exits 1, which used to pass.
+        if ! python -c 'import json,sys; s=json.load(open(sys.argv[1]))["inspection"]["status"]; sys.exit(0 if s in ("complete","partial","error") else 1)' "$verdict_file" 2>/dev/null; then
+          echo "::error::Zee gate produced no readable verdict (exit $code)"
+          exit 4
+        fi
         case "$FAIL_ON" in
           medium) threshold=1 ;;
           *)      threshold=2 ;;

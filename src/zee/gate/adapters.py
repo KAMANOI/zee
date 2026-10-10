@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 from .fetch import sha256_tree
-from .model import Artifact, ArtifactKind
+from .model import Artifact, ArtifactKind, Flag, Severity
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -34,14 +34,54 @@ _HOOK_FILENAMES = {
 }
 
 
+def manifest_flags(root: Path) -> list[Flag]:
+    """G912: a manifest that cannot be parsed or has an unexpected shape
+    means the hook / capability facts below it are unknown, not absent."""
+    flags: list[Flag] = []
+    for pattern in ("package.json", "manifest.json", "mcp.json"):
+        for p in sorted(root.rglob(pattern)):
+            rel = str(p.relative_to(root))
+            try:
+                data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+            except (OSError, json.JSONDecodeError) as e:
+                flags.append(_bad_manifest(rel, str(e)))
+                continue
+            if not isinstance(data, dict):
+                flags.append(_bad_manifest(rel, "top level is not an object"))
+                continue
+            if pattern == "package.json" and not isinstance(
+                data.get("scripts", {}), dict
+            ):
+                flags.append(_bad_manifest(rel, "'scripts' is not an object"))
+    for p in sorted(root.rglob("pyproject.toml")):
+        rel = str(p.relative_to(root))
+        if tomllib is None:  # pragma: no cover
+            continue
+        try:
+            tomllib.loads(p.read_text(encoding="utf-8", errors="ignore"))
+        except (OSError, tomllib.TOMLDecodeError) as e:
+            flags.append(_bad_manifest(rel, str(e)))
+    return flags
+
+
+def _bad_manifest(rel: str, why: str) -> Flag:
+    return Flag(
+        Severity.LOW, "G912",
+        "manifest could not be read; install hooks and capabilities unknown",
+        evidence=f"{rel}: {why}"[:200],
+    )
+
+
 def _detect_install_hooks(root: Path) -> list[str]:
     hooks: list[str] = []
     for pj in root.rglob("package.json"):
         try:
             data = json.loads(pj.read_text(encoding="utf-8", errors="ignore"))
         except (OSError, json.JSONDecodeError):
-            continue
+            continue  # unreadable manifest is reported by manifest_flags()
         scripts = data.get("scripts", {}) if isinstance(data, dict) else {}
+        if not isinstance(scripts, dict):
+            continue  # e.g. "scripts": 1 used to raise TypeError here
         for k in ("preinstall", "install", "postinstall"):
             if k in scripts:
                 hooks.append(f"{pj.name}:scripts.{k}")

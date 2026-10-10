@@ -13,9 +13,16 @@ from pathlib import Path
 from typing import Optional
 
 from . import denylist, scorer, static_checks
-from .adapters import pick_adapter
+from .adapters import manifest_flags, pick_adapter
 from .fetch import fetch_local
-from .model import Flag, RiskLevel, Severity, Verdict
+from .model import (
+    GAP_CODES,
+    Flag,
+    InspectionStatus,
+    RiskLevel,
+    Severity,
+    Verdict,
+)
 
 
 def _install_hook_flags(install_hooks: tuple[str, ...]) -> list[Flag]:
@@ -44,6 +51,7 @@ def inspect_source(
 
     flags: list[Flag] = []
     flags += static_checks.scan_tree(root)
+    flags += manifest_flags(root)
     flags += denylist.check(artifact)
     flags += _install_hook_flags(artifact.install_hooks)
 
@@ -65,17 +73,30 @@ def inspect_source(
         flags += result.flags
         notes.append(f"behavioural: {result.summary}")
 
-    level, sc = scorer.score(flags)
+    # Gap flags say what was not read; they do not add risk. Their effect is
+    # the inspection status below, which fails the gate on its own.
+    level, sc = scorer.score([f for f in flags if f.code not in GAP_CODES])
+    status = (
+        InspectionStatus.PARTIAL
+        if any(f.code in GAP_CODES for f in flags)
+        else InspectionStatus.COMPLETE
+    )
     return Verdict(
         artifact=artifact, risk_level=level, risk_score=sc,
-        flags=flags, notes=notes,
+        flags=flags, notes=notes, inspection=status,
     )
 
 
 def promote_if_low(verdict: Verdict, dest_dir: str | Path) -> tuple[bool, str]:
     """Copy the quarantined artifact into the real install dir, but only
-    if the verdict is LOW (invariant I3: nothing reaches the real
-    location until it passes)."""
+    if the verdict is LOW over a COMPLETE inspection (invariant I3: nothing
+    reaches the real location until it passes)."""
+    if verdict.inspection is not InspectionStatus.COMPLETE:
+        return (
+            False,
+            f"refused to promote: inspection is {verdict.inspection.value} "
+            f"(only a complete inspection is promoted)",
+        )
     if verdict.risk_level is not RiskLevel.LOW:
         return (
             False,

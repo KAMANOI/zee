@@ -21,8 +21,12 @@ def quarantine_base() -> Path:
     return default_log_dir() / "gate" / "quarantine"
 
 
-def sha256_tree(root: Path) -> str:
-    """Stable content hash over a file or directory tree."""
+def sha256_tree(root: Path, *, strict: bool = False) -> str:
+    """Stable content hash over a file or directory tree.
+
+    strict=True raises on an unreadable file. The default hashes only the
+    name for it, fine for audit drift checks, but fetch_local must not reuse
+    a benign quarantine copy for a source whose bytes it could not read."""
     root = Path(root)
     h = hashlib.sha256()
     if root.is_file():
@@ -49,7 +53,8 @@ def sha256_tree(root: Path) -> str:
             try:
                 h.update(p.read_bytes())
             except OSError:
-                pass
+                if strict:
+                    raise
     return h.hexdigest()
 
 
@@ -64,7 +69,7 @@ def fetch_local(source: str | Path, base: Optional[Path] = None) -> Path:
     if not src.exists():
         raise FileNotFoundError(f"source not found: {source}")
     base = Path(base) if base else quarantine_base()
-    digest = sha256_tree(src)[:16]
+    digest = sha256_tree(src, strict=True)[:16]
     dest = base / f"{src.name}-{digest}"
     if dest.exists():
         return dest  # already quarantined (no exec, idempotent)

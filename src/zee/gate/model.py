@@ -3,7 +3,8 @@
 Phase 0 deliverable — the minimal common representation of a skill / mcp
 / package, plus the LOW/MEDIUM/HIGH verdict (safeinspect heritage:
 risk_level, risk_score, flags with evidence, and an exit code
-LOW=0 / MEDIUM=1 / HIGH=2). stdlib only.
+LOW=0 / MEDIUM=1 / HIGH=2; 3 = incomplete inspection, 4 = no verdict).
+stdlib only.
 """
 
 from __future__ import annotations
@@ -30,6 +31,27 @@ class RiskLevel(str, Enum):
     @property
     def exit_code(self) -> int:
         return {"LOW": 0, "MEDIUM": 1, "HIGH": 2}[self.value]
+
+
+class InspectionStatus(str, Enum):
+    """How completely the artifact was inspected. Kept apart from the risk
+    level: a LOW risk over an incomplete inspection is not a clean pass."""
+
+    COMPLETE = "complete"  # every in-scope file and manifest was read
+    PARTIAL = "partial"  # a verdict exists, but some scope was not inspected
+    ERROR = "error"  # no trustworthy verdict could be produced
+
+
+# Exit codes for "not fully trustworthy" / "no verdict". They sit above the
+# risk codes so the Action's `>= threshold` check fails them at any fail-on
+# setting. Exit 1 is no longer used for internal errors: a Python traceback
+# also exits 1, which used to read as MEDIUM and pass fail-on: high.
+EXIT_PARTIAL = 3
+EXIT_ERROR = 4
+
+# Flags that say what was NOT inspected or could not be read. They set the
+# inspection status but are kept out of the risk score.
+GAP_CODES = frozenset({"G909", "G910", "G911", "G912", "G809"})
 
 
 class Severity(str, Enum):
@@ -97,14 +119,27 @@ class Verdict:
     # sandbox ran, was skipped, or found nothing). Kept out of the score
     # so an honesty note can never change the verdict.
     notes: list[str] = field(default_factory=list)
+    inspection: InspectionStatus = InspectionStatus.COMPLETE
+
+    @property
+    def gaps(self) -> list[str]:
+        """What was not inspected, taken from the gap flags."""
+        return [f.evidence or f.message for f in self.flags if f.code in GAP_CODES]
 
     @property
     def exit_code(self) -> int:
+        # An incomplete inspection never passes, even at LOW: the gate cannot
+        # vouch for bytes it did not read.
+        if self.inspection is InspectionStatus.ERROR:
+            return EXIT_ERROR
+        if self.inspection is InspectionStatus.PARTIAL:
+            return EXIT_PARTIAL
         return self.risk_level.exit_code
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "artifact": self.artifact.to_dict(),
+            "inspection": {"status": self.inspection.value, "gaps": self.gaps},
             "risk_level": self.risk_level.value,
             "risk_score": self.risk_score,
             "flags": [f.to_dict() for f in self.flags],
@@ -120,7 +155,10 @@ class Verdict:
             f"  source : {self.artifact.source}",
             f"  sha256 : {self.artifact.content_hash[:16]}…",
             f"  verdict: {self.risk_level.value}  (score {self.risk_score})",
+            f"  inspect: {self.inspection.value}",
         ]
+        for gap in self.gaps:
+            lines.append(f"    not inspected: {gap}")
         if not self.flags:
             lines.append("  flags  : none")
         else:
@@ -139,3 +177,16 @@ class Verdict:
         for note in self.notes:
             lines.append(f"  note   : {note}")
         return "\n".join(lines)
+
+
+def error_payload(source: str, detail: str) -> dict[str, Any]:
+    """Machine-readable result when no verdict could be produced. No risk
+    level is reported: inventing one would present an unknown as a fact."""
+    return {
+        "source": source,
+        "inspection": {"status": InspectionStatus.ERROR.value, "gaps": []},
+        "error": detail,
+        "risk_level": None,
+        "flags": [],
+        "notes": [],
+    }

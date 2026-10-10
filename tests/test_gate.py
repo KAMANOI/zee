@@ -233,4 +233,5 @@ def test_cli_gate_add_exit_codes(tmp_path, capsys):
 
 
 def test_cli_gate_add_missing_source(tmp_path, capsys):
-    assert main(["gate", "add", str(tmp_path / "nope")]) == 2
+    # was 2 (the HIGH code); a source that cannot be inspected is now 4
+    assert main(["gate", "add", str(tmp_path / "nope")]) == 4

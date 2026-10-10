@@ -14,6 +14,8 @@ Flag codes:
     G5xx  prompt injection in metadata
     (G6xx denylist lives in denylist.py)
     G7xx  symlinks (G701 escapes the tree = HIGH, G702 in-tree = LOW)
+    G91x  gaps: not inspected / unreadable (G910 too large, G911 unreadable;
+          they make the inspection PARTIAL and do not add to the score)
 
 Detection is best-effort pattern matching, not complete coverage
 (invariant I5): obfuscation can evade it, and a later phase wires in
@@ -168,6 +170,14 @@ def _symlink_flags(root: Path) -> list[Flag]:
     return flags
 
 
+def _unread(rel: str) -> Flag:
+    return Flag(
+        Severity.LOW, "G911",
+        "file could not be read; its contents were not inspected",
+        evidence=rel,
+    )
+
+
 def scan_tree(root: Path) -> list[Flag]:
     """Inspect every file under `root` without executing anything."""
     root = Path(root)
@@ -179,19 +189,31 @@ def scan_tree(root: Path) -> list[Flag]:
         # whole (possibly multi-GB) file into memory.
         try:
             with path.open("rb") as f:
-                head = f.read(8)
+                sample = f.read(8192)
         except OSError:
+            flags.append(_unread(rel))
             continue
-        mf = _magic_flag(path, head, rel)
+        mf = _magic_flag(path, sample[:8], rel)
         if mf:
             flags.append(mf)
-        if path.suffix.lower() not in _TEXT_SUFFIXES:
+        # Text is judged by content as well as suffix: a .html, Makefile or
+        # extensionless script with eval() must not pass as "nothing found".
+        # NUL bytes mean binary (image, archive), which is outside the text scan.
+        if path.suffix.lower() not in _TEXT_SUFFIXES and b"\0" in sample:
             continue
         try:
             if path.stat().st_size > _MAX_READ_BYTES:
-                continue  # too large to scan as text; skip (DoS guard)
+                # Too large to scan as text (DoS guard). Not a clean pass:
+                # the text patterns never ran on this file.
+                flags.append(Flag(
+                    Severity.LOW, "G910",
+                    "text file too large to inspect; patterns not checked",
+                    evidence=f"{rel} (over {_MAX_READ_BYTES} bytes)",
+                ))
+                continue
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
+            flags.append(_unread(rel))
             continue
         for code, sev, pat, msg in _PATTERNS:
             m = pat.search(text)
