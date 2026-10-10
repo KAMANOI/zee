@@ -21,11 +21,16 @@ releases.
   - **MEDIUM — paraphrase (context rule).** Two different cues within
     ~400 characters (earlier instructions declared void, a priority
     claim, hiding this instruction, replacing the requested answer), in
-    English and Japanese. Single cues and negated cues do not fire. It is
-    an estimate, so it stays MEDIUM: it blocks `--promote-to` but passes
-    the default `fail-on: high`; use `fail-on: medium` to fail CI on it.
-  Quotes and attack-describing words never lower a finding, and all G501
-  matching is linear-time (2 MiB pathological inputs scan in under 1 s).
+    English and Japanese. Single cues and simply negated cues do not
+    fire. It is an estimate, so each flag is MEDIUM: it blocks
+    `--promote-to`, and on its own passes the default `fail-on: high`,
+    but several such flags (e.g. in multiple files) or other findings can
+    add up to a HIGH verdict. Use `fail-on: medium` to fail CI on any.
+  Quotes and attack-describing words never lower a finding. G501 matching
+  is bounded: runs of combining marks are trimmed to 32 in the matching
+  view before NFKC (an unbounded run made NFKC quadratic), and cue
+  pairing is O(A+B). Measured on 2 MiB pathological inputs: 0.2–1.0 s on
+  an Apple M1, including the pre-existing raw patterns.
   Round-1 samples: 2/8 → 5/8 at HIGH, 8/8 at MEDIUM or above.
 - **Compatibility:** text that the old rule missed only because of
   formatting can now score HIGH — e.g. `You are **now**` (Markdown

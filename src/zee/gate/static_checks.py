@@ -25,7 +25,6 @@ misses.
 
 from __future__ import annotations
 
-import bisect
 import functools
 import re
 import sys
@@ -143,12 +142,37 @@ def _view_table() -> dict[int, int | None]:
     return table
 
 
+@functools.cache
+def _long_combining_run() -> re.Pattern[str]:
+    """Runs of more than _MAX_COMBINING_RUN combining marks (nonzero
+    canonical combining class). NFKC reorders such a run by sorting, which
+    is quadratic in its length: `"a" + "\u0315\u0300" * n` took 4 s at
+    256 KB."""
+    cps = [c for c in range(sys.maxunicode + 1) if unicodedata.combining(chr(c))]
+    ranges, start, prev = [], cps[0], cps[0]
+    for c in cps[1:] + [-1]:
+        if c != prev + 1:
+            ranges.append(f"{re.escape(chr(start))}-{re.escape(chr(prev))}")
+            start = c
+        prev = c
+    return re.compile(f"[{''.join(ranges)}]{{{_MAX_COMBINING_RUN + 1},}}")
+
+
+# A real script stacks a handful of marks per letter; 32 is far above that.
+# Only the view is trimmed (letters are never removed, so a known phrase
+# survives); every other pattern still reads the raw text.
+_MAX_COMBINING_RUN = 32
+
+
 def _g501_view(text: str) -> str:
     """NFKC (fullwidth -> ASCII), drop every Cf char (zero-width, soft
     hyphen, bidi marks, ZWJ) and the extra invisibles, fold Cyrillic/Greek
     look-alikes to Latin, drop Markdown emphasis, collapse whitespace.
     `Ｉｇｎｏｒｅ`, `Ig\\u00adnore`, `Ign\\u043ere`, `**Ignore**` all read
     `Ignore`."""
+    text = _long_combining_run().sub(
+        lambda m: m.group(0)[:_MAX_COMBINING_RUN], text
+    )
     text = unicodedata.normalize("NFKC", text).translate(_view_table())
     return _WS.sub(" ", _MD_EMPHASIS.sub("", text))
 
@@ -184,7 +208,7 @@ _CUES: dict[str, re.Pattern[str]] = {
     "B": re.compile(
         r"\b(?:takes?|has|gets?) (?:priority|precedence) over\b"
         r"|\bhighest priority\b|\boverrides? (?:all|any|every)\b"
-        r"|最優先|何よりも優先",
+        r"|(?:最優先|何よりも優先)" + _JA_NEG,
         re.I,
     ),
     "C": re.compile(
@@ -208,10 +232,14 @@ _CUES: dict[str, re.Pattern[str]] = {
 }
 _CUE_PAIRS = (("A", "B"), ("A", "D"), ("C", "D"), ("A", "C"))
 _EN_NEG = re.compile(
-    r"\b(?:do not|don't|never|must not|should not|shouldn't) (?:\w+ ){0,2}$",
+    r"(?:\b(?:do|does|did|will|would|should|must|can|is|are|was|were) not"
+    r"|\b(?:don|doesn|didn|won|wouldn|shouldn|mustn|isn|aren|wasn|weren)'t"
+    r"|\bcannot|\bnever) (?:\w+ ){0,2}$",
     re.I,
 )
-_EN_NEG_IN = re.compile(r"\b(?:not|never)\b|n't\b", re.I)
+_EN_NEG_IN = re.compile(
+    r"(?:\b(?:not|never)\b|n't\b)(?! (?:merely|only|just|simply)\b)", re.I
+)  # "not merely obsolete" is emphasis, not negation
 
 
 def _cue_hits(cue: str, view: str) -> list[re.Match[str]]:
@@ -232,12 +260,15 @@ def _g501_context(view: str) -> str | None:
         return None  # every pair needs A or C; skip the B/D scans
     hits.update({c: _cue_hits(c, view) for c in "BD"})
     for a, b in _CUE_PAIRS:
-        starts = [m.start() for m in hits[b]]
-        for ma in hits[a]:
-            i = bisect.bisect_left(starts, ma.start() - _CUE_WINDOW)
-            if i < len(starts) and starts[i] <= ma.start() + _CUE_WINDOW:
-                mb = hits[b][i]
-                return f"[{a}+{b}] {ma.group(0)} … {mb.group(0)}"
+        xs, ys, i, j = hits[a], hits[b], 0, 0  # both sorted by start: O(A+B)
+        while i < len(xs) and j < len(ys):
+            d = xs[i].start() - ys[j].start()
+            if abs(d) <= _CUE_WINDOW:
+                return f"[{a}+{b}] {xs[i].group(0)} … {ys[j].group(0)}"
+            if d < 0:
+                i += 1
+            else:
+                j += 1
     return None
 
 
