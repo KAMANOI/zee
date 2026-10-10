@@ -138,7 +138,10 @@ def test_behavioral_requested_but_not_run_is_partial(tmp_path, monkeypatch):
     assert v.exit_code == EXIT_PARTIAL
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode-000 files")
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="chmod 0 is not enforced on Windows; root can read mode-000 files",
+)
 def test_unreadable_source_file_exits_4_not_a_cached_pass(tmp_path, capsys):
     s = _skill(tmp_path)
     secret = s / "helper.py"
@@ -151,7 +154,10 @@ def test_unreadable_source_file_exits_4_not_a_cached_pass(tmp_path, capsys):
     assert '"status": "error"' in capsys.readouterr().out
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0,
+    reason="chmod 0o500 is not enforced on Windows; root ignores directory modes",
+)
 def test_promotion_failure_exits_4(tmp_path):
     s = _skill(tmp_path)
     install = tmp_path / "install"
