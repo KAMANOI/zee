@@ -34,6 +34,16 @@ releases.
   (U+0F73, half-width ﾞ). Cue pairing is O(A+B). Measured on 2 MiB pathological inputs: 0.2–1.0 s on
   an Apple M1, including the pre-existing raw patterns.
   Round-1 samples: 2/8 → 5/8 at HIGH, 8/8 at MEDIUM or above.
+- **zee gate: crafted input could make the existing G203 / G204 checks
+  take quadratic time** (present since the rules were added, including
+  0.11.0). From every `curl` / `wget` / `exec(` / `eval(` / `atob(` the
+  regex rescanned to the end of the line: `"curl " * 16000` (80 KB) took
+  ~4 s, so a 2 MiB file could hold the gate for tens of minutes. Both rules now
+  find the leftmost match in one pass and confirm it with the original
+  regex anchored there, so matches and evidence are unchanged (checked by
+  a 20,000-case fuzz against the old regexes in the test suite). The
+  other static patterns were reviewed and have bounded per-position work.
+  2 MiB floods now scan in 0.6–0.8 s on an Apple M1.
 - **Compatibility:** text that the old rule missed only because of
   formatting can now score HIGH — e.g. `You are **now**` (Markdown
   emphasis) or a full-width known phrase. No input scores lower than in

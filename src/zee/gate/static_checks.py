@@ -44,8 +44,99 @@ _EXPECT_TEXT = _TEXT_SUFFIXES
 
 _MAX_READ_BYTES = 2 * 1024 * 1024  # don't slurp giant blobs
 
-# (code, severity, compiled-regex, human message)
-_PATTERNS: list[tuple[str, Severity, re.Pattern[str], str]] = [
+# G203/G204 as plain regexes are quadratic: from every `curl` / `exec(` /
+# `atob(` the engine rescans to the end of the line (`"curl " * n`: 80 KB
+# took 3.9 s). _LinearSearch finds the same leftmost start in one pass —
+# each candidate token is paired with the next separator, looked up once
+# per segment — and then runs the original regex anchored at that start,
+# so the match (and evidence) is identical to `full.search(text)`.
+
+
+def _first_ok_token(text, tokens, sep: re.Pattern[str], ok) -> int | None:
+    """Start of the first token whose next `sep` hit satisfies ok(pos).
+    Tokens come in order and contain no separator, so consecutive tokens
+    before the same separator share one lookup: linear overall."""
+    seg_end, good = -1, False
+    for t in tokens:
+        if t.end() > seg_end:
+            m = sep.search(text, t.end())
+            seg_end = m.start() if m else len(text)
+            good = ok(seg_end)
+        if good:
+            return t.start()
+    return None
+
+
+class _LinearSearch:
+    def __init__(self, full: re.Pattern[str], find_start) -> None:
+        self.full, self.find_start, self.pattern = full, find_start, full.pattern
+
+    def search(self, text: str) -> re.Match[str] | None:
+        start = self.find_start(text)
+        return None if start is None else self.full.match(text, start)
+
+
+_G203_TOK = re.compile(r"(curl|wget)\b", re.I)
+_G203_SEP = re.compile(r"[|\n]")
+_G203_TAIL = re.compile(r"\|\s*(bash|sh|zsh)\b", re.I)
+
+
+def _g203_start(text: str) -> int | None:
+    # `[^\n|]*` stops at the first | or newline, so a token matches iff
+    # that separator is a | followed by a shell.
+    return _first_ok_token(
+        text, _G203_TOK.finditer(text), _G203_SEP,
+        lambda q: q < len(text) and _G203_TAIL.match(text, q) is not None,
+    )
+
+
+_G203 = _LinearSearch(
+    re.compile(r"(curl|wget)\b[^\n|]*\|\s*(bash|sh|zsh)\b", re.I), _g203_start
+)
+
+_G204_DEC = re.compile(r"(atob|b64decode|base64\.b64decode)\s*\(", re.I)
+_G204_DEC_SEP = re.compile(r"[)\n]")
+_G204_EXE = re.compile(r"(eval|exec)\s*\(\s*", re.I)
+_G204_ATOB = re.compile(r"atob", re.I)
+_G204_EXE_SEP = re.compile(r"\n|b64decode", re.I)
+
+
+def _g204_start(text: str) -> int | None:
+    # Alt 1: decode call whose `(` closes before the line ends.
+    a = _first_ok_token(
+        text, _G204_DEC.finditer(text), _G204_DEC_SEP,
+        lambda q: q < len(text) and text[q] == ")",
+    )
+    # Alt 2: eval/exec( followed by atob, or by b64decode later on the line
+    # (`.*b64decode`): the first "\n or b64decode" after it must be the latter.
+    b = None
+    seg_end, good = -1, False
+    for t in _G204_EXE.finditer(text):
+        if _G204_ATOB.match(text, t.end()):
+            b = t.start()
+            break
+        if t.end() > seg_end:
+            m = _G204_EXE_SEP.search(text, t.end())
+            seg_end = m.start() if m else len(text)
+            good = m is not None and m.group(0) != "\n"
+        if good:
+            b = t.start()
+            break
+    starts = [x for x in (a, b) if x is not None]
+    return min(starts) if starts else None
+
+
+_G204 = _LinearSearch(
+    re.compile(
+        r"(atob|b64decode|base64\.b64decode)\s*\([^\n)]*\)\s*\)?\s*"
+        r"|(eval|exec)\s*\(\s*(atob|.*b64decode)",
+        re.I,
+    ),
+    _g204_start,
+)
+
+# (code, severity, compiled regex or _LinearSearch, human message)
+_PATTERNS: list[tuple[str, Severity, "re.Pattern[str] | _LinearSearch", str]] = [
     (
         "G201", Severity.HIGH,
         re.compile(r"\b(eval|exec)\s*\(|\bFunction\s*\(", re.I),
@@ -61,16 +152,12 @@ _PATTERNS: list[tuple[str, Severity, re.Pattern[str], str]] = [
     ),
     (
         "G203", Severity.HIGH,
-        re.compile(r"(curl|wget)\b[^\n|]*\|\s*(bash|sh|zsh)\b", re.I),
+        _G203,
         "pipes a download straight into a shell (curl|bash)",
     ),
     (
         "G204", Severity.HIGH,
-        re.compile(
-            r"(atob|b64decode|base64\.b64decode)\s*\([^\n)]*\)\s*\)?\s*"
-            r"|(eval|exec)\s*\(\s*(atob|.*b64decode)",
-            re.I,
-        ),
+        _G204,
         "decodes then executes an encoded payload",
     ),
     (
@@ -183,6 +270,8 @@ def _bounded_nfkc(text: str) -> str:
     every combining run of the decomposed text, then NFC (reorder +
     compose, linear now that runs are bounded). Per-char NFKD followed by
     NFC equals NFKC whenever no run was capped."""
+    if text.isascii():
+        return text  # ASCII is already NFKC and has no combining marks
     text = text.translate(_NFKD_CHAR)
     text = _long_combining_run().sub(
         lambda m: m.group(0)[:_MAX_COMBINING_RUN], text
