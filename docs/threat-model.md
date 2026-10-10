@@ -32,7 +32,7 @@ and [gate Limits](gate.md#limits-invariant-i5); they are not repeated here.
 
 | Mechanism | Current reach and limit |
 | --- | --- |
-| Static inspection | Matches implemented patterns. It can miss obfuscation, runtime-generated content, and reworded natural-language instructions. |
+| Static inspection | Matches implemented patterns. It can miss obfuscation, runtime-generated content, and reworded natural-language instructions. Prompt-injection text (G501) is also matched after Unicode/Markdown normalization (HIGH); paraphrases are caught only by a fixed two-cue context rule and score MEDIUM, so they pass `fail-on: high` ([details](gate.md#prompt-injection-text-g501)). |
 | Denylist | Matches known hashes or names only. Per-entry signing is future work; see the [threat-list integrity notes](threat-list.md#integrity). |
 | Behavioural sandbox | Available only through macOS `sandbox-exec`. Linux and Windows do not execute the artifact, so behavioural inspection cannot be performed there. TLS bodies carried through a CONNECT tunnel are opaque. An artifact that detects the sandbox can behave harmlessly inside it. |
 | Audit | Runs only when requested. It checks pinned artifacts for drift and is not live, real-time monitoring of running processes. |

@@ -25,7 +25,10 @@ misses.
 
 from __future__ import annotations
 
+import bisect
+import functools
 import re
+import sys
 import unicodedata
 from pathlib import Path
 
@@ -108,120 +111,134 @@ _PATTERNS: list[tuple[str, Severity, re.Pattern[str], str]] = [
 _G501 = next(p for p in _PATTERNS if p[0] == "G501")
 
 # --- G501 hardening: normalized view + context rules ----------------------
-# Only G501 is matched against this view; the other patterns keep reading
-# the raw text. Zero-width set is deliberately small (no blanket strip of
-# every invisible code point).
-_ZERO_WIDTH = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+# Only G501 reads this view; every other pattern keeps reading raw text.
+# Confidence tiers: a known phrase found in the view is HIGH (same as the
+# raw rule); a paraphrase found by the context rules is an estimate, so it
+# is always MEDIUM. No downgrade path uses quotes or words an attacker can
+# add (those were bypasses), and every pattern here is bounded/linear.
 _MD_EMPHASIS = re.compile(r"[*_~`]+")
+_WS = re.compile(r"\s+")
+# Invisible code points that are not Cf: CGJ, variation selectors, Hangul
+# fillers, Khmer vowel inherents.
+_EXTRA_INVISIBLE = (
+    [0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0]
+    + list(range(0xFE00, 0xFE10)) + list(range(0xE0100, 0xE01F0))
+)
+# Cyrillic / Greek letters that render like Latin ones.
+_HOMOGLYPHS = dict(zip(
+    map(ord, "аеорсхуіѕјԁһӏАВЕКМНОРСТХУІЅЈαοριντκΑΒΕΖΗΙΚΜΝΟΡΤΥΧ"),
+    "aeopcxyisjdhlABEKMHOPCTXYISJaopivtkABEZHIKMNOPTYX",
+))
+
+
+@functools.cache
+def _view_table() -> dict[int, int | None]:
+    table: dict[int, int | None] = dict.fromkeys(
+        c for c in range(sys.maxunicode + 1)
+        if unicodedata.category(chr(c)) == "Cf"
+    )
+    table.update(dict.fromkeys(_EXTRA_INVISIBLE))
+    table.update(_HOMOGLYPHS)
+    return table
 
 
 def _g501_view(text: str) -> str:
-    """NFKC (fullwidth -> ASCII), drop zero-width chars, drop Markdown
-    emphasis markers, so `Ｉｇｎｏｒｅ`, `Ig​nore`, `**Ignore**` all
-    read as `Ignore`."""
-    text = unicodedata.normalize("NFKC", text).translate(_ZERO_WIDTH)
-    return _MD_EMPHASIS.sub("", text)
+    """NFKC (fullwidth -> ASCII), drop every Cf char (zero-width, soft
+    hyphen, bidi marks, ZWJ) and the extra invisibles, fold Cyrillic/Greek
+    look-alikes to Latin, drop Markdown emphasis, collapse whitespace.
+    `Ｉｇｎｏｒｅ`, `Ig\\u00adnore`, `Ign\\u043ere`, `**Ignore**` all read
+    `Ignore`."""
+    text = unicodedata.normalize("NFKC", text).translate(_view_table())
+    return _WS.sub(" ", _MD_EMPHASIS.sub("", text))
 
 
-# Context rules: a paraphrase only fires when two *different* cues share a
-# paragraph — a single word never does. Cues:
+# Context rules (MEDIUM): two *different* cues within _CUE_WINDOW chars of
+# the collapsed view (blank lines do not reset it). A single cue never fires.
 #   A = earlier instructions declared void / to be ignored
 #   B = this text claims priority over everything else
-#   C = keep something hidden from the user / asker
-#   D = replace the requested answer with something else
-# Fires on A+B, A+D, C+D, A+C.
+#   C = keep *this instruction/replacement* hidden
+#   D = replace the *requested* answer
 # ponytail: fixed phrase lists — a determined paraphrase still slips past;
 # a semantic classifier is the upgrade path, not longer lists.
-# Japanese negation right after the keyword: 無視しないで / 無効にしないで /
-# 隠さず / 無視せず / 無効ではありません. 無効です still matches.
-_JA_NEG = r"(?!(?:に|では?)?(?:し|さ)?(?:ない|ず|ません|せず|ありません))"
+_CUE_WINDOW = 400
+# Japanese negation/prohibition right after the keyword: 無視しないで /
+# 無効にしないで / 隠さず / 無視せず / 無効ではありません / 無視することは禁止.
+_JA_NEG = (
+    r"(?!(?:に|では?)?(?:し|さ)?(?:ない|ず|ません|せず|ありません)"
+    r"|(?:する|すること|し)?(?:は|を)?(?:禁止|いけ|なら|だめ|ダメ))"
+)
+_JA_DOC = r"(?:指示|命令|指令|プロンプト)(?!書)"
 _CUES: dict[str, re.Pattern[str]] = {
     "A": re.compile(
-        r"\b(?:earlier|prior|previous|preceding|original|above)\s+"
-        r"(?:guidance|directives?|instructions?)\b[^.\n]{0,30}?"
-        r"\b(?:obsolete|void|invalid|null|cancell?ed|superseded|no\s+longer)"
-        r"|\b(?:ignore|disregard|forget|discard)\b[^.\n]{0,20}?"
-        r"\b(?:earlier|prior|previous|preceding|above)\s+"
+        r"\b(?:earlier|prior|previous|preceding|original|above) "
+        r"(?:guidance|directives?|instructions?)\b[^.]{0,30}?"
+        r"\b(?:obsolete|void|invalid|null|cancell?ed|superseded|no longer)"
+        r"|\b(?:ignore|disregard|forget|discard)\b[^.]{0,20}?"
+        r"\b(?:earlier|prior|previous|preceding|above) "
         r"(?:guidance|directives?|instructions?)\b"
         r"|(?:これまで|以前|前|先|上記|既存|元|最初)の(?:すべての|全ての)?"
-        r"(?:指示|命令|指令|プロンプト)[^。\n]{0,15}?"
-        r"(?:無効|無視|破棄|忘れ|取り消)" + _JA_NEG,
+        + _JA_DOC + r"[^。]{0,15}?(?:無効|無視|破棄|忘れ|取り消)" + _JA_NEG,
         re.I,
     ),
     "B": re.compile(
-        r"\b(?:takes?|has|gets?)\s+(?:priority|precedence)\s+over\b"
-        r"|\bhighest\s+priority\b|\boverrides?\s+(?:all|any|every)\b"
+        r"\b(?:takes?|has|gets?) (?:priority|precedence) over\b"
+        r"|\bhighest priority\b|\boverrides? (?:all|any|every)\b"
         r"|最優先|何よりも優先",
         re.I,
     ),
     "C": re.compile(
-        r"\b(?:hidden|secret|conceal\w*|hide)\b[^.\n]{0,30}?\bfrom\s+"
-        r"(?:the\s+)?(?:user|person|human|requester|asker|operator)"
-        r"|(?:ユーザー|利用者|依頼者|質問者|相手)(?:に|には|へ|から)[^。\n]{0,15}?"
-        r"(?:(?:秘密|内緒|伏せ|隠)" + _JA_NEG + r"|知らせ(?:ない|ず)|伝え(?:ない|ず)|言わ(?:ない|ず))"
-        r"|秘匿" + _JA_NEG,
+        r"\b(?:this|these|the|that) (?:instructions?|directives?|"
+        r"replacement|change|override)\b[^.]{0,30}?"
+        r"\b(?:hidden|secret|concealed)\b"
+        r"|\b(?:hide|conceal) (?:this|these|the|that) (?:instructions?|"
+        r"directives?|replacement|change|override)\b"
+        r"|(?:この|本|これらの)?(?:指示|命令|指令|置き換え|差し替え)(?!書)"
+        r"[^。]{0,15}?(?:秘密|内緒|伏せ|隠|秘匿)" + _JA_NEG,
         re.I,
     ),
     "D": re.compile(
-        r"\b(?:replace|substitute|swap)\b[^.\n]{0,30}?"
-        r"\b(?:answer|response|reply|output)\b"
-        r"|\binstead\s+of\s+(?:the\s+)?(?:requested|actual|real)\s+"
+        r"\b(?:replace|substitute|swap) (?:the |your )?"
+        r"(?:requested|actual|real|original|user'?s) (?:answer|response|reply)"
+        r"|\binstead of (?:the )?(?:requested|actual|real) "
         r"(?:answer|response|reply)\b"
-        r"|(?:回答|返答|答え|応答)の代わりに|(?:回答|返答|答え|応答)を[^。\n]{0,10}?"
-        r"(?:置き換え|差し替え)",
+        r"|(?:依頼|質問|要求)された(?:回答|返答|答え|応答)の代わりに",
         re.I,
     ),
 }
 _CUE_PAIRS = (("A", "B"), ("A", "D"), ("C", "D"), ("A", "C"))
-# Quoted spans are examples, not instructions (「…」 is how Japanese docs
-# cite an attack string).
-_QUOTED = re.compile(r"「[^」\n]*」|『[^』\n]*』|“[^”\n]*”|\"[^\"\n]*\"")
 _EN_NEG = re.compile(
-    r"\b(?:do\s+not|don't|never|must\s+not|should\s+not|shouldn't)\s+"
-    r"(?:\w+\s+){0,2}$",
+    r"\b(?:do not|don't|never|must not|should not|shouldn't) (?:\w+ ){0,2}$",
     re.I,
 )
+_EN_NEG_IN = re.compile(r"\b(?:not|never)\b|n't\b", re.I)
+_MAX_CUE_HITS = 1000  # per cue; bounds the pair check on pathological input
 
 
-def _cue_hit(cue: str, para: str) -> re.Match[str] | None:
-    for m in _CUES[cue].finditer(para):
-        if not _EN_NEG.search(para[max(0, m.start() - 40):m.start()]):
-            return m
+def _cue_hits(cue: str, view: str) -> list[re.Match[str]]:
+    out = []
+    for m in _CUES[cue].finditer(view):
+        if _EN_NEG_IN.search(m.group(0)):
+            continue  # "Earlier guidance is not obsolete"
+        if _EN_NEG.search(view[max(0, m.start() - 40):m.start()]):
+            continue  # "Do not treat earlier guidance as obsolete"
+        out.append(m)
+        if len(out) >= _MAX_CUE_HITS:
+            break
+    return out
+
+
+def _g501_context(view: str) -> str | None:
+    """Evidence when two different cues sit within _CUE_WINDOW chars."""
+    hits = {c: _cue_hits(c, view) for c in _CUES}
+    for a, b in _CUE_PAIRS:
+        starts = [m.start() for m in hits[b]]
+        for ma in hits[a]:
+            i = bisect.bisect_left(starts, ma.start() - _CUE_WINDOW)
+            if i < len(starts) and starts[i] <= ma.start() + _CUE_WINDOW:
+                mb = hits[b][i]
+                return f"[{a}+{b}] {ma.group(0)} … {mb.group(0)}"
     return None
 
-
-# A paragraph that talks *about* attacks (teaching material, threat docs)
-# is capped at MEDIUM: still blocks promotion, but does not read as HIGH.
-# Adding these words to a payload therefore only buys MEDIUM, never LOW.
-_META = re.compile(
-    r"prompt[\s-]+injection|\binjection\b|\battackers?\b|\bpayloads?\b|"
-    r"\badversar|攻撃|注入|インジェクション",
-    re.I,
-)
-
-
-def _g501_context(view: str) -> tuple[Severity, str] | None:
-    """(severity, evidence) when a paragraph pairs two injection cues.
-    Quoted cues never reach HIGH, but are not dropped either: wrapping a
-    payload in quotes buys MEDIUM, never LOW."""
-    hit = _g501_pairs(_QUOTED.sub(" ", view))
-    if hit:
-        return hit
-    hit = _g501_pairs(view)
-    return (Severity.MEDIUM, hit[1] + " (quoted)") if hit else None
-
-
-def _g501_pairs(view: str) -> tuple[Severity, str] | None:
-    found = None
-    for para in re.split(r"\n\s*\n", view):
-        hits = {c: _cue_hit(c, para) for c in _CUES}
-        for a, b in _CUE_PAIRS:
-            if hits[a] and hits[b]:
-                ev = f"[{a}+{b}] {hits[a].group(0)} … {hits[b].group(0)}"
-                if not _META.search(para):
-                    return Severity.HIGH, ev
-                found = found or (Severity.MEDIUM, ev + " (discusses attacks)")
-    return found
 
 # Binary executable signatures that must not appear in a text-typed file.
 _MAGIC = [
@@ -350,9 +367,11 @@ def scan_tree(root: Path) -> list[Flag]:
             _, sev, pat, msg = _G501
             view = _g501_view(text)
             m = pat.search(view)
-            hit = (sev, f"(normalized) {m.group(0)}") if m else _g501_context(view)
-            if hit:
-                sev, ev = hit
+            if m:
+                ev = f"(normalized) {m.group(0)}"
+            else:
+                sev, ev = Severity.MEDIUM, _g501_context(view)
+            if ev:
                 ev = ev if len(ev) <= 120 else ev[:117] + "…"
                 flags.append(Flag(sev, "G501", msg, evidence=f"{rel}: {ev}"))
     return flags

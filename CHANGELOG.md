@@ -5,6 +5,34 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+### Security
+
+- **zee gate G501 (prompt-injection text) catches obfuscated and
+  paraphrased instructions.** A resilience test against v0.11.0 found 6 of
+  8 synthetic injection samples scored LOW. G501 now has two tiers:
+  - **HIGH — known phrase after normalization.** The existing phrases are
+    also matched in a view with NFKC applied (full-width → ASCII), all
+    Unicode format characters (zero-width, soft hyphen, ZWJ, bidi marks)
+    and other invisibles (CGJ, variation selectors) removed, common
+    Cyrillic/Greek look-alikes folded to Latin, Markdown emphasis removed
+    and whitespace collapsed.
+  - **MEDIUM — paraphrase (context rule).** Two different cues within
+    ~400 characters (earlier instructions declared void, a priority
+    claim, hiding this instruction, replacing the requested answer), in
+    English and Japanese. Single cues and negated cues do not fire. It is
+    an estimate, so it stays MEDIUM: it blocks `--promote-to` but passes
+    the default `fail-on: high`; use `fail-on: medium` to fail CI on it.
+  Quotes and attack-describing words never lower a finding, and all G501
+  matching is linear-time (2 MiB pathological inputs scan in under 1 s).
+  Round-1 samples: 2/8 → 5/8 at HIGH, 8/8 at MEDIUM or above.
+- **Compatibility:** text that the old rule missed only because of
+  formatting can now score HIGH — e.g. `You are **now**` (Markdown
+  emphasis) or a full-width known phrase. No input scores lower than in
+  0.11.0. Limits (fixed paraphrase vocabulary, split spellings such as
+  `I.g.n.o.r.e`) are listed in [docs/gate.md](docs/gate.md#limits-invariant-i5).
+
 ## [0.11.0] — 2026-10-10
 
 ### Security
