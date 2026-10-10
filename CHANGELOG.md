@@ -5,7 +5,7 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
-## [0.12.0] — Unreleased
+## [0.12.0] — 2026-10-11
 
 ### Security
 
