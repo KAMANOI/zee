@@ -5,6 +5,19 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.12.0] — Unreleased
+
+### Added
+
+- **Notifications carry a 4-level impact tier** (情報/注意/警戒/重大) and a
+  one-line reason, so an operator with no dedicated security staff can
+  judge severity at a glance. Based on path sensitivity category
+  (credential/key, data that may contain personal information, general
+  file — category name only, never the path itself), the asset's type,
+  and the asset's business reach (decoy count, shared asset, overnight
+  use). Display-only: never used by the auto-cut decision
+  (`docs/design/notification-tier.md`).
+
 ## [0.11.0] — 2026-10-10
 
 ### Security

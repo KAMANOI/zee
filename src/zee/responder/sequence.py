@@ -35,6 +35,7 @@ from ..config.schema import AssetProfile
 from ..errors import ZeeError, Z403_INVALID_CONFIDENCE_FOR_CONTAIN
 from ..events import TrapEvent
 from ..notifier.local import notify_local
+from ..notifier.tier import reason_line, safe_classify
 from ..policy.asset_profile import resolve
 from ..telemetry.cut_state import CutStateLog
 from ..telemetry.events_log import EventLog
@@ -96,9 +97,14 @@ def handle(
     # the OS notification history (Notification Center / notify-send /
     # Toast) does not retain the full filesystem location.
     hint = _hint_for(event.op_class, event.asset_id)
-    title = f"Zee tripwire ({event.op_class}): {event.asset_id}"
+    # Display-only impact tier (docs/design/notification-tier.md). Computed
+    # with safe_classify so a bug here degrades to the lowest tier instead
+    # of ever touching notification delivery or the cut gate below.
+    tier = safe_classify(event, asset)
+    title = f"Zee tripwire [{tier.label}] ({event.op_class}): {event.asset_id}"
     body = (
         f"{event.detail} | decoy_ref={event.decoy_ref or '-'}\n"
+        f"{reason_line(tier, action='detect')}\n"
         f"{hint}"
     )
     notified_locally = notify_local(title, body)
@@ -120,6 +126,8 @@ def handle(
             "detected_at": event.detected_at.isoformat(),
             "detail": event.detail,
             "hint": hint,
+            "tier": tier.label,
+            "tier_reason": reason_line(tier, action="detect"),
         }
 
         def _dispatch() -> None:
@@ -167,8 +175,11 @@ def handle(
                 cut_would_have_done_at = datetime.now(timezone.utc)
                 cut_detail = f"dry_run: would have called {cut_fn.__name__}"
                 notify_local(
-                    f"Zee dry_run: would cut {event.asset_id}",
-                    f"cut_method={resolution.cut_method} (no real cut performed)",
+                    f"Zee dry_run: would cut [{tier.label}] {event.asset_id}",
+                    (
+                        f"cut_method={resolution.cut_method} (no real cut performed)\n"
+                        f"{reason_line(tier, action='dry_run')}"
+                    ),
                 )
             else:
                 ok, detail = cut_fn(
@@ -181,10 +192,11 @@ def handle(
                 # Post-cut notification (network may be down for remote channels).
                 # decoy_ref keeps the path off the OS notification history.
                 notify_local(
-                    f"Zee cut applied: {event.asset_id}",
+                    f"Zee cut applied [{tier.label}]: {event.asset_id}",
                     (
                         f"reason: {event.detail}\n"
                         f"decoy_ref: {event.decoy_ref or '-'}\n"
+                        f"{reason_line(tier, action='contain' if ok else 'contain_failed')}\n"
                         f"recover with: zee restore {event.asset_id}"
                     ),
                 )
