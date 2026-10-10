@@ -7,8 +7,23 @@ releases.
 
 ## [0.12.0] — Unreleased
 
+### Security
+
+- No security fixes in this release.
+
 ### Added
 
+- **`zee incident-report`** — bundles a `zee export` JSON into a document
+  (`<prefix>.json` / `.txt` / `.html`) to attach when consulting or
+  reporting to the police (`--recipient police`) or the Personal
+  Information Protection Commission (`--recipient ppc`). The body follows
+  the chosen recipient's reporting items (PPC: Enforcement Rules of the
+  APPI, Art. 8); the footer always lists both the police and PPC contact
+  points as separate procedures, with the date they were last checked
+  (2026-10-09). Read-only over its inputs, owner-only (0600) outputs,
+  refuses an output path that equals an input even with `--force`, and
+  imports no network module (enforced by a test). Nothing is submitted.
+  New error codes Z1001–Z1005 (`docs/design/incident-report.md`).
 - **Notifications carry a 4-level impact tier** (情報/注意/警戒/重大) and a
   one-line reason, so an operator with no dedicated security staff can
   judge severity at a glance. Based on path sensitivity category
@@ -17,6 +32,15 @@ releases.
   and the asset's business reach (decoy count, shared asset, overnight
   use). Display-only: never used by the auto-cut decision
   (`docs/design/notification-tier.md`).
+
+### Changed
+
+- **Notification titles now include the tier label**, e.g.
+  `Zee tripwire [警戒] (change): <asset_id>`, `Zee dry_run: would cut [警戒] <asset_id>`,
+  `Zee cut applied [警戒]: <asset_id>`; the body gains the reason line, and the
+  webhook payload gains `tier` and `tier_reason`. **If you filter or parse
+  notification titles, update that match.** When a cut was attempted but
+  failed, the reason line now says so instead of reading as contained.
 
 ## [0.11.0] — 2026-10-10
 
