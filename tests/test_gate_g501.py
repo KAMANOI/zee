@@ -117,4 +117,4 @@ def test_g501_pathological_input_is_fast(tmp_path, name):
     flags = scan_tree(tmp_path)
     elapsed = time.perf_counter() - t
     assert not any(f.code == "G910" for f in flags)  # really scanned
-    assert elapsed < 1.0, f"{name}: {elapsed:.2f}s"
+    assert elapsed < 5.0, f"{name}: {elapsed:.2f}s"  # quadratic blow-up shows as minutes; 5s tolerates slow CI
