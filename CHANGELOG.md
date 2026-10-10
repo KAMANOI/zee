@@ -5,7 +5,46 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
-## [Unreleased]
+## [0.11.0] — 2026-10-10
+
+### Changed
+
+- **zee gate: an incomplete inspection no longer passes, even at LOW.**
+  Exit code **3 (partial)** is new. An oversized (>2 MiB) text file, an
+  unparseable manifest, a missing `--import-scan` report, or an unrun
+  `--behavioral` sandbox now mark the verdict `inspection.status: partial`
+  instead of being silently skipped and scored clean — and partial fails
+  **any** `fail-on` threshold: code 3 sorts above HIGH (2), so it can't
+  slip through `fail-on: high`. `--promote-to` refuses to promote a
+  partial verdict. Text files are now sniffed by content (no NUL byte)
+  rather than by extension allowlist, so formats like `.html` or
+  `Makefile` are inspected instead of skipped. The rule is: what the gate
+  did not read, it does not pass.
+- **zee gate: exit code 4 replaces 1 and 2 for "no verdict."** A missing
+  target, an unreadable file, an internal exception, or a failed
+  `--promote-to` write now exit **4** (`inspection.status: error`,
+  `risk_level: null`), not the old 1 (internal error) or 2 (target
+  missing). **If your CI checks `== 2` for "target missing" or treats
+  exit 1 as acceptable, review that check** — 4 now fails `fail-on` at
+  any threshold, the same as HIGH.
+- `--json` output gains `inspection: {status, gaps}` alongside
+  `risk_level` (`risk_level` is `null` when `status` is `error`).
+- The GitHub Action now writes the verdict to a file and fails if it's
+  missing or unparseable, instead of trusting the Python exit code alone.
+- `fetch_local` hashes a local source strictly, so a file it failed to
+  read fully can no longer be mistaken for an unrelated, already-clean
+  quarantine copy of the same name.
+
+### Added
+
+- `docs/gate.md` — the exit code table and `inspection` field, documented
+  alongside the existing CI / pre-install / interop guidance.
+- `SECURITY.ja.md` — Japanese translation of `SECURITY.md`'s disclosure
+  timeline, scope and Safe Harbor terms, plus a coordinated-disclosure
+  summary and a guide to receiving fixes via GitHub Watch → Custom →
+  Releases/Security alerts (relevant because `uv tool install` from this
+  repo bypasses registry update alerts). English is authoritative if the
+  two diverge.
 
 ### Changed
 

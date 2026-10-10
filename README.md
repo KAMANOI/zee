@@ -107,7 +107,7 @@ zee gate audit
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.10.1"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.11.0"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git
