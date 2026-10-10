@@ -302,7 +302,7 @@ def _esc(s: Any) -> str:
 
 
 def render_html(doc: dict[str, Any]) -> str:
-    """Zero-dependency HTML — print-to-PDF from any browser (no PDF library added, see design doc §4.4)."""
+    """Zero-dependency HTML — print-to-PDF from any browser (no PDF library added, see design doc §4.2)."""
     body = render_text(doc)
     esc = _esc(body)
     return (
