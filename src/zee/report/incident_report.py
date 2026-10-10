@@ -55,11 +55,10 @@ _STATUTORY_PPC_ITEMS_ORDER = (
 )
 
 _SUPPORTED_EXPORT_SCHEMA_VERSIONS = {"1"}
-# Only these fields of each record are carried into the report; anything
-# else an export (or a hand-edited file) carries is dropped.
-_EVENT_FIELDS = ("schema_version", "event_id", "timestamp", "source", "confidence",
-                 "op_class", "asset_id", "decoy_ref", "detail")
-_CONTAINMENT_FIELDS = ("asset_id", "method", "cut_at", "platform", "modified")
+
+
+def _is_str(v: Any) -> bool:
+    return isinstance(v, str)
 
 
 def _is_int(v: Any) -> bool:
@@ -74,18 +73,49 @@ def _is_opt_str(v: Any) -> bool:
     return v is None or isinstance(v, str)
 
 
+def _is_count_map(v: Any) -> bool:
+    return isinstance(v, dict) and all(isinstance(k, str) and _is_int(n) and n >= 0 for k, n in v.items())
+
+
+def _is_bool(v: Any) -> bool:
+    return isinstance(v, bool)
+
+
+# Record contracts, matching what `zee export` writes: every key is
+# required (missing -> Z1004), each value must pass its check, and keys
+# not listed here are dropped (never copied into the report).
+# events: zee.mcp.reader.EventReader._canonical
+_EVENT_SCHEMA = {
+    "schema_version": _is_str, "event_id": _is_str, "timestamp": _is_str,
+    "source": _is_opt_str, "confidence": _is_opt_str, "op_class": _is_opt_str,
+    "asset_id": _is_str, "decoy_ref": _is_opt_str, "detail": _is_str,
+}
+# active_containments: zee.mcp.reader.EventReader.active_containments
+_CONTAINMENT_SCHEMA = {
+    "asset_id": _is_str, "method": _is_str, "cut_at": _is_str,
+    "platform": _is_str, "modified": _is_str_list,
+}
+# chain_verification.<log>: zee.telemetry.report_export._chain_summary
+_CHAIN_SCHEMA = {
+    "status": _is_str, "files": _is_str_list, "read_error": _is_opt_str,
+    "total_lines": lambda v: _is_int(v) and v >= 0, "counts": _is_count_map,
+    "tamper_suspected": _is_bool, "partial_last_line": _is_bool,
+    "problems": lambda v: isinstance(v, list),
+}
+_PROBLEM_SCHEMA = {"file": _is_str, "line": _is_int, "status": _is_str}
+
+
 def _check(cond: bool, path: Path, what: str) -> None:
     if not cond:
         raise ZeeError(Z1004_EXPORT_FILE_REQUIRED, f"{path}: {what}")
 
 
-def _pick(rec: Any, fields: tuple[str, ...], path: Path, what: str) -> dict[str, Any]:
-    _check(isinstance(rec, dict), path, f"{what} の要素がオブジェクトではありません")
-    out = {k: rec[k] for k in fields if k in rec}
-    for k, v in out.items():
-        ok = _is_str_list(v) if k == "modified" else _is_opt_str(v)
-        _check(ok, path, f"{what}.{k} の型が不正です")
-    return out
+def _pick(rec: Any, schema: dict[str, Any], path: Path, what: str) -> dict[str, Any]:
+    _check(isinstance(rec, dict), path, f"{what} がオブジェクトではありません")
+    for k, ok in schema.items():
+        _check(k in rec, path, f"{what}.{k} がありません")
+        _check(ok(rec[k]), path, f"{what}.{k} の型が不正です")
+    return {k: rec[k] for k in schema}
 
 
 def load_export(path: Path) -> dict[str, Any]:
@@ -119,14 +149,26 @@ def load_export(path: Path) -> dict[str, Any]:
         _check(isinstance(data.get(k), bool), path, f"{k} が真偽値ではありません")
     for k in ("events", "active_containments"):
         _check(isinstance(data.get(k), list), path, f"{k} がリストではありません")
+    total, included, events = data["events_total"], data["events_included"], data["events"]
+    _check(included == len(events), path, f"events_included={included} が events の件数 {len(events)} と一致しません")
+    _check(total >= included, path, f"events_total={total} が events_included={included} より小さい値です")
+    _check(data["events_truncated"] == (included < total), path,
+           "events_truncated が events_total / events_included と矛盾しています")
     cv = data.get("chain_verification")
     _check(isinstance(cv, dict), path, "chain_verification がオブジェクトではありません")
-    chain: dict[str, Any] = {}
+    _check(isinstance(cv.get("note"), str), path, "chain_verification.note が文字列ではありません")
+    chain: dict[str, Any] = {"note": cv["note"]}
     for k in ("events_jsonl", "metrics_jsonl"):
-        c = cv.get(k)
-        _check(isinstance(c, dict) and isinstance(c.get("status"), str), path,
-               f"chain_verification.{k}.status が文字列ではありません")
-        chain[k] = {"status": c["status"]}
+        c = _pick(cv.get(k), _CHAIN_SCHEMA, path, f"chain_verification.{k}")
+        problems = []
+        for i, pr in enumerate(c["problems"]):
+            q = _pick(pr, _PROBLEM_SCHEMA, path, f"chain_verification.{k}.problems[{i}]")
+            if "reason" in pr:
+                _check(_is_str(pr["reason"]), path, f"chain_verification.{k}.problems[{i}].reason の型が不正です")
+                q["reason"] = pr["reason"]
+            problems.append(q)
+        c["problems"] = problems
+        chain[k] = c
 
     return {
         "schema_version": data["schema_version"],
@@ -136,9 +178,9 @@ def load_export(path: Path) -> dict[str, Any]:
         "events_total": data["events_total"],
         "events_included": data["events_included"],
         "events_truncated": data["events_truncated"],
-        "events": [_pick(e, _EVENT_FIELDS, path, "events") for e in data["events"]],
-        "active_containments": [_pick(c, _CONTAINMENT_FIELDS, path, "active_containments")
-                                for c in data["active_containments"]],
+        "events": [_pick(e, _EVENT_SCHEMA, path, f"events[{i}]") for i, e in enumerate(events)],
+        "active_containments": [_pick(c, _CONTAINMENT_SCHEMA, path, f"active_containments[{i}]")
+                                for i, c in enumerate(data["active_containments"])],
         "chain_verification": chain,
     }
 
@@ -237,6 +279,30 @@ def _recipient_block(r: Recipient, *, heading: str = "提出先") -> list[str]:
     return lines
 
 
+_LINE_STATUS_LABELS = {
+    "legacy": "ハッシュ導入前の行（検証対象外）",
+    "legacy_after_chain": "ハッシュのない行がハッシュ付きの行の後にある（異常）",
+    "partial": "末尾の書きかけの行（検証対象外）",
+    "corrupted": "壊れた・書き換えられた行",
+    "chain_break": "前後のつながりが合わない行",
+    "head_missing": "先頭の欠落",
+}
+
+
+def _chain_lines(name: str, c: dict[str, Any]) -> list[str]:
+    """Status plus every non-ok line count, so lines that were NOT verified
+    (legacy, partial) are visible even when the overall status reads ok."""
+    out = [f"証跡の改ざん検知 [{name}]: {_vis(c['status'])}（{c['total_lines']} 行を確認）"]
+    if c["read_error"]:
+        out.append(f"  読み取りエラー: {_vis(c['read_error'])}")
+    for st, n in sorted(c["counts"].items()):
+        if st != "ok" and n:
+            out.append(f"  {_vis(_LINE_STATUS_LABELS.get(st, st))}: {n} 行")
+    if c["partial_last_line"] and not c["counts"].get("partial"):
+        out.append("  末尾の書きかけの行あり（検証対象外）")
+    return out
+
+
 def render_text(doc: dict[str, Any]) -> str:
     # Every value that can come from the export or the CLI goes through _vis.
     ce = doc["containment_export"]
@@ -258,7 +324,7 @@ def render_text(doc: dict[str, Any]) -> str:
     )
     lines.append(f"解除されていない遮断記録: {len(ce['active_containments'])} 件")
     for name, key in (("events.jsonl", "events_jsonl"), ("metrics.jsonl", "metrics_jsonl")):
-        lines.append(f"証跡の改ざん検知 [{name}]: {_vis(ce['chain_verification'][key]['status'])}")
+        lines.extend(_chain_lines(name, ce["chain_verification"][key]))
     lines.append("")
 
     if doc["recipient"] == "police":

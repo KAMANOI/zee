@@ -284,6 +284,85 @@ def test_ppc_cause_mentions_only_decoy_events(tmp_path: Path, monkeypatch):
     assert "カナリア" not in text and "ダミー" not in text
 
 
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(events_total=0),                       # total < included
+    lambda d: d.update(events_included=2),                    # included != len(events)
+    lambda d: d.update(events_total=5),                       # truncated flag says False
+    lambda d: d.update(events_truncated=True),                # but nothing was truncated
+    lambda d: d.update(events_total=3, events_included=3),    # included != len(events)
+])
+def test_inconsistent_event_counts_rejected(tmp_path: Path, monkeypatch, mutate):
+    data = _export_dict(tmp_path, monkeypatch)
+    assert (data["events_total"], data["events_included"], len(data["events"])) == (1, 1, 1)
+    mutate(data)
+    with pytest.raises(ZeeError) as e:
+        load_export(_write_json(tmp_path, "counts.json", data))
+    assert e.value.code == "Z1004"
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(events=[{}]),
+    lambda d: d["events"][0].pop("timestamp"),
+    lambda d: d["events"][0].pop("event_id"),
+    lambda d: d["events"][0].update(asset_id=None),
+    lambda d: d["events"][0].pop("decoy_ref"),
+    lambda d: d.update(active_containments=[{}]),
+    lambda d: d.update(active_containments=[{"asset_id": "t", "method": "full", "cut_at": "x",
+                                             "platform": "darwin"}]),
+    lambda d: d.update(active_containments=[{"asset_id": "t", "method": "full", "cut_at": None,
+                                             "platform": "darwin", "modified": []}]),
+])
+def test_records_missing_required_fields_rejected(tmp_path: Path, monkeypatch, mutate):
+    data = _export_dict(tmp_path, monkeypatch)
+    mutate(data)
+    with pytest.raises(ZeeError) as e:
+        load_export(_write_json(tmp_path, "records.json", data))
+    assert e.value.code == "Z1004"
+
+
+def test_nullable_event_fields_accepted(tmp_path: Path, monkeypatch):
+    data = _export_dict(tmp_path, monkeypatch)
+    data["events"][0].update(source=None, confidence=None, op_class=None, decoy_ref=None)
+    assert load_export(_write_json(tmp_path, "nullable.json", data))["events"][0]["decoy_ref"] is None
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda c: c.pop("counts"),
+    lambda c: c.update(counts={"legacy": "1"}),
+    lambda c: c.pop("partial_last_line"),
+    lambda c: c.update(total_lines=True),
+    lambda c: c.update(problems=[{"file": "events.jsonl"}]),
+])
+def test_broken_chain_verification_rejected(tmp_path: Path, monkeypatch, mutate):
+    data = _export_dict(tmp_path, monkeypatch)
+    mutate(data["chain_verification"]["events_jsonl"])
+    with pytest.raises(ZeeError) as e:
+        load_export(_write_json(tmp_path, "chain.json", data))
+    assert e.value.code == "Z1004"
+
+
+def test_unverified_legacy_and_partial_lines_are_kept_and_shown(tmp_path: Path, monkeypatch):
+    # The exporter reports status "ok" when every line is either ok or a
+    # pre-hash "legacy" line, so status alone hides unverified lines.
+    data = _export_dict(tmp_path, monkeypatch)
+    c = data["chain_verification"]["events_jsonl"]
+    c.update(status="ok", total_lines=3, counts={"ok": 1, "legacy": 1, "partial": 1},
+             partial_last_line=True,
+             problems=[{"file": "events.jsonl", "line": 1, "status": "legacy"},
+                       {"file": "events.jsonl", "line": 3, "status": "partial", "extra": "dropped"}])
+    doc = build_incident_report(export=load_export(_write_json(tmp_path, "legacy.json", data)),
+                                recipient="police")
+    kept = doc["containment_export"]["chain_verification"]["events_jsonl"]
+    assert kept["counts"] == {"ok": 1, "legacy": 1, "partial": 1}
+    assert kept["partial_last_line"] is True
+    assert kept["problems"][1] == {"file": "events.jsonl", "line": 3, "status": "partial"}
+    assert doc["containment_export"]["chain_verification"]["note"]
+    text = render_text(doc)
+    assert "ハッシュ導入前の行（検証対象外）: 1 行" in text
+    assert "末尾の書きかけの行（検証対象外）: 1 行" in text
+    assert "ハッシュ導入前の行" in render_html(doc)
+
+
 # --- The structural guarantee: this module cannot send anything anywhere. ---
 
 _FORBIDDEN_IMPORTS = {"urllib", "http", "http.client", "socket", "smtplib", "requests", "zee.notifier"}

@@ -14,8 +14,9 @@
 
 入力ファイルは**非信頼**として扱う（手で編集された・壊れたファイルを渡されうる）：
 
-- `load_export()` が、使う項目の存在と型を検証する：`schema_version`（文字列・対応版）、`redacted`・`events_truncated`（真偽値）、`events_total`・`events_included`（0以上の整数。真偽値は不可）、`events`・`active_containments`（リスト）、`chain_verification`（`events_jsonl` / `metrics_jsonl` の `status` が文字列）、`report_fields.incident_summary_auto`（文字列）、`report_fields.detected_at_first/last`（文字列または null）、`report_fields.affected_asset_ids`（文字列のリスト）。**欠落・型違いは Z1004 で拒否し、既定値（0件など）で補完しない。**
-- `events` と `active_containments` は、**既知の項目だけを許可リストで転記する**（events：`schema_version`・`event_id`・`timestamp`・`source`・`confidence`・`op_class`・`asset_id`・`decoy_ref`・`detail`／active_containments：`asset_id`・`method`・`cut_at`・`platform`・`modified`）。それ以外の項目は報告書に入らない。
+- `load_export()` が、使う項目の存在と型を検証する：`schema_version`（文字列・対応版）、`redacted`・`events_truncated`（真偽値）、`events_total`・`events_included`（0以上の整数。真偽値は不可）、`events`・`active_containments`（リスト）、`chain_verification`（`note` と、`events_jsonl` / `metrics_jsonl` それぞれの `status`・`files`・`read_error`・`total_lines`・`counts`・`tamper_suspected`・`partial_last_line`・`problems`）、`report_fields.incident_summary_auto`（文字列）、`report_fields.detected_at_first/last`（文字列または null）、`report_fields.affected_asset_ids`（文字列のリスト）。件数の整合（`events_included` が `events` の件数と一致、`events_total` ≧ `events_included`、`events_truncated` が `events_included < events_total` と一致）も検証する。**欠落・型違い・不整合は Z1004 で拒否し、既定値（0件など）で補完しない。**
+- `events` と `active_containments` の各記録は、`zee export` の生成側（`zee.mcp.reader.EventReader`）の契約に合わせて**全項目を必須**として検証し、**既知の項目だけを転記する**（events：`schema_version`・`event_id`・`timestamp`・`asset_id`・`detail` は文字列、`source`・`confidence`・`op_class`・`decoy_ref` は文字列または null／active_containments：`asset_id`・`method`・`cut_at`・`platform` は文字列、`modified` は文字列のリスト）。それ以外の項目は報告書に入らない。
+- `chain_verification` は status だけに縮めずに保持する。生成側は「ハッシュ導入前の行（legacy）」だけのログでも status を ok と返すため、ok 以外の行の内訳（legacy・末尾の書きかけ等）と読み取りエラーを txt/html の本文にも行数付きで出す。
 - 報告書の本文（txt/html）に入る外部由来の文字列（export内の文字列・`--incident-label`）は、C0/C1 制御文字（改行を含む）と U+2028/U+2029 を `\n`・`\r`・`\t`・`\uXXXX` の形で見えるようにしてから出す。改行を差し込んで偽の見出しや行を作ることはできない。
 - 元の export の `redacted` を報告書に引き継ぐ。`--no-redact` で作られた export（パスが伏せられていない）の場合は、txt/html の冒頭に注記を出し、生成時に標準エラーにも警告を出す。
 
@@ -117,6 +118,6 @@ e-Gov 法令API v2 で直接条文を取得（法令ID `428M60020000003`、2026-
 1. `tests/test_incident_report.py` が全てパスすること。
 2. `--recipient police` と `--recipient ppc` で出力の宛先欄・法定9項目ブロックの有無が切り替わること。
 3. 本モジュールの import グラフに `urllib`/`http.client`/`socket`/`smtplib`/`requests`/`zee.notifier` のいずれも含まれないこと（`ast` でソースを静的解析するテスト）。
-4. 改ざん検知情報（`chain_verification` の status）が報告書に転記されること。
-5. 壊れた export（欠落・型違い）が Z1004 で拒否されること。改行注入で偽の見出しが出ないこと。未知の項目が転記されないこと。`--no-redact` 由来の export が明示されること。
+4. 改ざん検知情報（`chain_verification`）が縮約されずに報告書に転記され、未検証の行（legacy・末尾の書きかけ）が本文にも出ること。
+5. 壊れた export（欠落・型違い・件数の不整合・必須項目のない記録）が Z1004 で拒否されること。改行注入で偽の見出しが出ないこと。未知の項目が転記されないこと。`--no-redact` 由来の export が明示されること。
 6. 出力ファイルに提出・送信を行うコードパスが存在しないこと（3で確認）＋ `_write_private_files` 経由で0600・非上書きで書かれること。
