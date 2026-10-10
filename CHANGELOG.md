@@ -7,33 +7,33 @@ releases.
 
 ## [0.11.0] — 2026-10-10
 
-### Changed
+### Security
 
 - **zee gate: an incomplete inspection no longer passes, even at LOW.**
-  Exit code **3 (partial)** is new. An oversized (>2 MiB) text file, an
-  unparseable manifest, a missing `--import-scan` report, or an unrun
-  `--behavioral` sandbox now mark the verdict `inspection.status: partial`
-  instead of being silently skipped and scored clean — and partial fails
-  **any** `fail-on` threshold: code 3 sorts above HIGH (2), so it can't
-  slip through `fail-on: high`. `--promote-to` refuses to promote a
-  partial verdict. Text files are now sniffed by content (no NUL byte)
-  rather than by extension allowlist, so formats like `.html` or
-  `Makefile` are inspected instead of skipped. The rule is: what the gate
-  did not read, it does not pass.
-- **zee gate: exit code 4 replaces 1 and 2 for "no verdict."** A missing
-  target, an unreadable file, an internal exception, or a failed
-  `--promote-to` write now exit **4** (`inspection.status: error`,
-  `risk_level: null`), not the old 1 (internal error) or 2 (target
-  missing). **If your CI checks `== 2` for "target missing" or treats
-  exit 1 as acceptable, review that check** — 4 now fails `fail-on` at
-  any threshold, the same as HIGH.
-- `--json` output gains `inspection: {status, gaps}` alongside
-  `risk_level` (`risk_level` is `null` when `status` is `error`).
-- The GitHub Action now writes the verdict to a file and fails if it's
-  missing or unparseable, instead of trusting the Python exit code alone.
-- `fetch_local` hashes a local source strictly, so a file it failed to
-  read fully can no longer be mistaken for an unrelated, already-clean
-  quarantine copy of the same name.
+  Previously, a file the gate could not fully read — an oversized (>2 MiB)
+  text file, an unparseable manifest, a missing `--import-scan` report, an
+  unrun `--behavioral` sandbox, or an uncaught exception — was silently
+  skipped and the artifact scored LOW or exited 1, which `fail-on: high`
+  let straight through: a fail-open gap in the thing meant to gate
+  installs. The gate now carries an `inspection.status`
+  (`complete` / `partial` / `error`) separate from `risk_level`, and
+  **exit code 3 (partial)** / **exit code 4 (error, no verdict)** both
+  sort above HIGH (2), so they fail `fail-on` at any threshold. Exit 4
+  replaces the old 1 (internal error) and 2 (target missing). The rule is:
+  what the gate did not read, it does not pass. `--promote-to` refuses to
+  promote a partial or error verdict. Text files are now sniffed by
+  content (no NUL byte) rather than by extension allowlist, so formats
+  like `.html` or `Makefile` are inspected instead of silently skipped.
+  `fetch_local` now hashes a local source strictly, so a file it failed
+  to read fully can no longer be mistaken for an unrelated, already-clean
+  quarantine copy of the same name. The GitHub Action now writes the
+  verdict to a file and fails if it's missing or unparseable, instead of
+  trusting the Python exit code alone.
+  **If your CI checks `exit code == 2` for "target missing," or treats
+  exit 1 as a pass, review that check** — see `docs/gate.md` for the full
+  exit code table. `--json` output gains `inspection: {status, gaps}`
+  alongside `risk_level` (`risk_level` is `null` when `status` is
+  `error`).
 
 ### Added
 
@@ -45,19 +45,6 @@ releases.
   Releases/Security alerts (relevant because `uv tool install` from this
   repo bypasses registry update alerts). English is authoritative if the
   two diverge.
-
-### Changed
-
-- **Example decoy directory moved from `~/Documents/zee-decoys/` to
-  `~/.local/share/zee-decoys/`** (README, STARTER_GUIDE, `examples/assets.example.toml`,
-  `examples/seed_demo_decoys.py`). On machines with iCloud "Desktop & Documents"
-  or OneDrive folder backup enabled, `~/Documents` is synced to the cloud, which
-  copies the decoys and their embedded canary URLs off the machine. Existing
-  `assets.toml` files are not touched — move your decoys if they live under a
-  synced folder.
-
-### Added
-
 - **`zee export`** — writes the trap events of a period and the
   containment records not yet resolved to `<prefix>.json` / `<prefix>.txt`,
   for the operator to attach to a report of their choosing. Local files
@@ -85,6 +72,13 @@ releases.
 
 ### Changed
 
+- **Example decoy directory moved from `~/Documents/zee-decoys/` to
+  `~/.local/share/zee-decoys/`** (README, STARTER_GUIDE, `examples/assets.example.toml`,
+  `examples/seed_demo_decoys.py`). On machines with iCloud "Desktop & Documents"
+  or OneDrive folder backup enabled, `~/Documents` is synced to the cloud, which
+  copies the decoys and their embedded canary URLs off the machine. Existing
+  `assets.toml` files are not touched — move your decoys if they live under a
+  synced folder.
 - Appends to the evidence log are serialised across threads and
   processes, read only the last 64 KiB, and never raise: a broken,
   unreadable or full log no longer stops notification or containment.
