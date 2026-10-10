@@ -111,7 +111,7 @@ def _parse_ts(ts: Any, context: str) -> datetime:
 
 
 def load_canary_hits(paths: list[Path]) -> list[dict[str, Any]]:
-    """Read one or more canary-hit JSON Lines logs (see examples/query_canary_*_receiver.py)."""
+    """Read one or more canary-hit JSON Lines logs (one JSON object per line)."""
     hits: list[dict[str, Any]] = []
     for p in paths:
         try:

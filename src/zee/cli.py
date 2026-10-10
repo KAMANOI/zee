@@ -704,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_incident.add_argument(
         "--canary-hits", action="append", metavar="FILE",
-        help="a query-canary receiver's hit log (JSON Lines); repeatable",
+        help="a canary hit log (JSON Lines, one hit per line); repeatable",
     )
     p_incident.add_argument(
         "--dilution-leaked", type=int, default=None,
