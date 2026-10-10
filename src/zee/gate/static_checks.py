@@ -145,9 +145,7 @@ def _view_table() -> dict[int, int | None]:
 @functools.cache
 def _long_combining_run() -> re.Pattern[str]:
     """Runs of more than _MAX_COMBINING_RUN combining marks (nonzero
-    canonical combining class). NFKC reorders such a run by sorting, which
-    is quadratic in its length: `"a" + "\u0315\u0300" * n` took 4 s at
-    256 KB."""
+    canonical combining class)."""
     cps = [c for c in range(sys.maxunicode + 1) if unicodedata.combining(chr(c))]
     ranges, start, prev = [], cps[0], cps[0]
     for c in cps[1:] + [-1]:
@@ -159,9 +157,37 @@ def _long_combining_run() -> re.Pattern[str]:
 
 
 # A real script stacks a handful of marks per letter; 32 is far above that.
-# Only the view is trimmed (letters are never removed, so a known phrase
-# survives); every other pattern still reads the raw text.
+# Marks are capped, never removed (removing them would turn で into て and
+# break the Japanese negation rules), and letters are never touched, so a
+# known phrase survives. Every other pattern still reads the raw text.
 _MAX_COMBINING_RUN = 32
+
+
+class _NFKDChar(dict):
+    """ord -> NFKD of that single char, filled on first sight. Used with
+    str.translate, so decomposing a text is linear."""
+
+    def __missing__(self, cp: int) -> str:
+        out = self[cp] = unicodedata.normalize("NFKD", chr(cp))
+        return out
+
+
+_NFKD_CHAR = _NFKDChar()
+
+
+def _bounded_nfkc(text: str) -> str:
+    """NFKC with a linear-time guarantee. Plain NFKC sorts each run of
+    combining marks, which is quadratic in the run length, and the run can
+    be *created* by decomposition (U+0F73, half-width ﾞ) so a pre-check on
+    the input misses it. Instead: decompose char by char (linear), cap
+    every combining run of the decomposed text, then NFC (reorder +
+    compose, linear now that runs are bounded). Per-char NFKD followed by
+    NFC equals NFKC whenever no run was capped."""
+    text = text.translate(_NFKD_CHAR)
+    text = _long_combining_run().sub(
+        lambda m: m.group(0)[:_MAX_COMBINING_RUN], text
+    )
+    return unicodedata.normalize("NFC", text)
 
 
 def _g501_view(text: str) -> str:
@@ -170,10 +196,7 @@ def _g501_view(text: str) -> str:
     look-alikes to Latin, drop Markdown emphasis, collapse whitespace.
     `Ｉｇｎｏｒｅ`, `Ig\\u00adnore`, `Ign\\u043ere`, `**Ignore**` all read
     `Ignore`."""
-    text = _long_combining_run().sub(
-        lambda m: m.group(0)[:_MAX_COMBINING_RUN], text
-    )
-    text = unicodedata.normalize("NFKC", text).translate(_view_table())
+    text = _bounded_nfkc(text).translate(_view_table())
     return _WS.sub(" ", _MD_EMPHASIS.sub("", text))
 
 
@@ -234,9 +257,11 @@ _CUE_PAIRS = (("A", "B"), ("A", "D"), ("C", "D"), ("A", "C"))
 _EN_NEG = re.compile(
     r"(?:\b(?:do|does|did|will|would|should|must|can|is|are|was|were) not"
     r"|\b(?:don|doesn|didn|won|wouldn|shouldn|mustn|isn|aren|wasn|weren)'t"
-    r"|\bcannot|\bnever) (?:\w+ ){0,2}$",
+    r"|\bcannot|\bnever) (?!(?:merely|only|just|simply)\b)(?:\w+ ){0,2}$",
     re.I,
 )
+# "not merely / only / just / simply" is emphasis, not negation, both
+# inside the cue and right before it.
 _EN_NEG_IN = re.compile(
     r"(?:\b(?:not|never)\b|n't\b)(?! (?:merely|only|just|simply)\b)", re.I
 )  # "not merely obsolete" is emphasis, not negation

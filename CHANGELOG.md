@@ -27,9 +27,11 @@ releases.
     but several such flags (e.g. in multiple files) or other findings can
     add up to a HIGH verdict. Use `fail-on: medium` to fail CI on any.
   Quotes and attack-describing words never lower a finding. G501 matching
-  is bounded: runs of combining marks are trimmed to 32 in the matching
-  view before NFKC (an unbounded run made NFKC quadratic), and cue
-  pairing is O(A+B). Measured on 2 MiB pathological inputs: 0.2–1.0 s on
+  is bounded: the matching view decomposes text one character at a time,
+  caps each run of combining marks at 32 (marks are capped, never
+  stripped, so Japanese dakuten survive), then recomposes — plain NFKC
+  is quadratic in such runs, including runs created by decomposition
+  (U+0F73, half-width ﾞ). Cue pairing is O(A+B). Measured on 2 MiB pathological inputs: 0.2–1.0 s on
   an Apple M1, including the pre-existing raw patterns.
   Round-1 samples: 2/8 → 5/8 at HIGH, 8/8 at MEDIUM or above.
 - **Compatibility:** text that the old rule missed only because of
