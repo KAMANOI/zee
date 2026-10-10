@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..errors import Z1001_UNKNOWN_RECIPIENT, Z1004_EXPORT_FILE_REQUIRED, ZeeError
+from ..telemetry.events_log import TAMPER_STATUSES
 from .recipients import BY_NAME, POLICE_PHONE_CONSULT, Recipient
 
 SCHEMA_VERSION = "1"
@@ -103,6 +104,9 @@ _CHAIN_SCHEMA = {
     "problems": lambda v: isinstance(v, list),
 }
 _PROBLEM_SCHEMA = {"file": _is_str, "line": _is_int, "status": _is_str}
+# Per-line statuses verify_chain() can emit, and _chain_summary()'s cap on `problems`.
+_LINE_STATUSES = frozenset({"ok", "legacy", "partial"}) | TAMPER_STATUSES
+_PROBLEMS_CAP = 50
 
 
 def _check(cond: bool, path: Path, what: str) -> None:
@@ -116,6 +120,31 @@ def _pick(rec: Any, schema: dict[str, Any], path: Path, what: str) -> dict[str, 
         _check(k in rec, path, f"{what}.{k} がありません")
         _check(ok(rec[k]), path, f"{what}.{k} の型が不正です")
     return {k: rec[k] for k in schema}
+
+
+def _check_chain_consistent(c: dict[str, Any], path: Path, what: str) -> None:
+    """Cross-check one chain summary against the rules _chain_summary()
+    derives it by, so editing one field (e.g. emptying `counts`) cannot
+    hide unverified or anomalous lines while the rest still looks valid."""
+    counts = c["counts"]
+    _check(set(counts) <= _LINE_STATUSES and all(n >= 1 for n in counts.values()), path,
+           f"{what}.counts に未知の種別または0以下の値があります")
+    _check(sum(counts.values()) == c["total_lines"], path, f"{what}.counts の合計が total_lines と一致しません")
+    tamper = any(counts.get(s, 0) for s in TAMPER_STATUSES)
+    _check(c["tamper_suspected"] == tamper, path, f"{what}.tamper_suspected が counts と矛盾しています")
+    _check(c["partial_last_line"] == ("partial" in counts), path, f"{what}.partial_last_line が counts と矛盾しています")
+    expected = ("unverifiable" if c["read_error"] else "tamper_suspected" if tamper
+                else "no_records" if not c["total_lines"] else "ok")
+    _check(c["status"] == expected, path, f"{what}.status={c['status']!r} が counts から導かれる {expected!r} と一致しません")
+    # problems = the first _PROBLEMS_CAP non-ok lines, so its length is exact
+    # and each status in it can appear at most counts[status] times.
+    non_ok = c["total_lines"] - counts.get("ok", 0)
+    _check(len(c["problems"]) == min(non_ok, _PROBLEMS_CAP), path, f"{what}.problems の件数が counts と一致しません")
+    seen: dict[str, int] = {}
+    for pr in c["problems"]:
+        seen[pr["status"]] = seen.get(pr["status"], 0) + 1
+    _check(all(st != "ok" and n <= counts.get(st, 0) for st, n in seen.items()), path,
+           f"{what}.problems の種別が counts の内訳と一致しません")
 
 
 def load_export(path: Path) -> dict[str, Any]:
@@ -168,6 +197,7 @@ def load_export(path: Path) -> dict[str, Any]:
                 q["reason"] = pr["reason"]
             problems.append(q)
         c["problems"] = problems
+        _check_chain_consistent(c, path, f"chain_verification.{k}")
         chain[k] = c
 
     return {

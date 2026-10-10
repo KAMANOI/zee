@@ -363,6 +363,108 @@ def test_unverified_legacy_and_partial_lines_are_kept_and_shown(tmp_path: Path, 
     assert "ハッシュ導入前の行" in render_html(doc)
 
 
+_LEGACY_LINE = json.dumps({"type": "trap_event", "source": "decoy_touch", "confidence": "high",
+                           "asset_id": "old-host", "detected_at": "2026-01-01T00:00:00+00:00",
+                           "detail": "x", "op_class": "read", "decoy_ref": "old-host#0"})
+
+
+def _record(log: EventLog) -> None:
+    log.record_event(TrapEvent.make(
+        source="decoy_touch", confidence="high", asset_id="t-host",
+        decoy_path="/home/user/secret.txt", detail="write", op_class="change",
+    ))
+
+
+def _state_empty(log_dir: Path) -> None:
+    pass
+
+
+def _state_normal(log_dir: Path) -> None:
+    _record(EventLog(log_dir=log_dir))
+
+
+def _state_legacy(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "events.jsonl").write_text(_LEGACY_LINE + "\n", encoding="utf-8")
+
+
+def _state_partial(log_dir: Path) -> None:
+    _record(EventLog(log_dir=log_dir))
+    with (log_dir / "events.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"type": "trap_ev')  # crash mid-write, no newline
+
+
+def _state_corrupted(log_dir: Path) -> None:
+    log = EventLog(log_dir=log_dir)
+    _record(log)
+    _record(log)
+    p = log_dir / "events.jsonl"
+    p.write_text(p.read_text(encoding="utf-8").replace('"write"', '"edited"', 1), encoding="utf-8")
+
+
+def _state_legacy_after_chain(log_dir: Path) -> None:
+    _record(EventLog(log_dir=log_dir))
+    with (log_dir / "events.jsonl").open("a", encoding="utf-8") as f:
+        f.write(_LEGACY_LINE + "\n")
+
+
+def _state_problems_capped(log_dir: Path) -> None:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "events.jsonl").write_text((_LEGACY_LINE + "\n") * 60, encoding="utf-8")
+
+
+def _real_export(tmp_path: Path, monkeypatch, make_state) -> Path:
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    make_state(state / "zee")
+    prefix = tmp_path / "real"
+    main(["export", "--out", str(prefix)])  # rc 1 for tamper/unverifiable is expected
+    return Path(str(prefix) + ".json")
+
+
+@pytest.mark.parametrize("make_state,status,shown", [
+    (_state_empty, "no_records", None),
+    (_state_normal, "ok", None),
+    (_state_legacy, "ok", "ハッシュ導入前の行（検証対象外）: 1 行"),
+    (_state_partial, "ok", "末尾の書きかけの行（検証対象外）: 1 行"),
+    (_state_corrupted, "tamper_suspected", "壊れた・書き換えられた行"),
+    (_state_legacy_after_chain, "tamper_suspected", "ハッシュのない行がハッシュ付きの行の後にある（異常）: 1 行"),
+    (_state_problems_capped, "ok", "ハッシュ導入前の行（検証対象外）: 60 行"),
+])
+def test_real_exports_of_every_chain_state_are_accepted(tmp_path: Path, monkeypatch, make_state, status, shown):
+    export = load_export(_real_export(tmp_path, monkeypatch, make_state))
+    c = export["chain_verification"]["events_jsonl"]
+    assert c["status"] == status
+    if make_state is _state_problems_capped:
+        assert c["total_lines"] == 60 and len(c["problems"]) == 50
+    text = render_text(build_incident_report(export=export, recipient="ppc"))
+    if shown:
+        assert shown in text
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda c: c.update(counts={}),                                   # the reported bypass
+    lambda c: c.update(counts={"ok": 1}),                            # hides legacy, problems disagree
+    lambda c: c.update(counts={"legacy": 2}),                        # sum != total_lines
+    lambda c: c.update(counts={"legacy": 1, "ok": 0}),               # zero-count entry
+    lambda c: c.update(counts={"weird": 1}),                         # unknown status
+    lambda c: c.update(status="tamper_suspected"),
+    lambda c: c.update(status="no_records"),
+    lambda c: c.update(tamper_suspected=True),
+    lambda c: c.update(partial_last_line=True),
+    lambda c: c.update(read_error="boom"),                           # status would be unverifiable
+    lambda c: c.update(problems=[]),
+    lambda c: c.update(problems=[{"file": "events.jsonl", "line": 1, "status": "ok"}]),
+    lambda c: c.update(problems=[{"file": "events.jsonl", "line": 1, "status": "partial"}]),
+])
+def test_inconsistent_chain_summary_rejected(tmp_path: Path, monkeypatch, mutate):
+    data = json.loads(_real_export(tmp_path, monkeypatch, _state_legacy).read_text(encoding="utf-8"))
+    mutate(data["chain_verification"]["events_jsonl"])
+    with pytest.raises(ZeeError) as e:
+        load_export(_write_json(tmp_path, "chain_edit.json", data))
+    assert e.value.code == "Z1004"
+
+
 # --- The structural guarantee: this module cannot send anything anywhere. ---
 
 _FORBIDDEN_IMPORTS = {"urllib", "http", "http.client", "socket", "smtplib", "requests", "zee.notifier"}
