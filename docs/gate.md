@@ -28,6 +28,23 @@ extension.
 skipped) and `risk_level`. A LOW verdict is promoted (`--promote-to`) only
 when the inspection is `complete`.
 
+## Prompt-injection text (G501)
+
+G501 flags instructions aimed at the AI agent that will read the artifact
+(SKILL.md, MCP tool descriptions, READMEs, any text file). It has two tiers:
+
+| Tier | Severity | What fires it |
+|---|---|---|
+| Known phrase | HIGH | A known phrase (`ignore all previous instructions`, `you are now`, …) in the raw text **or** in a normalized view: NFKC (full-width → ASCII), every Unicode format character (Cf: zero-width, soft hyphen, ZWJ, bidi marks) plus other invisibles (CGJ, variation selectors, Hangul fillers) removed, common Cyrillic/Greek look-alikes folded to Latin, Markdown emphasis removed, whitespace collapsed. |
+| Context rule | MEDIUM | A paraphrase: two *different* cues within about 400 characters of each other (blank lines do not separate them) — earlier instructions declared void, a claim to take priority, keeping *this instruction/replacement* hidden, replacing the *requested* answer. English and Japanese. A single cue never fires; a cue negated in a simple way (`is not obsolete`, `does not take priority`, `無視しないで`, `無視することは禁止`, `最優先にしないで`) does not count, while `not merely / not only / not just` is treated as emphasis, not negation. |
+
+The context rule is an estimate, so each of its flags is MEDIUM. A flag
+blocks `--promote-to`; on its own it passes the default `fail-on: high`,
+but several such flags (e.g. the same text in multiple files) or other
+findings can add up to a HIGH verdict. **Use `fail-on: medium` if any
+paraphrased injection should fail CI.** Quoting a
+payload or adding words such as "payload" does not lower either tier.
+
 ## Use it as a pre-install / CI check
 
 ### GitHub Action
@@ -44,7 +61,7 @@ jobs:
       - uses: KAMANOI/zee@v0.12.0       # or pin to a commit SHA
         with:
           source: .
-          fail-on: high                  # high (default) | medium
+          fail-on: high                  # high (default) | medium — medium also fails G501 paraphrases
 ```
 
 ### npm pre-install hook
@@ -147,3 +164,13 @@ network and blocks reads of the real user homes, but a TLS body sent
 through a CONNECT tunnel is opaque; `gate audit` is an on-demand
 integrity check, not a live process monitor. Use Zee alongside your
 existing scanners, not instead of them.
+
+G501 specifically: the context-rule vocabulary is a fixed list, so a
+paraphrase outside it, or cues spread more than ~400 characters apart,
+is missed. Split spellings (`I.g.n.o.r.e`, `ig-nore`), accented letters or
+combining marks inside a word (`Ìgnore`), look-alikes outside the folding
+table, and instructions in images or encoded blobs are not
+read. Negation handling is shallow: double negatives ("never fail to
+ignore…", "無視しないわけにはいかない") are not resolved — they are treated
+as negated. Teaching material that paraphrases an attack scores MEDIUM like
+the attack itself; one that quotes a known phrase verbatim scores HIGH.
