@@ -182,6 +182,12 @@ def _gate_step_script() -> str:
     return "\n".join(body)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="exercises action.yml's embedded POSIX shell script via subprocess "
+    "bash; plain 'bash' on a Windows runner resolves to the WSL launcher "
+    "stub, not Git Bash (which is what Actions' `shell: bash` actually uses)",
+)
 def test_action_fails_when_python_dies_without_a_verdict(tmp_path):
     """Reproduces the old hole: `python` exits 1 (MEDIUM) with no JSON."""
     bindir = tmp_path / "bin"
@@ -208,6 +214,12 @@ def test_action_fails_when_python_dies_without_a_verdict(tmp_path):
     assert "no readable verdict" in res.stdout + res.stderr
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="exercises action.yml's embedded POSIX shell script via subprocess "
+    "bash; plain 'bash' on a Windows runner resolves to the WSL launcher "
+    "stub, not Git Bash (which is what Actions' `shell: bash` actually uses)",
+)
 def test_action_fails_on_partial_verdict_end_to_end(tmp_path):
     (tmp_path / "src").mkdir()
     s = _skill(tmp_path / "src")
