@@ -10,13 +10,14 @@
 
 ```
 Project Status:
-Early Public / Research Project
+Early Public / Research Project — v0.12.0
 
 Zee is not a production-ready security product.
 
-Zee does not currently guarantee protection, containment, prevention of data theft, or detection effectiveness.
+Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-This repository currently provides architecture, research direction, preparation guidance, and experimental concepts under active development.
+Implemented (v0.12.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
 ---
@@ -54,7 +55,12 @@ What Zee addresses is **the gap between the speed at which attack capability evo
 
 Zee starts not from "do not get breached" but from **"do not get robbed"**. Even more precisely, **"buy time"** — extend the window before specialized response and remediation arrive.
 
-This is a **design goal** at this stage, not a measured or validated performance claim.
+This is a **design goal**. Zee makes no numeric performance claims such as a "defense rate". The checks that have been run are listed in [docs/verification/](./docs/verification/README.en.md), separated into conditions, version, result, and what has not been covered.
+
+**Three design commitments:**
+- **Containment and time after a breach** — not a replacement for entry defenses; one more layer for the phase after an intrusion has succeeded
+- **Observe-only by default** — a real cut runs only when you choose `response_mode: auto` and set `dry_run: false`
+- **Hard to stop your business on a false alarm** — an automatic cut is based only on a "change-class" touch, which legitimate software does not normally perform. Read-class touches only notify
 
 **Zee is not:**
 - A project to defeat AI
@@ -75,6 +81,7 @@ At this stage Zee provides:
 - **Research note** — CDS and affine Collatz research as a research direction ([RESEARCH.en.md](./RESEARCH.en.md))
 - **Entry gate** — statically scan an AI skill / MCP / npm / PyPI / VS Code extension *before* you install it (`zee gate` — [docs/gate.md](./docs/gate.md))
 - **MVP implementation** — a lightweight decoy tripwire with automated containment (`src/zee/` — **dry_run by default**)
+- **Verification record** — conditions, version, result and uncovered scope of the checks run so far ([docs/verification/](./docs/verification/README.en.md))
 - **Containment evidence export** — write what Zee already recorded to local files you can attach to a report (`zee export`; nothing is sent — see [Relation to Japanese law](#relation-to-japanese-law-from-2026-10-01))
 - **Incident report bundle** — turn a `zee export` output into a document (json/txt/html) to attach when you consult or report to the police or Japan's Personal Information Protection Commission (PPC) (`zee incident-report`; nothing is sent)
 
@@ -106,10 +113,18 @@ The MVP lives under `src/zee/`. **It runs dry_run by default and does not actual
 ### Install
 
 ```bash
+# Install in one line, pinned to a tag (recommended — no external registry involved)
+uv tool install "git+https://github.com/KAMANOI/zee@v0.12.0"
+
+# Or, to develop locally
 git clone https://github.com/KAMANOI/zee.git
 cd zee
 pip install -e .
 ```
+
+> **Do not use `pip install zee` or `npx zee`.** The `zee` packages on PyPI and npm
+> are unrelated packages by other authors (checked 2026-09-05). Zee is distributed
+> only from this repository.
 
 ### Run
 
@@ -183,7 +198,7 @@ Where to point `ZEE_CANARY_BASE_URL`:
 - Your own webhook receiver (Cloudflare Worker / AWS Lambda / Vercel Edge Function / ...)
 - The downstream Slack / Discord / email routing lives on the operator side of that endpoint
 
-Verified on macOS. Linux backend complete in code, continuous-run verification on Linux hardware not yet done. Windows backend implemented, not yet verified on Windows hardware.
+Run and checked on real macOS hardware. The test suite and a smoke test pass in CI on Ubuntu, macOS and Windows. Continuous-run verification on real Linux and Windows hardware has not been done (details: [docs/verification/](./docs/verification/README.en.md)).
 
 ### False-positive control (we are not using a process allowlist — honestly)
 
@@ -257,7 +272,7 @@ Zee draws its boundary honestly.
 - **`zee restore` requires a `restore_token`** — from v0.3, generate it once with `zee init-restore-token` and pass it via `--token` or `ZEE_RESTORE_TOKEN`. This stops accidental restores from another shell session of the same user; a root-equivalent attacker who can read `~/.zee/restore_token` still bypasses it. For multi-user production deployments, wrap `zee restore` in `sudo` or run Zee under a dedicated user
 - **Event log records `decoy_ref` (`asset_id#index`)** — from v0.3, events.jsonl no longer carries the absolute decoy path. An attacker reading the log cannot enumerate every decoy's filesystem location; correlation back to the full path goes through `assets.toml`
 - **It has limits** — against fully autonomous machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range. Zee buys time against human-paced or semi-automated post-intrusion activity — the phase after a breach succeeds, during which an attacker performs reconnaissance, lateral movement, and exfiltration
-- **It is not measured** — effectiveness has not been independently validated. Verify in your own environment before any production use
+- **Scope of verification** — the entry gate logic is checked by internal reproduction tests on synthetic samples and by the test suite. Decoys and containment are checked by the test suite and by a dry_run exercise in an isolated macOS environment. No outside expert or organization has independently evaluated Zee. A real cut (`dry_run: false`) against the OS firewall has not been tested. Results and conditions: [docs/verification/](./docs/verification/README.en.md). Verify in your own environment before any production use
 
 This is a floor, not a ceiling. We state the failure conditions before claiming safety.
 

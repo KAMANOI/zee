@@ -10,13 +10,14 @@
 
 ```
 Project Status:
-Early Public / Research Project
+Early Public / Research Project — v0.12.0
 
 Zee is not a production-ready security product.
 
-Zee does not currently guarantee protection, containment, prevention of data theft, or detection effectiveness.
+Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-This repository currently provides architecture, research direction, preparation guidance, and experimental concepts under active development.
+Implemented (v0.12.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
 ---
@@ -54,7 +55,12 @@ Zee が向き合っているのは、**攻撃能力の進化速度** と **防�
 
 「侵入されるな」ではなく **「盗まれるな」** を出発点にしています。さらに言えば **「時間を稼ぐ」** ——本職の対策や対応が届くまでの猶予を増やすことを目指します。
 
-これは現時点での **設計目標** であり、まだ測定・実証済みの性能主張ではないことを最初に明記します。
+これは **設計目標** です。「防御率○%」のような数値の性能主張はしません。実施した検証は、条件・対象版・結果・未実施の範囲を分けて [docs/verification/](./docs/verification/README.md) に載せています。
+
+**設計の約束（3点）：**
+- **侵入後の封じ込めと時間稼ぎ** — 入口防御の代わりではなく、侵入が成功した後の段階に1本足す層です
+- **既定は観測のみ** — 実際の遮断は、利用者が `response_mode: auto` を選び `dry_run: false` にしたときだけ動きます
+- **誤検知で業務を止めにくい** — 自動遮断は、正規ソフトが普通やらない「変更系の接触」だけを根拠にします。読み取り系は通知のみです
 
 **Zee ではないもの：**
 - AI を倒すプロジェクトではない
@@ -76,6 +82,7 @@ Zee が向き合っているのは、**攻撃能力の進化速度** と **防�
 - **Research note** — 研究方向としての CDS とアフィンコラッツ研究（[RESEARCH.md](./RESEARCH.md)）
 - **入口ゲート** — AIスキル / MCP / npm / PyPI / VS Code 拡張を、導入する前に静的スキャン（`zee gate`・[docs/gate.md](./docs/gate.md)）
 - **MVP 実装** — 軽量な囮トリップワイヤ＋自動封じ込め（`src/zee/`・**既定 dry_run**）
+- **検証記録** — 実施した検証の条件・対象版・結果・未実施の範囲（[docs/verification/](./docs/verification/README.md)）
 - **封じ込め証跡のエクスポート** — 記録済みの検知・遮断の記録を、報告や相談に添付できるローカルファイルに書き出す（`zee export`・送信はしない・[法制度との関係](#法制度との関係2026-10-01)）
 - **当局向け報告書のまとめ** — `zee export` の出力を、警察または個人情報保護委員会（PPC）への相談・報告に添付する文書（json/txt/html）にまとめる（`zee incident-report`・送信はしない）
 
@@ -190,7 +197,7 @@ ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>
 - **自前 webhook 受信器**（Cloudflare Worker / AWS Lambda / Vercel Edge Function 等）
 - **Slack / Discord / メール転送**は webhook 受信器の先に operator が組み立てる
 
-Mac で動作検証済み。Linux はコード上完成、実機での連続稼働検証は未実施。Windows は実装あり、Windows ハードウェアでの実機検証は未実施。
+macOS では実機で動作を確認しています。テストスイートとスモークテストは CI（Ubuntu / macOS / Windows）で通っています。Linux・Windows の実機での連続稼働の検証は未実施です（詳細は [docs/verification/](./docs/verification/README.md)）。
 
 ### 誤検知対策（プロセス allowlist は採用していません・正直に）
 
@@ -264,7 +271,7 @@ Zee は誠実に範囲を区切ります。
 - **`zee restore` には `restore_token` が必要** — v0.3 から、`zee init-restore-token` で生成したトークンを `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できません。同一ユーザーで動作するシェルから誤って遮断を巻き戻す事故は防げますが、`~/.zee/restore_token` を読める root 相当の攻撃者にはバイパスされます。マルチユーザー本番では `zee restore` を `sudo` で囲うか、専用ユーザーで運用してください
 - **イベントログは `decoy_ref`（asset_id#index）で記録** — v0.3 から、events.jsonl には絶対パスではなく `decoy_ref` を書きます。ログを読めた攻撃者が囮の位置を一覧化することはできなくなりました（対応関係は `assets.toml` 経由）
 - **限界がある** — 機械の速度で完全自動完結する相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。Zee が時間を稼げる対象は「人間〜半自動の侵入後活動」（侵入が成功した後、攻撃者が偵察・横移動・データ持ち出しに進む段階）です
-- **未測定** — 効果はまだ独立に検証されていません。本番運用の前に、ご自身の環境で必ず確認してください
+- **検証の範囲** — 入口ゲートの判定ロジックは、合成検体による社内の再現試験とテストスイートで確認しています。囮・封じ込めは、テストスイートと、隔離した macOS 環境での dry_run の実演で確認しています。専門家・第三者機関による独立評価は受けていません。実際の遮断（`dry_run: false`）を OS のファイアウォールに対して行う試験は未実施です。結果と条件は [docs/verification/](./docs/verification/README.md) にあります。本番運用の前に、ご自身の環境でも確認してください
 
 これは床であって天井ではありません。安全だと言う前に、失敗条件を先に書きました。
 

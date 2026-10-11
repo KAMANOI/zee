@@ -397,7 +397,7 @@ releases.
   triggered on next write ("auto-rotates on next write when it exceeds
   10 MB") to avoid implying a background daemon.
 
-## [0.6.0] — 2026-06-09
+## [0.6.0] — 2026-06-09 (first part; the 2026-06-10 entry above continues this release)
 
 ### Added
 
