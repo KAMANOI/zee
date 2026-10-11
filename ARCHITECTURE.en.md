@@ -259,6 +259,11 @@ The affine Collatz research referenced there is described as a **research direct
 | Notification | ✅ Implemented | `src/zee/notifier/` — local required, webhook optional |
 | Recovery | ✅ Implemented | `src/zee/recovery/` — `zee restore <asset_id>` (manual only) |
 | Telemetry | ✅ Implemented | `src/zee/telemetry/` — JSON Lines, latency, false-positive markers |
+| Entry gate | ✅ Implemented | `src/zee/gate/` — static inspection before install (`zee gate`). See [docs/gate.md](./docs/gate.md) |
+| Containment evidence | ✅ Implemented | `src/zee/telemetry/report_export.py`, `src/zee/report/` — `zee export` (with hash-chain verification) and `zee incident-report`. Neither sends anything |
+| Notification impact tier | ✅ Implemented | `src/zee/notifier/` — a 4-level display only; never used by the auto-cut decision |
+
+Checks run so far and what has not been covered → [docs/verification/](./docs/verification/README.en.md)
 
 Installation and commands → [README.en.md MVP section](./README.en.md#mvp--a-working-decoy-tripwire)
 

@@ -60,7 +60,7 @@ This is a **design goal**. Zee makes no numeric performance claims such as a "de
 **Three design commitments:**
 - **Containment and time after a breach** — not a replacement for entry defenses; one more layer for the phase after an intrusion has succeeded
 - **Observe-only by default** — a real cut runs only when you choose `response_mode: auto` and set `dry_run: false`
-- **Hard to stop your business on a false alarm** — an automatic cut is based only on a "change-class" touch, which legitimate software does not normally perform. Read-class touches only notify
+- **Designed to avoid stopping your business on a false alarm** — an automatic cut is based only on a "change-class" touch, which legitimate software does not normally perform. Read-class touches only notify. This is a design commitment; the false-positive rate in normal operation has not been measured
 
 **Zee is not:**
 - A project to defeat AI
@@ -272,7 +272,7 @@ Zee draws its boundary honestly.
 - **`zee restore` requires a `restore_token`** — from v0.3, generate it once with `zee init-restore-token` and pass it via `--token` or `ZEE_RESTORE_TOKEN`. This stops accidental restores from another shell session of the same user; a root-equivalent attacker who can read `~/.zee/restore_token` still bypasses it. For multi-user production deployments, wrap `zee restore` in `sudo` or run Zee under a dedicated user
 - **Event log records `decoy_ref` (`asset_id#index`)** — from v0.3, events.jsonl no longer carries the absolute decoy path. An attacker reading the log cannot enumerate every decoy's filesystem location; correlation back to the full path goes through `assets.toml`
 - **It has limits** — against fully autonomous machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range. Zee buys time against human-paced or semi-automated post-intrusion activity — the phase after a breach succeeds, during which an attacker performs reconnaissance, lateral movement, and exfiltration
-- **Scope of verification** — the entry gate logic is checked by internal reproduction tests on synthetic samples and by the test suite. Decoys and containment are checked by the test suite and by a dry_run exercise in an isolated macOS environment. No outside expert or organization has independently evaluated Zee. A real cut (`dry_run: false`) against the OS firewall has not been tested. Results and conditions: [docs/verification/](./docs/verification/README.en.md). Verify in your own environment before any production use
+- **Scope of verification** — the entry gate logic is checked by internal reproduction tests on synthetic samples and by the test suite (freely reworded natural-language injection was not detected in a blind test on unseen samples). Decoys and containment are checked by the test suite and by a dry_run exercise in an isolated macOS environment (run on a version near v0.10.1). No outside expert or organization has independently evaluated Zee. A real cut (`dry_run: false`) against the OS firewall has not been tested. Results and conditions: [docs/verification/](./docs/verification/README.en.md). Verify in your own environment before any production use
 
 This is a floor, not a ceiling. We state the failure conditions before claiming safety.
 
