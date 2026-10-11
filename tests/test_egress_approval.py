@@ -33,6 +33,7 @@ class Rec:
         self.held, self.allowed = [], []
     def hold(self, d): self.held.append(d)
     def allow(self, d, until): self.allowed.append(d)
+    def release(self, d): self.released = getattr(self, 'released', []) + [d]
 
 
 def approve(eng, req, key="k1", secret="s1", entered=None, payload=None):
@@ -169,12 +170,16 @@ def test_requests_in_a_burst_are_bundled_into_one(env):
 
 def test_switching_approval_off_keeps_detection_and_notification(env):
     eng, clock, enf, notes = env
+    hold_one(eng, clock)  # something is held when approval is switched off
+    assert eng.held
     req = eng.request_config("disable")
     assert approve(eng, req).ok and not eng.enabled
+    assert not eng.held and enf.released == ["203.0.113.5:443"]  # OFF really releases the block
+    notes.clear()
     eng.note_protected_touch("env:prod")  # taint is still tracked
-    v = eng.observe(Flow("curl", "203.0.113.5:443", 10))
+    v = eng.observe(Flow("curl", "203.0.113.7:443", 10))
     assert v.action == "notify" and "egress_shape" in notes
-    assert enf.held == []  # nothing is held while OFF
+    assert enf.held == ["203.0.113.5:443"]  # nothing NEW is held while OFF
 
 
 def test_corrupt_state_fails_closed(tmp_path):
@@ -253,3 +258,107 @@ def test_real_p256_signature_via_openssl(tmp_path):
     assert not v.verify(pub.read_text(), payload_digest({"a": 2}), sig)
     assert not v.verify(pub.read_text(), digest, sig[:-1] + bytes([sig[-1] ^ 1]))
     assert not v.verify("not a key", digest, sig)
+
+
+def test_code_cannot_be_guessed_without_a_registered_key(env):
+    eng, clock, _, _ = env
+    req = hold_one(eng, clock)
+    reasons = {eng.submit(req.payload, f"{i:02d}", "nokey", b"x").reason for i in range(100)}
+    assert reasons == {"unknown_key"}
+
+
+def test_malformed_submissions_do_not_raise(env):
+    eng, _, _, _ = env
+    for args in (({"req": [1]}, "00", "k1", b"x"), ("nope", "00", "k1", b"x"), ({"req": "a"}, 5, "k1", b"x")):
+        assert eng.submit(*args).reason == "malformed"
+
+
+def test_broken_state_allows_no_unsigned_registration(tmp_path):
+    d = tmp_path / "zee"
+    d.mkdir()
+    (d / "egress_approval.json").write_text("{not json")
+    with pytest.raises(PermissionError):
+        Engine(d, HmacVerifier(), clock=Clock()).bootstrap_key("evil", "e")
+
+
+def test_cumulative_volume_closes_the_destination(env):
+    eng, clock, _, _ = env
+    req = hold_one(eng, clock)
+    assert approve(eng, req).ok
+    cap = req.payload["max_bytes"]
+    assert eng.observe(Flow("curl", "203.0.113.5:443", cap - 1_000_000)).action == "pass"
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 1_000_001)).action == "hold"  # sum exceeds the cap
+
+
+def test_grant_expiry_closes_the_destination_again(env):
+    eng, clock, enf, _ = env
+    req = hold_one(eng, clock)
+    assert approve(eng, req).ok and "203.0.113.5:443" in eng.grants
+    clock.t = req.payload["until"] + 1
+    eng.tick()
+    assert not eng.grants and "203.0.113.5:443" in eng.held
+    assert enf.held.count("203.0.113.5:443") == 2  # held, released by approval, held again
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 2_000_000)).action == "hold"
+
+
+def test_log_failure_does_not_stop_detection_or_hold(env, monkeypatch):
+    eng, _, enf, notes = env
+    monkeypatch.setattr("zee.egress.engine.EventLog._append", staticmethod(lambda *a: 1 / 0))
+    eng.note_protected_touch("env:prod")
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 10)).action == "hold"
+    assert enf.held and "egress_shape" in notes
+
+
+def test_public_key_never_reaches_the_evidence_log(env):
+    eng, _, _, _ = env
+    req = eng.request_config("key_add", key_id="k2", public_key="PUBKEYXYZ")
+    assert approve(eng, req).ok
+    assert "PUBKEYXYZ" not in eng.log_path.read_text()
+
+
+def test_cannot_drop_below_two_keys_without_ack(tmp_path):
+    clock = Clock()
+    eng = Engine(tmp_path / "zee", HmacVerifier(), clock=clock)
+    eng.bootstrap_key("k1", "s1")
+    eng.state["keys"]["k2"] = "s2"
+    eng.state["single_key_ack"] = False
+    eng.enable()
+    with pytest.raises(PermissionError):
+        eng.request_config("key_remove", key_id="k2")
+
+
+def test_server_form_hold_then_signed_release(tmp_path):
+    clock = Clock()
+    eng = Engine(tmp_path / "zee", HmacVerifier(), clock=clock, server_form=True)
+    eng.bootstrap_key("k1", "s1")
+    eng.ack_single_key()
+    eng.enable()
+    assert eng.observe(Flow("svc", "203.0.113.5:443", 1)).action == "hold"
+    req = seal(eng, clock)
+    assert approve(eng, req).ok
+    assert eng.observe(Flow("svc", "203.0.113.5:443", 1)).action == "pass"
+
+
+@pytest.mark.skipif(not shutil.which("openssl"), reason="openssl not available")
+def test_engine_end_to_end_with_real_p256(tmp_path):
+    k, pub = tmp_path / "k.pem", tmp_path / "p.pem"
+    subprocess.run(["openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", str(k)],
+                   check=True, capture_output=True)
+    subprocess.run(["openssl", "ec", "-in", str(k), "-pubout", "-out", str(pub)], check=True, capture_output=True)
+    clock = Clock()
+    eng = Engine(tmp_path / "zee", OpensslVerifier(), clock=clock, server_form=True)
+    eng.bootstrap_key("phone", pub.read_text())
+    eng.ack_single_key()
+    eng.enable()
+    eng.observe(Flow("svc", "203.0.113.5:443", 1))
+    req = seal(eng, clock)
+
+    def sig(payload, entered):
+        (tmp_path / "d.bin").write_bytes(payload_digest({**payload, "entered": entered}))
+        return subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(k), "-in", str(tmp_path / "d.bin")],
+                              check=True, capture_output=True).stdout
+    forged = {**req.payload, "dests": ["198.51.100.9:443"]}
+    assert eng.submit(forged, req.code, "phone", sig(req.payload, req.code)).reason == "payload_mismatch"
+    assert eng.submit(req.payload, req.code, "phone", sig(forged, req.code)).reason == "bad_signature"
+    assert eng.submit(req.payload, req.code, "phone", sig(req.payload, req.code)).ok
+    assert eng.observe(Flow("svc", "203.0.113.5:443", 1)).action == "pass"

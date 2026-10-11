@@ -18,6 +18,7 @@ import os
 import secrets
 import socket
 import time
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,8 @@ from ..responder.permission import HostLock, private_directory, private_temp
 from ..telemetry.events_log import EventLog
 from .signing import Verifier, payload_digest
 
+logger = logging.getLogger(__name__)
+
 CONFIG_OPS = {"allow_add", "allow_remove", "protect_add", "protect_remove",
               "key_add", "key_remove", "disable"}
 
@@ -34,6 +37,7 @@ CONFIG_OPS = {"allow_add", "allow_remove", "protect_add", "protect_remove",
 class Enforcer(Protocol):
     def hold(self, dest: str) -> None: ...
     def allow(self, dest: str, until: float) -> None: ...
+    def release(self, dest: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -149,10 +153,13 @@ class Engine:
 
     def _log(self, type_: str, **rec) -> None:
         rec = {"type": type_, "ts": datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(), **rec}
-        private_directory(self.dir)
-        EventLog._append(self.log_path, rec)
         if self._notify:
             self._notify(type_, rec)
+        try:
+            private_directory(self.dir)
+            EventLog._append(self.log_path, rec)
+        except Exception:  # noqa: BLE001 - evidence must never stop detection or the hold
+            logger.exception("zee: egress evidence write failed")
 
     @property
     def enabled(self) -> bool:
@@ -175,8 +182,8 @@ class Engine:
 
     def bootstrap_key(self, key_id: str, public_key: str) -> None:
         """First approver device, entered at the host console. Later keys need a signature."""
-        if self.state["keys"]:
-            raise PermissionError("registry not empty: add keys with a signed request")
+        if self.state["keys"] or self.state_invalid:
+            raise PermissionError("registry not empty or state invalid: no unsigned registration")
         self.state["keys"][key_id] = public_key
         self._save()
         self._log("config_applied", op="key_add", key_id=key_id, via="bootstrap")
@@ -208,17 +215,26 @@ class Engine:
     def request_config(self, op: str, **args) -> Request:
         if op not in CONFIG_OPS:
             raise ValueError(op)
+        if op == "key_remove" and self.enabled and not self.state["single_key_ack"] \
+                and len(self.state["keys"]) <= 2:
+            raise PermissionError("would leave fewer than two approver keys")
         req = self._new_request("config", {"op": op, "args": args})
-        self._log("request", req=req.id, kind="config", op=op, args=args, code_shown_on="host")
+        self._log("request", req=req.id, kind="config", op=op, code_shown_on="host",
+                  args={k: v for k, v in args.items() if k != "public_key"})
         return req
 
     def submit(self, payload: dict, entered: str, key_id: str, signature: bytes) -> Result:
         """`payload` is what the approver's device showed and signed (plus `entered`)."""
         now = self.clock()
-        req = self.pending.get(payload.get("req"))
+        if not (isinstance(payload, dict) and isinstance(payload.get("req"), str)
+                and isinstance(entered, str) and isinstance(key_id, str)
+                and isinstance(signature, (bytes, bytearray))):
+            self._log("denied", reason="malformed")
+            return Result(False, "malformed")
+        req = self.pending.get(payload["req"])
 
         def deny(reason: str) -> Result:
-            self._log("denied", req=payload.get("req"), key_id=key_id, reason=reason)
+            self._log("denied", req=payload["req"][:32], key_id=key_id[:64], reason=reason)
             return Result(False, reason)
 
         if req is None:
@@ -228,17 +244,18 @@ class Engine:
             return deny("expired")
         if payload != req.payload:
             return deny("payload_mismatch")  # shown/signed content differs from what Zee asked
-        if entered != req.code:
-            return deny("code_mismatch")
         pub = self.state["keys"].get(key_id)
         if pub is None:
             return deny("unknown_key")
         digest = payload_digest({**payload, "entered": entered})
         if digest.hex() in self.state["used"]:
             return deny("replay")
-        if not self.verifier.verify(pub, digest, signature):
+        if not self.verifier.verify(pub, digest, bytes(signature)):
             return deny("bad_signature")
-        self.pending.pop(req.id)
+        # Checked only AFTER the signature: the code can't be brute-forced without a registered key.
+        if entered != req.code:
+            return deny("code_mismatch")
+        self.pending.pop(req.id, None)
         self.state["used"] = {d: e for d, e in self.state["used"].items() if e >= now}
         self.state["used"][digest.hex()] = payload["exp"]
         self._save()  # persist the replay ledger BEFORE acting on the approval
@@ -271,6 +288,11 @@ class Engine:
             s["keys"].pop(a["key_id"], None)
         elif op == "disable":
             s["enabled"] = False
+            for d in sorted(self.held | set(self.grants)):
+                if self.enforcer:
+                    self.enforcer.release(d)
+            self.held.clear()
+            self.grants.clear()
         s["recovery_start"] = None
         self._save()
         self._log("config_applied", req=req.id, op=op, key_id=key_id,
