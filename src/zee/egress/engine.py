@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import fnmatch
 import ipaddress
+import math
 import json
 import os
 import secrets
@@ -139,10 +140,16 @@ class Engine:
                 raise ValueError("bad shape")
             for k, v in self._fresh().items():
                 got = raw[k]
-                if k == "recovery_start":
-                    ok = got is None or (type(got) in (int, float))
+                if k == "recovery_start":  # NaN would skip the 72h wait
+                    ok = got is None or (type(got) in (int, float) and math.isfinite(got))
                 else:
                     ok = type(got) is type(v)  # exact: "false"/1 never pass as bool
+                if ok and k in ("allow", "protect"):
+                    ok = all(type(x) is str for x in got)
+                elif ok and k == "keys":
+                    ok = all(type(x) is str for x in got.values())
+                elif ok and k == "used":
+                    ok = all(type(x) in (int, float) for x in got.values())
                 if not ok:
                     raise ValueError(f"bad type: {k}")
             return raw

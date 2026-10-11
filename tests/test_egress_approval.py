@@ -383,7 +383,11 @@ def test_failing_notification_does_not_stop_the_hold(tmp_path):
     '{"enabled": true, "keys": [], "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": null}',
     '{"enabled": true, "keys": {}, "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": "now"}',
     "[" * 100_000,
-])
+    '{"enabled": true, "keys": {}, "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": NaN}',
+    '{"enabled": true, "keys": {}, "allow": [1], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": null}',
+    '{"enabled": true, "keys": {"k": 1}, "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": null}',
+    '{"enabled": true, "keys": {}, "allow": [], "protect": [], "used": {"d": "x"}, "single_key_ack": false, "recovery_start": null}',
+], ids=["enabled-str", "keys-list", "recovery-str", "deep", "recovery-nan", "allow-int", "key-int", "used-str"])
 def test_wrongly_typed_or_deep_state_fails_closed(tmp_path, bad):
     d = tmp_path / "zee"
     d.mkdir()
