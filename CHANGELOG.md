@@ -5,6 +5,31 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+Nothing here changes what `zee watch`, `cut`, `restore` or any other
+command does. The two modules below are library code that no command
+calls yet. They ship in the source tree but are not in any tagged release yet.
+
+### Added
+
+- **Egress approval prototype (`zee.egress`, macOS-first, not wired).**
+  A control core for holding outbound sends that look like data leaving
+  (unapproved destination shortly after a protected file was touched, or
+  a large send) until a separate device signs a release (ES256 / P-256,
+  verified through the `openssl` CLI — no new dependency). Covers
+  request/approval matching, replay and expiry refusal, signed allowlist
+  and key-registry changes, a 72-hour wait as the only recovery when all
+  approval devices are lost, a hash-chained evidence log, and pf rule
+  text generation (never applied). Off by default. Not yet connected to
+  `zee watch`, the CLI, notifications or a real firewall; see
+  `docs/design/egress-approval.md` for what it can and cannot stop.
+- **Auto-containment permission state (`zee.responder.permission`, not
+  wired).** A fail-closed, per-state-directory ON/OFF record with
+  private file modes, atomic writes and host locks. Automatic
+  containment does not read it yet; the explicit ON/OFF switch itself is
+  still to come.
+
 ## [0.12.0] — 2026-10-11
 
 ### Security

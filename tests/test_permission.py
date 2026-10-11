@@ -171,3 +171,54 @@ def test_watch_running_three_states(tmp_path):
     with P.HostLock(d / "watch.lock"):
         assert P.watch_running(d) is True
     assert P.watch_running(d) is False
+
+
+def test_deeply_nested_json_is_invalid_not_raised(state):
+    d, f = state
+    P.private_directory(d)
+    f.write_text("[" * 100_000)
+    os.chmod(f, 0o600)
+    assert isinstance(P.load(f), P.Invalid)
+
+
+def test_policy_hash_includes_firing_condition():
+    a = Config(assets=(_asset(),), dry_run=False)
+    b = Config(assets=(replace(_asset(), decoy_paths=("/tmp/other",)),), dry_run=False)
+    assert P.policy_hash(a) != P.policy_hash(b)
+
+
+@posix_only
+def test_symlinked_parent_layout_is_followed(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)  # e.g. /tmp -> /private/tmp
+    d = tmp_path / "link" / "zee"         # not resolved on purpose
+    cfg = Config(assets=(_asset(),), dry_run=False)
+    perm = _perm(d, cfg)
+    P.save(perm, d / "auto_containment.json")
+    assert P.load(d / "auto_containment.json") == perm
+    with P.HostLock(d / "host.lock"):
+        pass
+
+
+@posix_only
+def test_symlinked_state_directory_refused(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "zee").symlink_to(real)
+    with pytest.raises(ValueError):
+        P.save(_perm(tmp_path / "zee", Config(assets=(_asset(),), dry_run=False)),
+               tmp_path / "zee" / "auto_containment.json")
+    assert isinstance(P.load(tmp_path / "zee" / "auto_containment.json"), P.Invalid)
+
+
+@posix_only
+def test_watch_running_unknown_when_lock_unreadable(tmp_path):
+    d = tmp_path / "s"
+    with P.HostLock(d / "watch.lock"):
+        pass
+    os.chmod(d / "watch.lock", 0)
+    try:
+        assert P.watch_running(d) is None
+    finally:
+        os.chmod(d / "watch.lock", 0o600)

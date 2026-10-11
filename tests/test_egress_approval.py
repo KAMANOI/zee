@@ -362,3 +362,32 @@ def test_engine_end_to_end_with_real_p256(tmp_path):
     assert eng.submit(req.payload, req.code, "phone", sig(forged, req.code)).reason == "bad_signature"
     assert eng.submit(req.payload, req.code, "phone", sig(req.payload, req.code)).ok
     assert eng.observe(Flow("svc", "203.0.113.5:443", 1)).action == "pass"
+
+
+def test_failing_notification_does_not_stop_the_hold(tmp_path):
+    clock, enf = Clock(), Rec()
+    def boom(k, r):
+        raise RuntimeError("webhook down")
+    eng = Engine(tmp_path / "zee", HmacVerifier(), enforcer=enf, clock=clock, notify=boom)
+    eng.setup_protect("env:prod")
+    eng.bootstrap_key("k1", "s1")
+    eng.ack_single_key()
+    eng.enable()
+    eng.note_protected_touch("env:prod")
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 2_000_000)).action == "hold"
+    assert enf.held == ["203.0.113.5:443"]
+
+
+@pytest.mark.parametrize("bad", [
+    '{"enabled": "false", "keys": {}, "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": null}',
+    '{"enabled": true, "keys": [], "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": null}',
+    '{"enabled": true, "keys": {}, "allow": [], "protect": [], "used": {}, "single_key_ack": false, "recovery_start": "now"}',
+    "[" * 100_000,
+])
+def test_wrongly_typed_or_deep_state_fails_closed(tmp_path, bad):
+    d = tmp_path / "zee"
+    d.mkdir()
+    (d / "egress_approval.json").write_text(bad)
+    eng = Engine(d, HmacVerifier(), clock=Clock())
+    assert eng.state_invalid and eng.enabled and not eng.state["keys"]
+    eng.tick()  # must not raise

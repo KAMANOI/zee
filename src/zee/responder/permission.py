@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import re
-import socket
 import stat
 import time
 import uuid
@@ -53,20 +52,27 @@ def default_permission_path() -> Path:
 
 
 def instance_id(directory: Path | None = None) -> str:
-    identity = f"{socket.gethostname()}:{(directory or default_log_dir()).resolve()}"
+    # Bound to the resolved state directory only: a hostname change must not
+    # silently void a valid permission. Limit: a whole-machine clone (state
+    # directory included) carries the permission along; re-run enable there.
+    identity = str((directory or default_log_dir()).resolve())
     return hashlib.sha256(identity.encode()).hexdigest()
 
 
 def policy_hash(config: Config) -> str:
-    policy = sorted((a.id, a.cut_method) for a in config.assets if a.response_mode == "auto")
+    # Firing condition (decoy paths) is part of what the operator confirmed.
+    policy = sorted((a.id, a.cut_method, sorted(a.decoy_paths))
+                    for a in config.assets if a.response_mode == "auto")
     return hashlib.sha256(json.dumps(policy, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
 def _check_path(path: Path) -> None:
-    # Reject links in parents too, including dangling links.
-    for p in (path, *path.parents):
-        if p.is_symlink():
-            raise ValueError(f"symlink refused: {p}")
+    # Refuse a link at the final element (including dangling links). Links
+    # higher up (/tmp, /var, /home -> /var/home, a symlinked XDG_STATE_HOME)
+    # are the operator's layout and are followed; Zee's own state directory
+    # is checked as the final element by private_directory()/its callers.
+    if path.is_symlink():
+        raise ValueError(f"symlink refused: {path}")
 
 
 def private_directory(path: Path) -> None:
@@ -116,6 +122,7 @@ def _decode(raw: dict) -> Permission:
 def load(path: Path | None = None) -> Permission | Invalid | None:
     p = path or default_permission_path()
     try:
+        _check_path(p.parent)
         _check_path(p)
         fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
         with os.fdopen(fd, "r", encoding="utf-8") as f:
@@ -130,8 +137,8 @@ def load(path: Path | None = None) -> Permission | Invalid | None:
         return perm
     except FileNotFoundError:
         return None
-    except (OSError, ValueError, TypeError) as e:
-        return Invalid(str(e))
+    except (OSError, ValueError, TypeError, RecursionError) as e:
+        return Invalid(str(e) or type(e).__name__)
 
 
 def save(perm: Permission, path: Path | None = None) -> None:
@@ -143,7 +150,7 @@ def save(perm: Permission, path: Path | None = None) -> None:
     if perm.instance_id != instance_id(p.parent):
         raise ValueError("instance_id / state directory mismatch")
     _check_path(p)
-    private_directory(p.parent)
+    private_directory(p.parent)  # checks the directory itself
     tmp = private_temp(p, json.dumps(raw, sort_keys=True) + "\n")
     try:
         _check_path(p)
@@ -181,6 +188,7 @@ class HostLock:
         self.fd = None
 
     def __enter__(self):
+        _check_path(self.path.parent)
         _check_path(self.path)
         if self.create:
             private_directory(self.path.parent)
@@ -222,8 +230,12 @@ class HostLock:
                 self.fd = None
 
 
-def watch_running(directory: Path | None = None) -> bool:
-    """Probe an existing lock without creating files or directories."""
+def watch_running(directory: Path | None = None) -> bool | None:
+    """Probe an existing lock without creating files or directories.
+
+    True = held by a running watch, False = not running, None = cannot tell
+    (unreadable lock, link, ...). Callers must not read None as "protected".
+    """
     try:
         with HostLock((directory or default_log_dir()) / "watch.lock", timeout=0, create=False):
             return False
@@ -231,3 +243,5 @@ def watch_running(directory: Path | None = None) -> bool:
         return False
     except TimeoutError:
         return True
+    except (OSError, ValueError):
+        return None

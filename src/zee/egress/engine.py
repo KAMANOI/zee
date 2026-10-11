@@ -4,7 +4,7 @@ Pure policy + state. It never touches the network itself: holding and
 releasing go through an `Enforcer` (a mock in tests, a pf renderer in
 `pf.py`). Time is injected so every deadline is testable.
 
-Fail-closed rule: nothing is passed without a verified signature that
+Fail-closed rule: a held (exfiltration-shaped) send is never passed without a verified signature that
 matches a request Zee itself issued. Observation/notification is computed
 BEFORE the on/off switch is consulted, so switching approval off (or a broken
 state file) can never silence detection.
@@ -126,7 +126,8 @@ class Engine:
         self.state_invalid = False
         self.state = self._load()
 
-    # ---- state (same conventions as responder/permission.py: 0700/0600, atomic replace)
+    # ---- state (writes share responder/permission.py's 0700/0600 atomic replace;
+    # reads are a plain read — single-process prototype, same-user tampering out of scope)
     def _fresh(self) -> dict:
         return {"enabled": False, "keys": {}, "allow": [], "protect": [], "used": {},
                 "single_key_ack": False, "recovery_start": None}
@@ -136,10 +137,18 @@ class Engine:
             raw = json.loads(self.path.read_text())
             if not isinstance(raw, dict) or set(raw) != set(self._fresh()):
                 raise ValueError("bad shape")
+            for k, v in self._fresh().items():
+                got = raw[k]
+                if k == "recovery_start":
+                    ok = got is None or (type(got) in (int, float))
+                else:
+                    ok = type(got) is type(v)  # exact: "false"/1 never pass as bool
+                if not ok:
+                    raise ValueError(f"bad type: {k}")
             return raw
         except FileNotFoundError:
             return self._fresh()
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             # Present but unreadable: treat as ON with no authority (fail closed).
             self.state_invalid = True
             return {**self._fresh(), "enabled": True}
@@ -154,7 +163,10 @@ class Engine:
     def _log(self, type_: str, **rec) -> None:
         rec = {"type": type_, "ts": datetime.fromtimestamp(self.clock(), timezone.utc).isoformat(), **rec}
         if self._notify:
-            self._notify(type_, rec)
+            try:
+                self._notify(type_, rec)
+            except Exception:  # noqa: BLE001 - a failed notification must never stop the hold
+                logger.exception("zee: egress notification failed")
         try:
             private_directory(self.dir)
             EventLog._append(self.log_path, rec)
