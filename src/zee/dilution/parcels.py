@@ -51,13 +51,19 @@ def load_public_land(path: Path) -> tuple[list[Polygon], str]:
     """Returns (polygons, crs). Only 'park'/'river' kinds are included —
     an unrecognized kind is rejected rather than silently treated as
     public land (fail-closed on unexpected input, e.g. the design doc's
-    explicitly-excluded 駐車場 or a future 'residential' tag)."""
+    explicitly-excluded 駐車場 or a future 'residential' tag), and so is any
+    polygon carrying 'holes' (fail-closed until holes are modelled)."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     crs = data["crs"]
     polys = []
     for poly in data["polygons"]:
         kind = poly.get("kind")
         if kind not in _ALLOWED_PUBLIC_LAND_KINDS:
+            continue
+        # Holes (ponds, sandbars: non-public land inside the outer ring) are
+        # not modelled by polygon_fully_inside; ignoring them would pass a
+        # parcel sitting in the hole. Drop such polygons (design doc §10).
+        if poly.get("holes"):
             continue
         polys.append(tuple((float(x), float(y)) for x, y in poly["vertices"]))
     return polys, crs

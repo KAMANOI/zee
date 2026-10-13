@@ -301,3 +301,14 @@ def test_refuses_to_overwrite_existing_output(tmp_path):
     run(cfg)
     with pytest.raises(ZeeError):
         run(cfg)  # same out_dir, already has records.csv/ledger.jsonl
+
+
+def test_load_public_land_drops_polygon_with_holes(tmp_path):
+    p = tmp_path / "land.json"
+    p.write_text(json.dumps({"crs": "c", "polygons": [
+        {"kind": "park", "vertices": [[0, 0], [10, 0], [10, 10], [0, 10]],
+         "holes": [[[4, 4], [6, 4], [6, 6], [4, 6]]]},
+        {"kind": "park", "vertices": [[20, 0], [30, 0], [30, 10], [20, 10]]},
+    ]}), encoding="utf-8")
+    polys, _ = load_public_land(p)
+    assert len(polys) == 1 and polys[0][0] == (20.0, 0.0)
