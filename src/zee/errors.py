@@ -9,6 +9,7 @@ Code ranges:
     Z6xx — recovery
     Z7xx — containment report export
     Z10xx — incident report bundling (police/PPC handoff documents)
+    Z8xx — decoy PII dilution (value-dilution dummy records)
     Z9xx — unexpected internal errors
 
 User-reported issues should be traceable from the code alone.
@@ -54,6 +55,16 @@ Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正�
 Z1001_UNKNOWN_RECIPIENT = ("Z1001", "--recipient は police / ppc のいずれかを指定してください")
 Z1004_EXPORT_FILE_REQUIRED = ("Z1004", "--export-json のファイルが zee export が書くスキーマと一致しない、または読めません")
 Z1005_OUTPUT_COLLIDES_WITH_INPUT = ("Z1005", "--out の出力先が --export-json の入力ファイルと同じです（--force でも上書きしません）")
+# Z8xx
+Z801_NO_ELIGIBLE_PARCEL = ("Z801", "公園・河川区域に完全に含まれる地番が1件も見つかりませんでした（fail-closed）")
+Z802_EMAIL_DOMAIN_REQUIRED = ("Z802", "--email-mode=user-domain には --email-domain の指定が必要です")
+Z803_MISSING_LAYER2_INPUT = ("Z803", "--layer に real-nonresidential/both を指定する場合は --parcels と --public-land の両方が必要です")
+Z804_CRS_MISMATCH = ("Z804", "地番データと公有地データの座標系(crs)が一致しません")
+Z805_EMPTY_TOWN_MASTER = ("Z805", "町字マスターが空です。架空町名の非実在確認ができないため生成を拒否します")
+Z806_WEAK_SEED = ("Z806", "--seed が短すぎます（最低16文字）。弱いseedはHMAC台帳の安全性を損ないます")
+Z807_INVALID_COUNT = ("Z807", "--count は1以上の整数を指定してください")
+Z808_OUTPUT_EXISTS = ("Z808", "出力先に records.csv / ledger.jsonl が既に存在します。上書きしません。別の --out を指定してください")
+Z809_ADDRESS_POOL_EXHAUSTED = ("Z809", "重複しない住所の組み合わせが尽きました。--count を減らすか、入力データ（適格な地番・町字マスター）を増やしてください")
 
 # Z9xx
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")

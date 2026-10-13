@@ -578,6 +578,44 @@ def _cmd_gate_audit(args: argparse.Namespace) -> int:
     return report.exit_code
 
 
+def _cmd_dilute_generate(args: argparse.Namespace) -> int:
+    """Generate dummy PII records + a holder-only ledger (value dilution).
+
+    Writes files only — see docs/design/decoy-pii-dilution.md. Does not
+    touch any database, backup, or network; mixing the output into a
+    backup/export is the operator's own step.
+    """
+    import secrets
+
+    from .dilution.generate import DiluteConfig, run
+
+    seed = args.seed or os.environ.get("ZEE_DILUTE_SEED")
+    if not seed:
+        # design doc §5: unspecified seed is auto-generated and shown
+        # once, on stdout only — never written to a file or log.
+        seed = secrets.token_hex(32)
+        print(f"generated seed (save this — it is the only way to re-run "
+              f"identically or recognize these dummies later): {seed}")
+
+    records_path, ledger_path = run(DiluteConfig(
+        parcels_path=Path(args.parcels) if args.parcels else None,
+        public_land_path=Path(args.public_land) if args.public_land else None,
+        abr_towns_path=Path(args.abr_towns),
+        zipcode_path=Path(args.zipcode_data),
+        seed=seed,
+        count=args.count,
+        layer=args.layer,
+        email_mode=args.email_mode,
+        email_domain=args.email_domain,
+        fallback_zip=args.fallback_zip,
+        out_dir=Path(args.out),
+    ))
+    print(f"wrote {records_path}")
+    print(f"wrote {ledger_path}  (keep separately from records.csv; "
+          f"this is how you tell your own dummies apart later)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="zee",
@@ -787,6 +825,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_gate_audit.set_defaults(func=_cmd_gate_audit)
 
+    p_dilute = sub.add_parser(
+        "dilute-generate",
+        help="generate dummy PII records + a holder-only ledger (value "
+        "dilution for exfiltrated data); writes files only — see "
+        "docs/design/decoy-pii-dilution.md",
+    )
+    p_dilute.add_argument(
+        "--layer", choices=("fictional-town", "real-nonresidential", "both"),
+        default="fictional-town",
+        help="fictional-town: real-looking but non-existent town name "
+        "(no extra inputs needed). real-nonresidential: real town + a "
+        "chiban confirmed fully inside park/river public land, requires "
+        "--parcels and --public-land. both: mix of the two.",
+    )
+    p_dilute.add_argument("--parcels", default=None,
+                          help="地番 parcel extract (required for real-nonresidential/both)")
+    p_dilute.add_argument("--public-land", default=None,
+                          help="都市公園・河川区域 extract (required for real-nonresidential/both)")
+    p_dilute.add_argument("--abr-towns", required=True,
+                          help="町字マスター CSV (real town names, one per line)")
+    p_dilute.add_argument("--zipcode-data", required=True,
+                          help="日本郵便 KEN_ALL.CSV / utf_all.csv (or a same-shaped subset)")
+    p_dilute.add_argument("--seed", default=None,
+                          help="your own secret, min 16 chars — reusing the same seed "
+                          "reproduces the same output deterministically; do not share "
+                          "it, and prefer ZEE_DILUTE_SEED over this flag (shell "
+                          "history / process list exposure). Omit both to auto-generate "
+                          "one (printed once, to stdout only)")
+    p_dilute.add_argument("--count", type=int, default=100)
+    p_dilute.add_argument("--email-mode", choices=("omit", "user-domain"), default="omit")
+    p_dilute.add_argument("--email-domain", default=None,
+                          help="a domain you control; required with --email-mode=user-domain")
+    p_dilute.add_argument("--fallback-zip", default="0000000",
+                          help="used when a town has no match in --zipcode-data")
+    p_dilute.add_argument("--out", required=True, help="output directory")
+    p_dilute.set_defaults(func=_cmd_dilute_generate)
+
     return parser
 
 
@@ -810,6 +885,14 @@ _USER_INPUT_CODES = frozenset({
     "Z1001",  # incident-report: unknown --recipient
     "Z1004",  # incident-report: unreadable / non-matching --export-json
     "Z1005",  # incident-report: --out collides with the --export-json file
+    "Z802",  # dilute-generate: --email-domain required for user-domain mode
+    "Z803",  # dilute-generate: --parcels/--public-land required for this --layer
+    "Z804",  # dilute-generate: parcels/public-land crs mismatch
+    "Z805",  # dilute-generate: empty town master
+    "Z806",  # dilute-generate: --seed too short
+    "Z807",  # dilute-generate: --count must be positive
+    "Z808",  # dilute-generate: --out already has output files
+    "Z809",  # dilute-generate: address pool exhausted for requested --count
 })
 
 
