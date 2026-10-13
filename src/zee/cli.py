@@ -736,7 +736,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="fictional-town: real-looking but non-existent town name "
         "(no extra inputs needed). real-nonresidential: real town + a "
         "chiban confirmed fully inside park/river public land, requires "
-        "--parcels and --public-land. both: mix of the two.",
+        "--parcels and --public-land. both: mix of the two. "
+        "NOT RECOMMENDED: the public-land layer is not guaranteed to stay "
+        "non-residential (representative decision 2026-10-13: fictional-town only).",
     )
     p_dilute.add_argument("--parcels", default=None,
                           help="地番 parcel extract (required for real-nonresidential/both)")
