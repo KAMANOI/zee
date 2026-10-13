@@ -91,11 +91,22 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
             ["iptables", "-A", "ZEE_EGRESS", "-j", "DROP"],
             ["iptables", "-I", "OUTPUT", "-j", "ZEE_EGRESS"],
         ]
+        # IPv6 is a separate table: mirror nft/pf (lo only, no RFC1918 analogue).
+        v6 = shutil.which("ip6tables")
+        if v6:
+            commands += [
+                ["ip6tables", "-N", "ZEE_EGRESS"],
+                ["ip6tables", "-A", "ZEE_EGRESS", "-o", "lo", "-j", "ACCEPT"],
+                ["ip6tables", "-A", "ZEE_EGRESS", "-j", "DROP"],
+                ["ip6tables", "-I", "OUTPUT", "-j", "ZEE_EGRESS"],
+            ]
         for cmd in commands:
             ok, msg = _run(cmd)
             if not ok:
                 return False, f"{' '.join(cmd)}: {msg}", []
-        return True, "iptables ZEE_EGRESS chain installed", [SENTINEL_LINUX_IPTABLES_EGRESS]
+        if not v6:
+            return True, "iptables ZEE_EGRESS chain installed (ip6tables missing: IPv6 NOT blocked)", [SENTINEL_LINUX_IPTABLES_EGRESS]
+        return True, "iptables+ip6tables ZEE_EGRESS chain installed", [SENTINEL_LINUX_IPTABLES_EGRESS]
 
     return False, "no supported backend (need nft or iptables)", []
 
@@ -136,13 +147,13 @@ def _cut_egress_windows() -> tuple[bool, str, list[str]]:
             "netsh", "advfirewall", "firewall", "add", "rule",
             f"name={ZEE_RULE_TAG}-block",
             "dir=out", "action=block", "enable=yes",
-            "remoteip=0.0.0.0/0",
+            "remoteip=0.0.0.0/0,::/0",
         ],
         [
             "netsh", "advfirewall", "firewall", "add", "rule",
             f"name={ZEE_RULE_TAG}-allow-local",
             "dir=out", "action=allow", "enable=yes",
-            "remoteip=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8",
+            "remoteip=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128",
         ],
     ]
     for cmd in commands:

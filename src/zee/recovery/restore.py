@@ -108,6 +108,11 @@ def _restore_targeted_linux(modified: list[str]) -> tuple[bool, str]:
             ok2, _ = _run(["iptables", "-F", "ZEE_EGRESS"])
             ok3, _ = _run(["iptables", "-X", "ZEE_EGRESS"])
             ok = ok1 and ok2 and ok3
+            if shutil.which("ip6tables"):
+                # Best-effort: the v6 chain only exists if ip6tables was present at cut time.
+                _run(["ip6tables", "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
+                _run(["ip6tables", "-F", "ZEE_EGRESS"])
+                _run(["ip6tables", "-X", "ZEE_EGRESS"])
             details.append(f"iptables:{'ok' if ok else 'fail'}")
             all_ok = all_ok and ok
         else:
@@ -189,6 +194,10 @@ def _restore_linux_compat() -> tuple[bool, str]:
         _run(["iptables", "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
         _run(["iptables", "-F", "ZEE_EGRESS"])
         _run(["iptables", "-X", "ZEE_EGRESS"])
+    if shutil.which("ip6tables"):
+        _run(["ip6tables", "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
+        _run(["ip6tables", "-F", "ZEE_EGRESS"])
+        _run(["ip6tables", "-X", "ZEE_EGRESS"])
     return True, "nft/iptables ZEE_EGRESS removed (compat, best-effort)"
 
 

@@ -141,9 +141,14 @@ honestly-published boundaries of what Zee is and is not:
   pass traffic to the following destinations and block everything else:
   `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and the loopback
   interface (`lo` / `lo0` on Linux/macOS; `127.0.0.0/8` on Windows).
-  Not covered: IPv4 link-local (`169.254.0.0/16`), IPv6 ULA
-  (`fc00::/7`), IPv6 link-local (`fe80::/10`), and IPv6 loopback
-  (`::1`). In typical SME environments these ranges are uncommon, but
+  IPv6: the `nftables` and `pfctl` backends block all IPv6 except
+  loopback. The `iptables` backend blocks IPv6 only when `ip6tables`
+  is installed (the cut result says so if it is not), and the `netsh`
+  backend blocks `::/0` and allows `::1`; both IPv6 paths are
+  unit-tested but not yet verified on a real host.
+  Not passed (so blocked where the backend covers it): IPv4 link-local
+  (`169.254.0.0/16`), IPv6 ULA (`fc00::/7`) and IPv6 link-local
+  (`fe80::/10`). In typical SME environments these ranges are uncommon, but
   operators who rely on APIPA addresses or IPv6-only LAN segments
   should review the egress rules before enabling `cut_egress`.
 - **Event logs grow without bound by default; rotate manually for
