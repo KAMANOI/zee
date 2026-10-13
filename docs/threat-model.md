@@ -7,6 +7,12 @@ containment responses, and the entry-side `zee gate` inspection workflow. This
 document models threats to the entry gate and to Zee's own distribution, plus
 the evidence store and the containment-report export (last section).
 
+"Zee does not guard the entrance" refers to the network boundary only: Zee is not
+a firewall, IDS/IPS, or any product that tries to stop intrusion over the network.
+The pre-install inspection of artifacts you bring in (`zee gate`) is a separate,
+supply-chain layer and is in scope. It is a static check with known limits (see
+below), used alongside other scanners, not a guarantee.
+
 The exit-side boundaries are documented in [README Limitations](../README.md#limitations--zee-がやらないこと),
 [SECURITY Honesty boundaries](../SECURITY.md#honesty-boundaries-current-release),
 and [gate Limits](gate.md#limits-invariant-i5); they are not repeated here.
@@ -124,6 +130,7 @@ validated. Verify its behavior in your own environment before production use.
 ### 日本語要約
 
 Zee には出口側の囮と入口側の `zee gate` があり、本書は入口と配布を対象にします。
+「Zee は入口を守らない」は通信の境界（ファイアウォール・IDS/IPS のような、ネットワーク越しの侵入を止める領域）の話です。導入前に持ち込む物を調べる `zee gate` は別の層（供給網）で、対象に含みます。
 静的検査、外部結果の取込、ピン監査、任意の動的検査を組み合わせます。
 静的検査と既知リストには、難読化や未知の内容を見逃す限界があります。
 動的検査は macOS の `sandbox-exec` でのみ実行され、Linux / Windows では実行されません。
