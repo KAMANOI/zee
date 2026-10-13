@@ -58,10 +58,12 @@ Z804_CRS_MISMATCH = ("Z804", "地番データと公有地データの座標系(c
 Z805_EMPTY_TOWN_MASTER = ("Z805", "町字マスターが空です。架空町名の非実在確認ができないため生成を拒否します")
 Z806_WEAK_SEED = ("Z806", "--seed が短すぎます（最低16文字）。弱いseedはHMAC台帳の安全性を損ないます")
 Z807_INVALID_COUNT = ("Z807", "--count は1以上の整数を指定してください")
-Z808_OUTPUT_EXISTS = ("Z808", "出力先に records.csv / ledger.jsonl が既に存在します。上書きしません。別の --out を指定してください")
+Z808_OUTPUT_EXISTS = ("Z808", "出力先に records.csv / ledger.jsonl / parcels.enc / expired.jsonl のいずれかが既に存在します。上書きしません。別の --out を指定してください")
 Z809_ADDRESS_POOL_EXHAUSTED = ("Z809", "重複しない住所の組み合わせが尽きました。--count を減らすか、入力データ（適格な地番・町字マスター）を増やしてください")
 
 # Z9xx
+Z810_PARCEL_STORE_UNREADABLE = ("Z810", "parcels.enc を開けません（seedが違う・ファイルが壊れている・改ざんされている）")
+Z811_NO_PARCEL_STORE = ("Z811", "指定ディレクトリに parcels.enc がありません（Layer 2 を使わずに生成した場合は再確認の対象がありません）")
 Z901_INTERNAL = ("Z901", "予期しない内部エラー")
 
 

@@ -312,3 +312,61 @@ def test_load_public_land_drops_polygon_with_holes(tmp_path):
     ]}), encoding="utf-8")
     polys, _ = load_public_land(p)
     assert len(polys) == 1 and polys[0][0] == (20.0, 0.0)
+
+
+# ------------------------------------------------------ refresh (design §8)
+
+def _shrunk_land(tmp_path: Path) -> Path:
+    """Park now covers only 地番45番 (10-20); 46番 (30-40) falls outside."""
+    p = tmp_path / "land2.json"
+    p.write_text(json.dumps({"crs": "fixture-local-grid-v1", "polygons": [
+        {"kind": "park", "vertices": [[0, 0], [25, 0], [25, 25], [0, 25]]}]}),
+        encoding="utf-8")
+    return p
+
+
+def test_refresh_flags_only_dummies_whose_chiban_lost_eligibility(tmp_path):
+    from zee.dilution.refresh import run_refresh
+    cfg = _base_cfg(tmp_path, seed=SEED_A, layer="real-nonresidential", count=40)
+    records, ledger = run(cfg)
+    store = cfg.out_dir / "parcels.enc"
+    assert store.exists()
+    assert "サンプル町".encode("utf-8") not in store.read_bytes()      # ciphertext
+    assert "サンプル町" not in ledger.read_text(encoding="utf-8")       # ledger stays chiban-free
+
+    expired_path, n_exp, n_ok = run_refresh(
+        cfg.out_dir, FIXTURES / "parcels.json", _shrunk_land(tmp_path),
+        FIXTURES / "abr_towns.csv", SEED_A)
+    expected = {
+        ledger_mod.record_hmac(r, SEED_A)
+        for r in csv.DictReader(records.open(encoding="utf-8"))
+        if r["address"].startswith("サンプル町一丁目46番")
+    }
+    got = {json.loads(l)["record_hmac"] for l in expired_path.read_text().splitlines()}
+    assert got == expected and n_exp + n_ok == 40 and n_exp > 0 and n_ok > 0
+
+
+def test_refresh_rejects_wrong_seed_and_tampering(tmp_path):
+    from zee.dilution.refresh import run_refresh
+    cfg = _base_cfg(tmp_path, seed=SEED_A, layer="real-nonresidential")
+    run(cfg)
+    args = (cfg.out_dir, FIXTURES / "parcels.json", FIXTURES / "public_land.json",
+            FIXTURES / "abr_towns.csv")
+    with pytest.raises(ZeeError):
+        run_refresh(*args, SEED_B)
+    store = cfg.out_dir / "parcels.enc"
+    raw = bytearray(store.read_bytes())
+    raw[-40] ^= 1
+    store.write_bytes(bytes(raw))
+    with pytest.raises(ZeeError):
+        run_refresh(*args, SEED_A)
+
+
+def test_fictional_town_only_writes_no_parcel_store_and_refresh_refuses(tmp_path):
+    from zee.dilution.refresh import run_refresh
+    cfg = _base_cfg(tmp_path, seed=SEED_A, layer="fictional-town")
+    run(cfg)
+    assert not (cfg.out_dir / "parcels.enc").exists()
+    with pytest.raises(ZeeError):
+        run_refresh(cfg.out_dir, FIXTURES / "parcels.json",
+                    FIXTURES / "public_land.json", FIXTURES / "abr_towns.csv", SEED_A)

@@ -26,6 +26,7 @@ from ..errors import (
 )
 from .address import layer1_address, layer2_address
 from .names import generate_person
+from .parcel_store import write_store
 from .parcels import Parcel, find_nonresidential_parcels, load_parcels, load_public_land
 from .postal import load_zip_by_town, zip_for_town
 from .towns import generate_fictional_town_name, load_real_town_names
@@ -78,7 +79,8 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     records_path = cfg.out_dir / "records.csv"
     ledger_path = cfg.out_dir / "ledger.jsonl"
-    if records_path.exists() or ledger_path.exists():
+    store_path = cfg.out_dir / "parcels.enc"
+    if records_path.exists() or ledger_path.exists() or store_path.exists():
         raise ZeeError(Z808_OUTPUT_EXISTS)
 
     rng = random.Random(cfg.seed)
@@ -101,6 +103,7 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
     rows: list[dict[str, str]] = []
     hmacs: list[str] = []
     used_addresses: set[str] = set()
+    parcel_hmacs: dict[str, tuple[Parcel, list[str]]] = {}  # chiban -> (parcel, hmacs)
 
     for _ in range(cfg.count):
         person = generate_person(rng)
@@ -146,7 +149,10 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
         # rows carries ONLY the plain PII fields — no id/marker column
         # (design doc §5: the record itself must carry no tell).
         rows.append(dict(fields))
-        hmacs.append(ledger_mod.record_hmac(fields, cfg.seed))
+        h = ledger_mod.record_hmac(fields, cfg.seed)
+        hmacs.append(h)
+        if use_layer2:
+            parcel_hmacs.setdefault(parcel.chiban, (parcel, []))[1].append(h)
 
     with records_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(_RECORD_FIELDS))
@@ -154,5 +160,12 @@ def run(cfg: DiluteConfig) -> tuple[Path, Path]:
         writer.writerows(rows)
 
     ledger_mod.write_ledger(ledger_path, hmacs)
+    # Chibans live only in this seed-encrypted side file, never in the
+    # ledger (design doc §5/§8). Written only when Layer 2 was used.
+    if parcel_hmacs:
+        write_store(store_path, cfg.seed, [
+            {"chiban": c, "town": p.town, "hmacs": hs}
+            for c, (p, hs) in parcel_hmacs.items()
+        ])
 
     return records_path, ledger_path

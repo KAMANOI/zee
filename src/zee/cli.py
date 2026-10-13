@@ -542,6 +542,29 @@ def _cmd_dilute_generate(args: argparse.Namespace) -> int:
     print(f"wrote {records_path}")
     print(f"wrote {ledger_path}  (keep separately from records.csv; "
           f"this is how you tell your own dummies apart later)")
+    store_path = ledger_path.parent / "parcels.enc"
+    if store_path.exists():
+        print(f"wrote {store_path}  (seed-encrypted; needed by dilute-refresh — "
+              f"keep it apart from both records.csv and ledger.jsonl)")
+    return 0
+
+
+def _cmd_dilute_refresh(args: argparse.Namespace) -> int:
+    """Re-check Layer-2 dummies against fresh parcel/public-land data."""
+    from .dilution.refresh import run_refresh
+
+    seed = args.seed or os.environ.get("ZEE_DILUTE_SEED")
+    if not seed:
+        print("zee: --seed (or ZEE_DILUTE_SEED) is required", file=sys.stderr)
+        return 2
+    path, n_expired, n_valid = run_refresh(
+        Path(args.dir), Path(args.parcels), Path(args.public_land),
+        Path(args.abr_towns), seed,
+    )
+    print(f"wrote {path}  expired dummies: {n_expired}, still valid: {n_valid}")
+    if n_expired:
+        print("expired dummies no longer qualify as non-residential; "
+              "regenerate and swap them out.")
     return 0
 
 
@@ -763,6 +786,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_dilute.add_argument("--out", required=True, help="output directory")
     p_dilute.set_defaults(func=_cmd_dilute_generate)
 
+    p_refresh = sub.add_parser(
+        "dilute-refresh",
+        help="re-check Layer-2 dummies against fresh parcel/public-land "
+        "data; writes expired.jsonl (docs/design/decoy-pii-dilution.md §8)",
+    )
+    p_refresh.add_argument("--dir", required=True,
+                           help="directory holding parcels.enc (the dilute-generate --out)")
+    p_refresh.add_argument("--parcels", required=True, help="fresh 地番 extract")
+    p_refresh.add_argument("--public-land", required=True, help="fresh 都市公園・河川区域 extract")
+    p_refresh.add_argument("--abr-towns", required=True, help="町字マスター CSV")
+    p_refresh.add_argument("--seed", default=None,
+                           help="the seed used at generation (prefer ZEE_DILUTE_SEED)")
+    p_refresh.set_defaults(func=_cmd_dilute_refresh)
+
     return parser
 
 
@@ -791,6 +828,8 @@ _USER_INPUT_CODES = frozenset({
     "Z807",  # dilute-generate: --count must be positive
     "Z808",  # dilute-generate: --out already has output files
     "Z809",  # dilute-generate: address pool exhausted for requested --count
+    "Z810",  # dilute-refresh: wrong seed / unreadable parcels.enc
+    "Z811",  # dilute-refresh: no parcels.enc in --dir
 })
 
 
