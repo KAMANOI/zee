@@ -753,9 +753,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "history / process list exposure). Omit both to auto-generate "
                           "one (printed once, to stdout only)")
     p_dilute.add_argument("--count", type=int, default=100)
-    p_dilute.add_argument("--email-mode", choices=("omit", "user-domain"), default="omit")
+    p_dilute.add_argument("--email-mode", choices=("omit", "user-domain"), default="user-domain")
     p_dilute.add_argument("--email-domain", default=None,
-                          help="a domain you control; required with --email-mode=user-domain")
+                          help="a domain you control; required unless --email-mode=omit")
     p_dilute.add_argument("--fallback-zip", default="0000000",
                           help="used when a town has no match in --zipcode-data")
     p_dilute.add_argument("--out", required=True, help="output directory")
