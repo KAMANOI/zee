@@ -105,6 +105,13 @@ honestly-published boundaries of what Zee is and is not:
   Without it, no canary URL is embedded and read-only touches against
   a macOS / Windows decoy are not observed (safe by default; Linux
   needs no canary because `inotify` reports reads directly).
+- **Read-only intrusion is not cut automatically.** Even with
+  `response_mode: auto` and `dry_run: false`, automatic containment
+  fires only on change-class contact with a decoy (write / delete /
+  rename / extend). Read-class contact (open / read / attribute lookup)
+  is notification-only, so reconnaissance or credential collection that
+  only reads is not stopped by Zee. A human must read the notification
+  and decide whether to cut by hand with `zee cut <asset_id>`.
 - **`restore_token` does not stop a root-equivalent attacker.** The
   token file at `~/.zee/restore_token` is 0600 on POSIX hosts (Linux,
   macOS); a same-user attacker with shell access can still read it.
