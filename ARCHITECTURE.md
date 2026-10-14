@@ -172,6 +172,11 @@ responder の `cut_full` / `cut_egress` と recovery（`zee restore`）は OS �
 | 通知 | ✅ Implemented | `src/zee/notifier/` — ローカル必須・webhook 任意 |
 | 復旧 | ✅ Implemented | `src/zee/recovery/` — `zee restore <asset_id>` 手動のみ |
 | 計測 | ✅ Implemented | `src/zee/telemetry/` — JSON Lines・レイテンシ・誤検知マーカー |
+| 入口ゲート | ✅ Implemented | `src/zee/gate/` — 導入前の静的検査（`zee gate`）。詳細は [docs/gate.md](./docs/gate.md) |
+| 封じ込め証跡 | ✅ Implemented | `src/zee/telemetry/report_export.py`・`src/zee/report/` — `zee export`（ハッシュチェーン検証つき）と `zee incident-report`。どちらも何も送信しない |
+| 通知の影響段階 | ✅ Implemented | `src/zee/notifier/` — 4段階の表示のみ。自動遮断の判定には使わない |
+
+実施した検証と、まだ行っていない範囲は → [docs/verification/](./docs/verification/README.md)
 
 導入手順とコマンドは → [README.md の MVP セクション](./README.md#mvp--動く囮トリップワイヤ)
 

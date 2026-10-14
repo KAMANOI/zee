@@ -194,8 +194,9 @@
     <div class="status">
       <b>PROJECT STATUS</b> — Early Public / Research Project<br />
       Zee is not a production-ready security product.<br />
-      Zee does not currently guarantee protection, containment, prevention of data theft, or detection effectiveness.<br />
-      This repository currently provides architecture, research direction, preparation guidance, and experimental concepts under active development.
+      Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.<br />
+      Implemented (v0.12.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.<br />
+      What has been verified, under which conditions, and what has not: <a href="https://github.com/KAMANOI/zee/blob/main/docs/verification/README.md" style="color:var(--accent)">docs/verification/</a>
     </div>
   </div>
 </header>
@@ -298,10 +299,10 @@ zee gate audit</div>
     <div class="eyebrow">MVP — 動く囮トリップワイヤ</div>
     <h2>既定 dry_run。明示昇格まで実遮断はしない。</h2>
     <p class="lead" style="margin-bottom:6px">Zee は侵入を防ぐ層ではなく、侵入後に<b>狭く高信頼な検知信号（囮への接触）</b>を1本足す層です。「あなたの検知体制全般」を肩代わりするものではありません。</p>
-    <div class="code"><span class="c"># 1. インストール</span>
-git clone https://github.com/KAMANOI/zee.git
-cd zee
-pip install -e .
+    <div class="code"><span class="c"># 1. インストール（タグを固定して1行で）</span>
+uv tool install "git+https://github.com/KAMANOI/zee@v0.12.0"
+<span class="c"># 手元で開発する場合: git clone https://github.com/KAMANOI/zee.git &amp;&amp; cd zee &amp;&amp; pip install -e .</span>
+<span class="c"># ※ pip install zee / npx zee は別の作者の無関係なパッケージです。使わないでください</span>
 
 <span class="c"># 2. 資産プロファイルを作成</span>
 cp examples/assets.example.toml ./assets.toml
@@ -467,7 +468,7 @@ zee restore &lt;asset_id&gt; --token &lt;TOKEN&gt;
       <li><b style="color:var(--text)"><code>zee restore</code> には <code>restore_token</code> が必要（v0.3 から）</b> — <code>zee init-restore-token</code> で生成したトークンを <code>--token</code> または <code>ZEE_RESTORE_TOKEN</code> で渡します。同一ユーザーで動作する別シェルからの誤った巻き戻しは塞げますが、<code>~/.zee/restore_token</code>（0600）を読める root 相当の攻撃者にはバイパスされます。マルチユーザー本番では <code>sudo</code> で囲うか専用ユーザーで運用してください。</li>
       <li><b style="color:var(--text)">イベントログは <code>decoy_ref</code>（asset_id#index）で記録（v0.3 から）</b> — 絶対パスは記録されないため、ログを読まれても囮位置は一括列挙できません。対応関係は <code>assets.toml</code> 経由でのみ復元できます。</li>
       <li><b style="color:var(--text)">限界がある</b> — 機械の速度で動く相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。</li>
-      <li><b style="color:var(--text)">未測定</b> — 効果はまだ独立に検証されていません。本番運用の前に、ご自身の環境で必ず確認してください。</li>
+      <li><b style="color:var(--text)">検証の範囲</b> — 入口ゲートの判定は合成検体による社内の再現試験とテストスイートで（自然文の言い換えによる指示すり込みは、未知の検体の盲検試験で検出できていません）、囮・封じ込めはテストスイートと隔離した macOS 環境での dry_run の実演（v0.10.1 付近の版で実施）で確認しています。専門家・第三者機関による独立評価は受けておらず、OS のファイアウォールに対する実遮断（<code>dry_run: false</code>）の試験は未実施です。結果と条件は <a href="https://github.com/KAMANOI/zee/blob/main/docs/verification/README.md" style="color:var(--accent)">docs/verification/</a>。本番運用の前に、ご自身の環境でも確認してください。</li>
     </ul>
     <p style="margin-top:14px;font-size:14px;color:var(--muted)">これは床であって天井ではありません。安全だと言う前に、失敗条件を先に書きました。<br />全 Limitations は <a href="https://github.com/KAMANOI/zee/blob/main/README.md#limitations--zee-%E3%81%8C%E3%82%84%E3%82%89%E3%81%AA%E3%81%84%E3%81%93%E3%81%A8" style="color:var(--accent)">README の Limitations セクション</a> を参照してください。</p>
   </div>
@@ -531,7 +532,7 @@ zee restore &lt;asset_id&gt; --token &lt;TOKEN&gt;
     <h2 style="max-width:760px">万能ではありません。Zee は“もう一層”です。</h2>
     <div class="feat">
       <ul>
-        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b> の段階です。本番導入の前に、ご自身の環境での検証を推奨します。</li>
+        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b>（v0.12.0）の段階で、MIT ライセンス・無保証で提供します。本番導入の前に、ご自身の環境での検証を推奨します。</li>
         <li>侵入そのものを防ぐものでも、すべての攻撃を検知できるものでもありません。</li>
       </ul>
       <ul>
