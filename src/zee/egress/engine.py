@@ -298,7 +298,8 @@ class Engine:
         failed: list[str] = []
         if req.kind == "egress":
             for d in p["dests"]:
-                if _match(d, self.state["allow"]):  # allow-listed since the request: no grant to expire
+                if _match(d, self.state["allow"]):  # allow-listed since the request: no grant to expire,
+                    failed += self._release({d} & self._closed())  # but a leftover block must go
                     continue
                 self.grants[d] = Grant(float(p["until"]), int(p["max_bytes"]))
                 if self.enforcer:
@@ -447,10 +448,10 @@ class Engine:
                 self._log("timeout", req=rid, result="not_passed")  # no answer = stays held
         if not self.enabled:  # OFF: finish any release that failed; never close again
             self._release(self._closed())
+        else:  # ON: an allow-listed destination never stays closed (retries a failed release)
+            self._release({d for d in self._closed() if _match(d, self.state["allow"])})
         for d, g in list(self.grants.items()):
-            if g.until <= now and _match(d, self.state["allow"]):
-                self._release({d})
-            elif self.enabled and g.until <= now:  # OFF: leftover grants are only released
+            if self.enabled and g.until <= now and not _match(d, self.state["allow"]):  # OFF/allow-listed: release only
                 try:
                     if self.enforcer:
                         self.enforcer.hold(d)

@@ -30,10 +30,10 @@ class Clock:
 
 class Rec:
     def __init__(self):
-        self.held, self.allowed = [], []
+        self.held, self.allowed, self.released = [], [], []
     def hold(self, d): self.held.append(d)
     def allow(self, d, until): self.allowed.append(d)
-    def release(self, d): self.released = getattr(self, 'released', []) + [d]
+    def release(self, d): self.released.append(d)
 
 
 def approve(eng, req, key="k1", secret="s1", entered=None, payload=None):
@@ -629,3 +629,37 @@ def test_off_never_recloses_even_if_the_release_keeps_failing(env):
     assert not enf.held and not eng.held and "203.0.113.5:443" in eng.grants
     eng.tick()
     assert enf.released == ["203.0.113.5:443"] and not eng.grants and not enf.held
+
+
+# ---- Codex 3rd review 2026-10-15 (6fd1a7f..575d9cf)
+
+def test_allow_add_release_failure_is_retried_by_tick_while_on(env):
+    eng, clock, _, _ = env
+    eng.note_protected_touch("env:prod")
+    eng.observe(Flow("curl", "203.0.113.5:443", 10))
+    enf = eng.enforcer = StuckRelease()
+    res = approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443"))
+    assert res.ok and res.reason == "release_pending" and eng.enabled
+    eng.tick()
+    assert enf.released == ["203.0.113.5:443"] and not eng.held
+
+
+def test_stale_egress_approval_retries_the_release_of_an_allowlisted_dest(env):
+    eng, clock, _, _ = env
+    req = hold_one(eng, clock)  # egress request issued before the allow-list change
+    enf = eng.enforcer = StuckRelease(fails=2)
+    assert approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443")).reason == "release_pending"
+    assert approve(eng, req).reason == "release_pending"  # tried again, and says it is still closed
+    assert approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443")).ok
+    assert enf.released == ["203.0.113.5:443"] and not eng.held and not eng.grants
+
+
+def test_expired_grant_of_an_allowlisted_dest_is_never_reclosed(env):
+    eng, clock, _, _ = env
+    req = hold_one(eng, clock)
+    assert approve(eng, req).ok  # grant, then allow-listed while its release keeps failing
+    enf = eng.enforcer = StuckRelease(fails=2)
+    assert approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443")).reason == "release_pending"
+    clock.t = req.payload["until"] + 1
+    eng.tick()  # the retry fails again and the grant has expired
+    assert "203.0.113.5:443" not in eng.held and not enf.held
