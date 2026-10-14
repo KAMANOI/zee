@@ -9,22 +9,32 @@ from __future__ import annotations
 import ipaddress
 
 
-def _addr(dest: str) -> str:
-    host = dest
+def _to(dest: str, *, keep_port: bool = True) -> str:
+    """pf target for one destination. Passes keep the port (approving :8443 must not open :443);
+    blocks drop it, so a held peer is closed on every port (no port hopping; fails closed)."""
+    host, port = dest, None
     if "/" not in dest:
         if dest.startswith("["):
-            host = dest[1:].split("]")[0]
+            host, _, rest = dest[1:].partition("]")
+            if rest and not rest.startswith(":"):
+                raise ValueError(f"bad destination: {dest}")
+            port = rest[1:] or None
         elif dest.count(":") == 1:
-            host = dest.split(":")[0]
-    return str(ipaddress.ip_network(host, strict=False))  # ValueError for hostnames
+            host, port = dest.split(":")
+    to = str(ipaddress.ip_network(host, strict=False))  # ValueError for hostnames
+    if port is None or not keep_port:
+        return to
+    if not (port.isdigit() and 0 < int(port) < 65536):
+        raise ValueError(f"bad port: {dest}")
+    return f"{to} port {int(port)}"
 
 
 def render(held: list[str], allowed: list[str], *, default_deny: bool = False) -> str:
     """`default_deny` is the server form (allow-list primary); the PC form blocks only held peers."""
     rules = ["pass out quick on lo0 all"]
-    rules += [f"pass out quick to {_addr(d)}" for d in sorted(allowed)]
+    rules += [f"pass out quick to {_to(d)}" for d in sorted(allowed)]
     if default_deny:
         rules.append("block drop out quick all")
     else:
-        rules += [f"block drop out quick to {_addr(d)}" for d in sorted(held)]
+        rules += [f"block drop out quick to {_to(d, keep_port=False)}" for d in sorted(held)]
     return "\n".join(rules) + "\n"

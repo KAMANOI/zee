@@ -236,7 +236,7 @@ def test_evidence_chain_is_valid_and_has_no_signature_material(env):
 
 def test_pf_render_includes_ipv6_and_never_names_hosts():
     out = render(["203.0.113.5:443", "[2001:db8::1]:443"], ["198.51.100.0/24"])
-    assert "block drop out quick to 2001:db8::1/128" in out
+    assert "block drop out quick to 2001:db8::1/128\n" in out
     assert out.index("pass out quick to 198.51.100.0/24") < out.index("block drop")
     with pytest.raises(ValueError):
         render(["evil.example:443"], [])
@@ -395,3 +395,133 @@ def test_wrongly_typed_or_deep_state_fails_closed(tmp_path, bad):
     eng = Engine(d, HmacVerifier(), clock=Clock())
     assert eng.state_invalid and eng.enabled and not eng.state["keys"]
     eng.tick()  # must not raise
+
+
+# ---- Codex external review 2026-10-15 (one regression test per finding)
+
+def test_grant_volume_is_metered_even_after_the_taint_expires(env):
+    eng, clock, _, _ = env
+    req = hold_one(eng, clock)
+    assert approve(eng, req).ok
+    clock.t += eng.TAINT_WINDOW + 1  # no longer exfil-shaped by itself
+    cap = req.payload["max_bytes"]
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 900_000)).action == "pass"
+    assert eng.grants["203.0.113.5:443"].remaining == cap - 900_000
+    for _ in range(cap // 900_000 + 1):
+        eng.observe(Flow("curl", "203.0.113.5:443", 900_000))
+    assert "203.0.113.5:443" in eng.held
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 10)).action == "hold"  # stays held
+
+
+def test_pf_allow_keeps_the_port():
+    out = render(["203.0.113.5:443"], ["203.0.113.5:8443", "[2001:db8::1]:443", "198.51.100.0/24"])
+    assert "pass out quick to 203.0.113.5/32 port 8443" in out
+    assert "pass out quick to 2001:db8::1/128 port 443" in out
+    assert "block drop out quick to 203.0.113.5/32\n" in out  # held: every port
+    assert "pass out quick to 198.51.100.0/24\n" in out
+    assert "pass out quick to 203.0.113.5/32\n" not in out
+    for bad in ("203.0.113.5:99999", "[2001:db8::1]x443"):
+        with pytest.raises(ValueError):
+            render([], [bad])
+
+
+class FlakyEnforcer(Rec):
+    def __init__(self, fails=1):
+        super().__init__()
+        self.fails = fails
+
+    def hold(self, d):
+        if self.fails:
+            self.fails -= 1
+            raise OSError("pfctl failed")
+        super().hold(d)
+
+
+def test_failed_hold_is_retried(tmp_path):
+    clock, enf = Clock(), FlakyEnforcer()
+    eng = Engine(tmp_path / "zee", HmacVerifier(), enforcer=enf, clock=clock)
+    eng.bootstrap_key("k1", "s1")
+    eng.ack_single_key()
+    eng.enable()
+    with pytest.raises(OSError):
+        eng.observe(Flow("curl", "203.0.113.5:443", 2_000_000))
+    assert "203.0.113.5:443" not in eng.held
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 2_000_000)).action == "hold"
+    assert enf.held == ["203.0.113.5:443"]
+
+
+def test_failed_hold_at_grant_expiry_is_retried(env):
+    eng, clock, _, _ = env
+    req = hold_one(eng, clock)
+    assert approve(eng, req).ok
+    enf = eng.enforcer = FlakyEnforcer()
+    clock.t = req.payload["until"] + 1
+    eng.tick()  # hold fails: must not count as closed
+    assert "203.0.113.5:443" not in eng.held
+    eng.tick()
+    assert "203.0.113.5:443" in eng.held and enf.held == ["203.0.113.5:443"]
+
+
+def test_recovery_releases_holds_and_grants(env):
+    eng, clock, enf, _ = env
+    approve(eng, hold_one(eng, clock))
+    eng.observe(Flow("curl", "198.51.100.9:443", 2_000_000))  # tainted -> held
+    assert eng.held and eng.grants
+    eng.recovery_start()
+    clock.t += eng.RECOVERY_WAIT
+    assert eng.recovery_complete().ok
+    assert not eng.held and not eng.grants
+    assert sorted(enf.released) == ["198.51.100.9:443", "203.0.113.5:443"]
+    eng.tick()
+    assert enf.held == ["203.0.113.5:443", "198.51.100.9:443"]  # nothing re-held while OFF
+
+
+def test_allow_add_releases_matching_holds(env):
+    eng, clock, enf, _ = env
+    eng.note_protected_touch("env:prod")
+    for d in ("203.0.113.5:443", "203.0.113.6:443", "198.51.100.9:443"):
+        assert eng.observe(Flow("curl", d, 10)).action == "hold"
+    req = eng.request_config("allow_add", dest="203.0.113.0/24")
+    assert approve(eng, req).ok
+    assert sorted(enf.released) == ["203.0.113.5:443", "203.0.113.6:443"]
+    assert eng.held == {"198.51.100.9:443"}
+
+
+@pytest.mark.parametrize("op,args", [
+    ("allow_add", {"dest": 123}),
+    ("allow_add", {}),
+    ("protect_add", {"id": ["x"]}),
+    ("key_add", {"key_id": "k2"}),
+    ("key_remove", {"key_id": ""}),
+    ("disable", {"extra": "x"}),
+])
+def test_config_args_are_validated_before_the_request(env, op, args):
+    eng, _, _, _ = env
+    with pytest.raises(ValueError):
+        eng.request_config(op, **args)
+    assert not eng.pending
+
+
+def test_key_floor_is_rechecked_when_applied(tmp_path):
+    eng = Engine(tmp_path / "zee", HmacVerifier(), clock=Clock())
+    eng.bootstrap_key("k1", "s1")
+    eng.state["keys"].update(k2="s2", k3="s3")
+    eng.enable()
+    r2 = eng.request_config("key_remove", key_id="k2")
+    r3 = eng.request_config("key_remove", key_id="k3")
+    assert approve(eng, r2).ok
+    assert approve(eng, r3).reason == "would_leave_one_key"
+    assert sorted(eng.state["keys"]) == ["k1", "k3"] and eng.enabled
+
+
+def test_failed_release_keeps_the_hold_but_saves_the_config(env):
+    eng, clock, enf, _ = env
+    eng.note_protected_touch("env:prod")
+    eng.observe(Flow("curl", "203.0.113.5:443", 10))
+    def boom(d):
+        raise OSError("pfctl failed")
+    enf.release = boom
+    req = eng.request_config("disable")
+    assert approve(eng, req).ok
+    assert "203.0.113.5:443" in eng.held  # still blocked in pf, so still recorded as held
+    assert Engine(eng.dir, HmacVerifier(), clock=clock).enabled is False  # the signed change was saved
