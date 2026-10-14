@@ -415,8 +415,8 @@ def test_grant_volume_is_metered_even_after_the_taint_expires(env):
 
 def test_pf_allow_keeps_the_port():
     out = render(["203.0.113.5:443"], ["203.0.113.5:8443", "[2001:db8::1]:443", "198.51.100.0/24"])
-    assert "pass out quick to 203.0.113.5/32 port 8443" in out
-    assert "pass out quick to 2001:db8::1/128 port 443" in out
+    assert "pass out quick proto { tcp udp } to 203.0.113.5/32 port 8443" in out
+    assert "pass out quick proto { tcp udp } to 2001:db8::1/128 port 443" in out
     assert "block drop out quick to 203.0.113.5/32\n" in out  # held: every port
     assert "pass out quick to 198.51.100.0/24\n" in out
     assert "pass out quick to 203.0.113.5/32\n" not in out
@@ -525,3 +525,107 @@ def test_failed_release_keeps_the_hold_but_saves_the_config(env):
     assert approve(eng, req).ok
     assert "203.0.113.5:443" in eng.held  # still blocked in pf, so still recorded as held
     assert Engine(eng.dir, HmacVerifier(), clock=clock).enabled is False  # the signed change was saved
+
+
+# ---- Codex re-review 2026-10-15 (726a431..6fd1a7f)
+
+@pytest.mark.skipif(not shutil.which("pfctl"), reason="pfctl not available (macOS only)")
+def test_pf_rules_pass_pfctl_syntax_check():
+    out = render(["203.0.113.5:443", "[2001:db8::1]:443"],
+                 ["203.0.113.5:8443", "[2001:db8::2]:443", "198.51.100.0/24"])
+    r = subprocess.run(["pfctl", "-nf", "-"], input=out, capture_output=True, text=True)  # -n: parse only
+    assert r.returncode == 0, r.stderr
+
+
+def test_pf_port_rules_name_the_protocol():
+    out = render([], ["203.0.113.5:8443"])
+    assert "pass out quick proto { tcp udp } to 203.0.113.5/32 port 8443" in out
+
+
+def test_small_send_after_a_failed_hold_retries_the_hold(tmp_path):
+    clock, enf = Clock(), FlakyEnforcer()
+    eng = Engine(tmp_path / "zee", HmacVerifier(), enforcer=enf, clock=clock)
+    eng.bootstrap_key("k1", "s1")
+    eng.ack_single_key()
+    eng.enable()
+    with pytest.raises(OSError):
+        eng.observe(Flow("curl", "203.0.113.5:443", 2_000_000))
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 10)).action == "hold"
+    assert enf.held == ["203.0.113.5:443"]
+
+
+class StuckRelease(Rec):
+    def __init__(self, fails=1):
+        super().__init__()
+        self.fails = fails
+
+    def release(self, d):
+        if self.fails:
+            self.fails -= 1
+            raise OSError("pfctl failed")
+        super().release(d)
+
+
+def test_recovery_is_not_complete_while_a_release_fails(env):
+    eng, clock, _, _ = env
+    approve(eng, hold_one(eng, clock))
+    enf = eng.enforcer = StuckRelease()
+    eng.recovery_start()
+    clock.t += eng.RECOVERY_WAIT
+    assert eng.recovery_complete().reason == "release_failed"
+    assert eng.enabled and eng.state["keys"]  # nothing torn down yet: retry later
+    assert eng.recovery_complete().ok and not eng.grants and enf.released == ["203.0.113.5:443"]
+
+
+def test_disable_reports_and_retries_a_failed_release(env):
+    eng, clock, _, _ = env
+    approve(eng, hold_one(eng, clock))
+    enf = eng.enforcer = StuckRelease()
+    res = approve(eng, eng.request_config("disable"))
+    assert res.ok and res.reason == "release_pending" and not eng.enabled
+    clock.t += eng.GRANT_TTL * 2
+    eng.tick()  # OFF: retries the release, never re-holds the leftover grant
+    assert enf.released == ["203.0.113.5:443"] and not enf.held
+    assert not eng.grants and not eng.held
+
+
+def test_repeated_allow_add_retries_a_failed_release(env):
+    eng, clock, _, _ = env
+    eng.note_protected_touch("env:prod")
+    eng.observe(Flow("curl", "203.0.113.5:443", 10))
+    enf = eng.enforcer = StuckRelease()
+    assert approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443")).ok
+    assert "203.0.113.5:443" in eng.held
+    assert approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443")).ok
+    assert not eng.held and enf.released == ["203.0.113.5:443"]
+
+
+def test_stale_egress_approval_does_not_reclose_an_allowlisted_dest(env):
+    eng, clock, enf, _ = env
+    req = hold_one(eng, clock)  # egress request issued before the allow-list change
+    assert approve(eng, eng.request_config("allow_add", dest="203.0.113.5:443")).ok
+    assert approve(eng, req).ok
+    clock.t = req.payload["until"] + 1
+    eng.tick()
+    assert enf.held == ["203.0.113.5:443"]  # only the original hold, never re-closed
+    assert "203.0.113.5:443" not in eng.held
+
+
+def test_returned_request_cannot_change_what_is_applied(env):
+    eng, _, _, _ = env
+    req = eng.request_config("allow_add", dest="ok.example:443")
+    req.payload["args"]["dest"] = 123  # caller mutates what it was handed, then signs it
+    assert approve(eng, req).reason == "payload_mismatch"
+    assert eng.observe(Flow("curl", "203.0.113.5:443", 10)).action == "pass"  # no AttributeError
+
+
+def test_off_never_recloses_even_if_the_release_keeps_failing(env):
+    eng, clock, _, _ = env
+    approve(eng, hold_one(eng, clock))
+    enf = eng.enforcer = StuckRelease(fails=2)
+    assert approve(eng, eng.request_config("disable")).reason == "release_pending"
+    clock.t += eng.GRANT_TTL * 2
+    eng.tick()  # the retry fails again, and the grant has expired meanwhile
+    assert not enf.held and not eng.held and "203.0.113.5:443" in eng.grants
+    eng.tick()
+    assert enf.released == ["203.0.113.5:443"] and not eng.grants and not enf.held

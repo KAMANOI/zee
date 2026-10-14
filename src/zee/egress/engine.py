@@ -11,6 +11,7 @@ state file) can never silence detection.
 """
 from __future__ import annotations
 
+import copy
 import fnmatch
 import ipaddress
 import math
@@ -121,6 +122,7 @@ class Engine:
         self.pending: dict[str, Request] = {}
         self.grants: dict[str, Grant] = {}
         self.held: set[str] = set()
+        self.unheld: set[str] = set()  # decided to hold, but enforcer.hold() failed: retried
         self.taint: dict[str, float] = {}
         self.batch: Optional[dict] = None
         self.last_batch = -1e18
@@ -230,7 +232,7 @@ class Engine:
                    "exp": int(now + (ttl or self.RESPONSE_TTL)), **body}
         req = Request(rid, kind, payload, f"{secrets.randbelow(100):02d}", payload["exp"])
         self.pending[rid] = req
-        return req
+        return copy.deepcopy(req)  # the caller's copy can't change what Zee checks and applies
 
     def _key_floor(self) -> bool:
         """True if removing a key now would leave fewer than two while ON without the ack."""
@@ -287,24 +289,29 @@ class Engine:
         self.state["used"] = {d: e for d, e in self.state["used"].items() if e >= now}
         self.state["used"][digest.hex()] = payload["exp"]
         self._save()  # persist the replay ledger BEFORE acting on the approval
-        self._apply(req, key_id)
-        return Result(True)
+        failed = self._apply(req, key_id)
+        return Result(True, "release_pending" if failed else "")  # pending: retried by tick()
 
-    def _apply(self, req: Request, key_id: str) -> None:
+    def _apply(self, req: Request, key_id: str) -> list[str]:
+        """Returns the destinations whose release failed (still blocked)."""
         p = req.payload
+        failed: list[str] = []
         if req.kind == "egress":
             for d in p["dests"]:
+                if _match(d, self.state["allow"]):  # allow-listed since the request: no grant to expire
+                    continue
                 self.grants[d] = Grant(float(p["until"]), int(p["max_bytes"]))
                 if self.enforcer:
                     self.enforcer.allow(d, float(p["until"]))
                 self.held.discard(d)
             self._log("approved", req=req.id, key_id=key_id, dests=p["dests"],
                       max_bytes=p["max_bytes"], until=p["until"])
-            return
+            return failed
         op, a, s = p["op"], p["args"], self.state
-        if op == "allow_add" and a["dest"] not in s["allow"]:
-            s["allow"].append(a["dest"])
-            self._release({d for d in self.held | set(self.grants) if _match(d, [a["dest"]])})
+        if op == "allow_add":  # also when already listed: retries a release that failed before
+            if a["dest"] not in s["allow"]:
+                s["allow"].append(a["dest"])
+            failed = self._release({d for d in self._closed() if _match(d, [a["dest"]])})
         elif op == "allow_remove" and a["dest"] in s["allow"]:
             s["allow"].remove(a["dest"])
         elif op == "protect_add" and a["id"] not in s["protect"]:
@@ -317,22 +324,31 @@ class Engine:
             s["keys"].pop(a["key_id"], None)
         elif op == "disable":
             s["enabled"] = False
-            self._release(self.held | set(self.grants))
+            failed = self._release(self._closed())
         s["recovery_start"] = None
         self._save()
         self._log("config_applied", req=req.id, op=op, key_id=key_id,
                   args={k: v for k, v in a.items() if k != "public_key"})
+        return failed
 
-    def _release(self, dests: set[str]) -> None:
+    def _closed(self) -> set[str]:
+        """Every destination with enforcer state: held, hold-pending, or opened by a grant."""
+        return self.held | self.unheld | set(self.grants)
+
+    def _release(self, dests: set[str]) -> list[str]:
+        failed = []
         for d in sorted(dests):
             try:
                 if self.enforcer:
                     self.enforcer.release(d)
             except Exception:  # noqa: BLE001 - stays recorded as held (fail closed); config still saved
                 logger.exception("zee: egress release failed")
+                failed.append(d)
                 continue
             self.held.discard(d)
+            self.unheld.discard(d)
             self.grants.pop(d, None)
+        return failed
 
     # ---- recovery when every approver key is lost: time-locked, loud, cancellable
     def recovery_start(self) -> None:
@@ -345,7 +361,9 @@ class Engine:
         t = self.state["recovery_start"]
         if t is None or self.clock() < t + self.RECOVERY_WAIT:
             return Result(False, "waiting")
-        self._release(self.held | set(self.grants))  # OFF must actually reopen, as with disable
+        # OFF must actually reopen, as with disable; nothing is torn down until every release worked
+        if self._release(self._closed()):
+            return Result(False, "release_failed")
         self.state.update(keys={}, enabled=False, recovery_start=None, single_key_ack=False)
         self._save()
         self._log("recovery_completed")
@@ -373,7 +391,7 @@ class Engine:
             return "large_unlisted_send"
         if f.dest in self.grants:  # the signed volume/deadline is metered on every send
             return "approved_destination"
-        if f.dest in self.held:  # still held: small/untainted sends don't make it pass
+        if f.dest in self.held or f.dest in self.unheld:  # small/untainted sends don't make it pass
             return "held_destination"
         return None
 
@@ -397,8 +415,10 @@ class Engine:
 
     def _hold(self, f: Flow) -> None:
         if f.dest not in self.held:
+            self.unheld.add(f.dest)
             if self.enforcer:
-                self.enforcer.hold(f.dest)  # may raise: then not marked held, next flow retries
+                self.enforcer.hold(f.dest)  # may raise: stays in `unheld`, the next flow retries
+            self.unheld.discard(f.dest)
             self.held.add(f.dest)
             self._log("hold", dest=f.dest, proc=f.proc)
         b = self.batch
@@ -425,8 +445,12 @@ class Engine:
             if now > r.exp:
                 self.pending.pop(rid)
                 self._log("timeout", req=rid, result="not_passed")  # no answer = stays held
+        if not self.enabled:  # OFF: finish any release that failed; never close again
+            self._release(self._closed())
         for d, g in list(self.grants.items()):
-            if g.until <= now:
+            if g.until <= now and _match(d, self.state["allow"]):
+                self._release({d})
+            elif self.enabled and g.until <= now:  # OFF: leftover grants are only released
                 try:
                     if self.enforcer:
                         self.enforcer.hold(d)

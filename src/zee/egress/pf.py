@@ -23,18 +23,18 @@ def _to(dest: str, *, keep_port: bool = True) -> str:
             host, port = dest.split(":")
     to = str(ipaddress.ip_network(host, strict=False))  # ValueError for hostnames
     if port is None or not keep_port:
-        return to
+        return f"to {to}"
     if not (port.isdigit() and 0 < int(port) < 65536):
         raise ValueError(f"bad port: {dest}")
-    return f"{to} port {int(port)}"
+    return f"proto {{ tcp udp }} to {to} port {int(port)}"  # pf: "port" needs a tcp/udp proto
 
 
 def render(held: list[str], allowed: list[str], *, default_deny: bool = False) -> str:
     """`default_deny` is the server form (allow-list primary); the PC form blocks only held peers."""
     rules = ["pass out quick on lo0 all"]
-    rules += [f"pass out quick to {_to(d)}" for d in sorted(allowed)]
+    rules += [f"pass out quick {_to(d)}" for d in sorted(allowed)]
     if default_deny:
         rules.append("block drop out quick all")
     else:
-        rules += [f"block drop out quick to {_to(d, keep_port=False)}" for d in sorted(held)]
+        rules += [f"block drop out quick {_to(d, keep_port=False)}" for d in sorted(held)]
     return "\n".join(rules) + "\n"
