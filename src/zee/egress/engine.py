@@ -111,14 +111,16 @@ class Engine:
     TAINT_WINDOW = 600  # s: after a protected-data touch, any new destination is exfil-shaped
     RECOVERY_WAIT = 72 * 3600
     RECOVERY_NOTICE_EVERY = 6 * 3600
+    OPS = CONFIG_OPS  # signed config ops this engine accepts (privsep/admin.py narrows them)
+    STATE_FILE, LOG_FILE = "egress_approval.json", "egress.jsonl"
 
     def __init__(self, state_dir: Path, verifier: Verifier, *, enforcer: Optional[Enforcer] = None,
                  notify: Optional[Callable[[str, dict], None]] = None,
                  clock: Callable[[], float] = time.time, server_form: bool = False) -> None:
         self.dir, self.verifier, self.enforcer = Path(state_dir), verifier, enforcer
         self._notify, self.clock, self.server_form = notify, clock, server_form
-        self.path = self.dir / "egress_approval.json"
-        self.log_path = self.dir / "egress.jsonl"
+        self.path = self.dir / self.STATE_FILE
+        self.log_path = self.dir / self.LOG_FILE
         self.pending: dict[str, Request] = {}
         self.grants: dict[str, Grant] = {}
         self.held: set[str] = set()
@@ -240,7 +242,7 @@ class Engine:
 
     def request_config(self, op: str, **args) -> Request:
         # Validated before issuing: a bad arg must never consume an approval or reach _match().
-        if op not in CONFIG_OPS or set(args) != set(CONFIG_OPS[op]) \
+        if op not in self.OPS or set(args) != set(self.OPS[op]) \
                 or not all(type(v) is str and v for v in args.values()):
             raise ValueError(op)
         if op == "key_remove" and self._key_floor():

@@ -41,6 +41,9 @@ class AssetProfile:
 class Config:
     assets: tuple[AssetProfile, ...]
     dry_run: bool = True  # spec §2: 既定は dry_run
+    # [privsep] socket = "/var/run/zee/cutd.sock": send cuts to the root cut
+    # daemon instead of cutting in-process (docs/design/privsep.md). None = as before.
+    privsep_socket: Optional[str] = None
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -70,9 +73,17 @@ class Config:
             assets.append(asset)
 
         dry_run = bool(raw.get("dry_run", True))
+        privsep = raw.get("privsep")
+        privsep_socket = None
+        if privsep is not None:
+            sock = privsep.get("socket") if isinstance(privsep, dict) else None
+            if not isinstance(sock, str) or not sock.startswith("/"):
+                raise ZeeError(Z101_INVALID_ASSET_CONFIG, "[privsep] socket must be an absolute path")
+            privsep_socket = sock
         return cls(
             assets=tuple(assets),
             dry_run=dry_run,
+            privsep_socket=privsep_socket,
         )
 
     def find(self, asset_id: str) -> Optional[AssetProfile]:

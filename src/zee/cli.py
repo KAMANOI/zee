@@ -74,6 +74,11 @@ def _cmd_watch(args: argparse.Namespace) -> int:
 
     event_log = EventLog()
     cut_state = CutStateLog()
+    privsep_cut = None
+    if config.privsep_socket:  # opt-in: cuts go to the root cut daemon (docs/design/privsep.md)
+        from .privsep.client import call, privsep_cut as make_privsep_cut
+        privsep_cut = make_privsep_cut(Path(config.privsep_socket))
+        _start_privsep_heartbeat(Path(config.privsep_socket), call)
     log_dir = event_log.log_dir
     sender = webhook_from_env()
     try:
@@ -125,6 +130,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
                         event_log=event_log,
                         webhook_sender=sender,
                         cut_state=cut_state,
+                        privsep_cut=privsep_cut,
                     )
                     print(
                         f"[event] {event.detail} → mode={result.mode} "
@@ -149,6 +155,25 @@ def _cmd_watch(args: argparse.Namespace) -> int:
         for w in watchers:
             w.stop()  # type: ignore[attr-defined]
     return 0
+
+
+def _start_privsep_heartbeat(sock: Path, call, every: float = 30) -> None:
+    """status every 30 s: the daemon's evidence that this watch is alive. A daemon
+    that does not answer is reported every time, never shown as protected."""
+    import threading
+
+    def loop() -> None:
+        while True:
+            try:
+                r = call(sock, {"op": "status"}, timeout=10)
+                if r.get("ok") is not True or r.get("findings"):
+                    print(f"[zee watch] cut daemon reports: {r}", file=sys.stderr, flush=True)
+            except (OSError, ValueError) as e:
+                print(f"[zee watch] cut daemon UNREACHABLE ({e}): automatic cuts will fail",
+                      file=sys.stderr, flush=True)
+            time.sleep(every)
+
+    threading.Thread(target=loop, name="zee-privsep-heartbeat", daemon=True).start()
 
 
 def _cmd_restore(args: argparse.Namespace) -> int:
@@ -872,6 +897,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help="used when a town has no match in --zipcode-data")
     p_dilute.add_argument("--out", required=True, help="output directory")
     p_dilute.set_defaults(func=_cmd_dilute_generate)
+
+    from .privsep.cli import add_parser as add_privsep_parser
+    add_privsep_parser(sub)
 
     return parser
 

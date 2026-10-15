@@ -102,6 +102,7 @@ def handle(
     event_log: EventLog,
     webhook_sender: Optional[WebhookSender] = None,
     cut_state: Optional[CutStateLog] = None,
+    privsep_cut: Optional[Callable[[blocker.CutRequest], tuple[bool, str]]] = None,
 ) -> ResponderResult:
     """Run the fixed sequence for one trap event."""
     event_log.record_event(event)
@@ -205,10 +206,14 @@ def handle(
                 cut_skipped_reason = f"boundary:{refused}"
                 logger.error("cut boundary refused %s: %s", event.asset_id, refused)
             else:
-                ok, detail = cut_fn(
-                    asset_id=event.asset_id,
-                    cut_state=cut_state,
-                )
+                if privsep_cut is not None:  # [privsep]: the root daemon decides and cuts
+                    ok, detail = privsep_cut(blocker.CutRequest(
+                        event.asset_id, event.op_class, event.confidence))
+                else:
+                    ok, detail = cut_fn(
+                        asset_id=event.asset_id,
+                        cut_state=cut_state,
+                    )
                 cut_executed = ok
                 cut_done_at = datetime.now(timezone.utc)
                 cut_detail = detail
@@ -223,7 +228,9 @@ def handle(
                         f"decoy_ref: {event.decoy_ref or '-'}\n"
                         f"{reason_line(tier, action='contain' if ok else 'contain_failed')}\n"
                         + ("" if ok else f"traffic may NOT be stopped. detail: {detail}\n")
-                        + recover_hint(cut_state, event.asset_id)
+                        + (f"recover with a signed request: zee privsep challenge restore "
+                           f"asset_id={event.asset_id} scope=recorded"
+                           if privsep_cut is not None else recover_hint(cut_state, event.asset_id))
                     ),
                 )
 
