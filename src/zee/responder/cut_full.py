@@ -63,7 +63,11 @@ def cut_full(
         # Exit codes are not proof: every changed interface / service must
         # read back as disabled, or the cut is not reported as applied.
         states = interface_states()
-        unconfirmed = [m for m in modified if (states or {}).get(m) != "disabled"]
+        # When the ip-link fallback ran, the NetworkManager switch was only
+        # attempted (it stays recorded so restore covers it) and is not what
+        # cut the host: confirm the interfaces themselves.
+        required = [m for m in modified if m != SENTINEL_LINUX_NMCLI] or modified
+        unconfirmed = [m for m in required if (states or {}).get(m) != "disabled"]
         if states is None or unconfirmed:
             ok = False
             verified = "unverified" if states is None or any(
@@ -116,27 +120,30 @@ def _cut_full_dispatch() -> tuple[bool, str, list[str]]:
 
 def _cut_full_linux() -> tuple[bool, str, list[str]]:
     # Prefer nmcli when available (handles WiFi cleanly).
+    # Every attempted target is recorded, success or not: a command that
+    # failed or timed out may still have taken effect, and restore must
+    # bring it back and read it back.
+    attempted: list[str] = []
     if shutil.which("nmcli"):
+        attempted.append(SENTINEL_LINUX_NMCLI)
         result = _run(["nmcli", "networking", "off"])
         if result[0]:
-            return True, "nmcli networking off", [SENTINEL_LINUX_NMCLI]
+            return True, "nmcli networking off", attempted
         logger.warning("nmcli failed (%s); falling back to `ip link`", result[1])
     # Fallback: bring all non-loopback interfaces down.
     if shutil.which("ip"):
         ifaces = list_linux_interfaces()
         if not ifaces:
-            return False, "no non-loopback interfaces found via ip", []
+            return False, "no non-loopback interfaces found via ip", attempted
         all_ok = True
         details: list[str] = []
-        modified: list[str] = []
         for ifname in ifaces:
             ok, msg = _run(["ip", "link", "set", ifname, "down"])
             details.append(f"{ifname}:{'ok' if ok else 'fail'}")
-            if ok:
-                modified.append(ifname)
+            attempted.append(ifname)
             all_ok = all_ok and ok
-        return all_ok, "ip link down: " + ", ".join(details), modified
-    return False, "no supported backend (need nmcli or ip)", []
+        return all_ok, "ip link down: " + ", ".join(details), attempted
+    return False, "no supported backend (need nmcli or ip)", attempted
 
 
 def list_linux_interfaces() -> list[str]:
@@ -169,8 +176,7 @@ def _cut_full_macos() -> tuple[bool, str, list[str]]:
     for svc in services:
         ok, _msg = _run(["networksetup", "-setnetworkserviceenabled", svc, "off"])
         details.append(f"{svc}:{'ok' if ok else 'fail'}")
-        if ok:
-            modified.append(svc)
+        modified.append(svc)  # attempted: record even on failure / timeout
         all_ok = all_ok and ok
     return all_ok, "networksetup -setnetworkserviceenabled off: " + ", ".join(details), modified
 
@@ -213,8 +219,7 @@ def _cut_full_windows() -> tuple[bool, str, list[str]]:
             ["netsh", "interface", "set", "interface", ifname, "admin=disable"]
         )
         details.append(f"{ifname}:{'ok' if ok else 'fail'}")
-        if ok:
-            modified.append(ifname)
+        modified.append(ifname)  # attempted: record even on failure / timeout
         all_ok = all_ok and ok
     return all_ok, "netsh disable: " + ", ".join(details), modified
 
@@ -231,17 +236,16 @@ def list_windows_interfaces(*, only_enabled: bool = True) -> list[str]:
     Windows versions, or non-Windows hosts running unit tests).
 
     Args:
-        only_enabled: when True (default), return only interfaces whose
-            admin state is "Up". cut_full uses this to find disable-able
-            interfaces. recovery/restore passes only_enabled=False so
+        only_enabled: when True (default), return every interface not
+            confirmed admin-disabled (Get-NetAdapter Status other than
+            "Disabled", including unknown ones). cut_full uses this to find
+            the interfaces to disable; its read-back then requires each to
+            read as disabled. recovery/restore passes only_enabled=False so
             that previously-disabled interfaces are also re-enabled.
 
-    Status mapping (Get-NetAdapter):
-        "Up"        -> enabled
-        "Disabled"  -> disabled
-        "NotPresent"/"Disconnected" -> treated as disabled for cut/restore
-            purposes (we won't try to disable something not present, and
-            we won't re-enable a disconnected adapter on restore)
+    Status mapping (Get-NetAdapter) for only_enabled=True:
+        "Disabled" -> excluded (already admin-disabled)
+        anything else (Up, Disconnected, NotPresent, missing) -> included
     """
     ifs = _list_windows_interfaces_via_powershell(only_enabled=only_enabled)
     if ifs is not None:
@@ -291,7 +295,10 @@ def _list_windows_interfaces_via_powershell(*, only_enabled: bool) -> list[str] 
         status = item.get("Status")
         if not isinstance(name, str) or not name:
             continue
-        if only_enabled and status != "Up":
+        # Cut targets: everything not confirmed admin-disabled (Up,
+        # Disconnected, unknown or missing status). The cut's read-back then
+        # requires each one to read as disabled.
+        if only_enabled and status == "Disabled":
             continue
         ifs.append(name)
     return ifs

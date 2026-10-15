@@ -136,7 +136,7 @@ OS の権限を変える操作・root での実行・実機の pf 有効化は�
 
 **意図して入れなかったもの**：`permission.py` の配線（10/13 に未配線のまま入れる判断がされている）、心拍・監督（同じユーザーで動く監督は、監督対象と一緒に止められるので意味がない。第二段で別ユーザーとして作る）、ソケット・別プロセス化（§7 の承認後）。
 
-テスト：`tests/test_self_defense.py` 167件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 703 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
+テスト：`tests/test_self_defense.py` 184件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 720 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
 
 <a id="privileged-deployment"></a>
 ## 7. 【代表承認事項】権限分離を実地に適用する手順案
@@ -230,11 +230,13 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 | 手順 | 結果 | 判定 | テスト |
 |---|---|---|---|
 | 対象0件 | — | FAILED | `test_cut_with_nothing_to_disable_is_not_success` |
-| 一部だけ成功 | — | FAILED（成功した分は記録） | `test_partial_cut_records_the_interfaces_that_went_down` |
+| 一部だけ成功・失敗・時間切れ | — | FAILED。**試みた対象はすべて記録**（失敗・時間切れでも効いている可能性があるため。復旧で有効化と読み直しの対象になる。9回目の指摘で修正） | `test_partial_cut_records_the_interfaces_that_went_down`・`test_full_cut_records_attempted_targets_even_when_a_command_fails`・`test_full_cut_records_failed_service_or_adapter` |
+| Windows の遮断対象 | Get-NetAdapter の Status が `Disabled` 以外（Up・Disconnected・不明）をすべて対象にする | 読み直しで無効を確認できない対象があれば FAILED（9回目） | `test_windows_cut_targets_every_adapter_not_confirmed_disabled`・`test_windows_cut_not_applied_when_an_adapter_is_not_confirmed_disabled` |
 | 全部のコマンドが成功 | 読み直しで全対象が無効 | 成功 | `test_full_cut_is_confirmed_by_read_back` |
 | 同上 | 有効・不明・一覧に無い・読めない | **FAILED**（コマンドの成功だけでは遮断と言わない。点検で見つけて修正） | 同上・`test_full_cut_unreadable_state_is_not_confirmed` |
 | 読み直しの道具 | Linux で `ip` が無い・Windows で PowerShell が無い | 遮断で使える代わりの道具（nmcli・netsh）でも読み直す。netsh の Admin State が英語以外なら「不明」 | `test_linux_states_keep_nmcli_when_ip_fails`・`test_windows_states_fall_back_to_netsh` |
 | 台帳に書けない | — | FAILED（`os=… ledger=FAILED` と戻し方を表示） | `test_ledger_write_failure_is_reported_not_raised` |
+| egress 遮断の読み直しの解析（9回目） | コメント・空行を除いて構造を見る。nft：`table inet zee_egress` に `type filter hook output` で `policy drop;` の chain。iptables：`-N ZEE_EGRESS` の中に無条件の `-j DROP`（それより前に無条件 ACCEPT が無い）、OUTPUT の先頭規則が `-j ZEE_EGRESS`。pf：アンカーに `block drop out all` | 形が違えば missing、見出しが無い等で解析できなければ unverified。どちらも FAILED | `test_nft_read_back_checks_hook_and_policy`・`test_iptables_read_back_checks_structure`・`test_pf_read_back_needs_the_outbound_block_rule` |
 | egress 遮断（`cut_egress`）の規則の読み直し | 全部確認 | 成功（台帳に `verified: confirmed`） | `test_egress_cut_confirmed_when_rule_reads_back`・`test_iptables_egress_needs_chain_and_jump`・`test_pf_egress_needs_rules_and_pf_enabled` |
 | 同上 | 無い（missing）・読めない／ツールなし（unverified） | FAILED。通知の本文に「not confirmed by read-back」と理由。台帳に結果 | `test_egress_cut_not_confirmed_is_failed`・`test_egress_cut_tool_missing_is_unverified`・`test_windows_egress_rule_missing_is_failed`・`test_handle_notifies_unconfirmed_egress_cut` |
 | macOS（pf）の成功条件 | アンカー `com.apple/zee-egress-cut` に block があり、pf が有効で、**主ルールセットに `anchor "com.apple/*"`（または Zee のアンカー名）がある** | どれか欠ければ FAILED（参照が無ければ missing） | `test_pf_cut_requires_anchor_reachable_from_main_ruleset`・`test_pf_cut_loads_rules_under_the_com_apple_anchor` |
@@ -251,3 +253,19 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 7. **復旧の読み直しが「No such file or directory」という文言だけで規則なしと判定していた**（8回目）。nft の共有ライブラリが無い時（終了 127）も同じ文言が出る。修正済み：終了 126／127 は起動失敗、バックエンド固有の形の答えだけを「無い」とし、それ以外は未確認。
 8. **egress 遮断（`cut_egress.py`）が規則を入れたあと読み直していなかった**（コマンドの終了コードで「applied」）。修正済み：同じバックエンドの表示コマンドで Zee 固有名の規則を読み直し（nft はテーブルに drop、iptables はチェーンの DROP と OUTPUT からの jump、pfctl はアンカーの block と pf の有効、netsh は各ルール名）、確認できた時だけ applied。ツールが「無い」と答えたら missing、ツールが無い・読めない・形が違えば unverified で、どちらも FAILED と通知に書く。台帳の遮断記録に読み直しの結果（`verified`: confirmed／missing／unverified）を残す（full 遮断も同じ。full では、まだ有効と読めた＝missing、読めない・不明＝unverified）。pf のアンカーが空なら missing。ツールの出力が読めない文字コードでも例外で止まらず（置き換えて読む）、台帳と通知まで必ず進む。
 9. **未対応**：Linux の full 遮断は `nmcli networking off` が成功すると `ip link down` を行わず、確認も NetworkManager の状態だけ。NetworkManager の管理外のインターフェースは止まらない可能性がある（実機での確認が要る。§7.3 の隔離環境で確かめる）。
+
+### A-5. 残る既知の限界（実機未確認の項目の一覧）
+
+この枝のテストはすべて OS コマンドを模擬して実行した。**実機（Linux・macOS・Windows）で遮断と復旧を実際に動かしてはいない。** 以下は、§7.3 の隔離試験環境で確かめるまで「設計上そうなるはず」の段階にあるもの。どれも、確かめられない時は成功と表示しない側（FAILED／未確認）に倒してある。
+
+1. **macOS：`com.apple/zee-egress-cut` に入れた規則が実際に通信を止めるか。** 主ルールセットの `anchor "com.apple/*"` の後に quick 付きの通過規則が他のソフトから入っていれば、Zee の block は上書きされうる（pf は quick が無ければ最後に一致した規則が勝つ）。Zee は主ルールセットを書き換えない。
+2. **Windows：netsh の表示形式。** `show rule` の `RemoteIP` の表示（`0.0.0.0/0`・`0.0.0.0-255.255.255.255`・`Any` 以外は FAILED）、項目名、`show allprofiles state` の形式。英語以外の表示では未確認＝FAILED になる。
+3. **Windows：Get-NetAdapter の状態。** `NotPresent` 等の状態の機器があると、遮断は無効を確認できず FAILED になる（安全側だが、誤報になりうる）。
+4. **Linux：`nmcli networking off` が NetworkManager の管理外のインターフェースを止めるか。** 遮断の確認は NetworkManager の状態だけ（付録A-4）。
+5. **Linux：nft・iptables の出力形式。** nft の版による表記の違い（priority の名前表記など）、iptables-legacy と iptables-nft の `-S` の違い。想定と違えば未確認＝FAILED。
+6. **IPv6。** この枝の egress 遮断と復旧・読み直しは IPv4 の規則だけを扱う（IPv6 は別の枝 `fix/egress-ipv6` で作業中。統合時に読み直しも合わせる必要がある）。
+7. **読み直しの時間差。** コマンド直後は OS の状態がまだ変わっていないことがある（無線の再接続など）。その場合、遮断・復旧は FAILED／未確認と表示される（成功に化ける向きではない）。
+8. **「無い」の判定の文言。** 規則が無いことの判定は各ツールの英語の応答文に頼る。表示言語や版で文言が違えば未確認になる。
+9. **規則本体への追加・並べ替えによる迂回。** 読み直しは Zee の規則の形（nft の hook と policy、iptables の無条件 DROP とその前の無条件 ACCEPT（コメントは無視）・OUTPUT の先頭、pf の block 行）を見るが、同じユーザー以上の権限の攻撃者が、条件付きの通過規則を chain／アンカーの中や前に足した場合までは検出しない。
+10. **Linux の ip link 遮断の対象。** 遮断の時点で既に止まっていたインターフェースも対象として記録され、復旧で上げてしまう（この枝以前からの挙動。遮断前の状態を読んで UP のものだけを対象にするのが次の手）。
+11. **権限分離は未適用（§7）。** 同じユーザーの攻撃者は復旧トークンを読んで復旧でき、形の正しい偽の台帳でインターフェースを記録から外せる（その場合は「記録外で無効」の警告に出るだけ）。

@@ -63,18 +63,20 @@ def test_powershell_unavailable_falls_back_to_netsh(monkeypatch):
     assert all_ifs == ["Ethernet", "Wi-Fi"]
 
 
-def test_powershell_returns_status_up_only(monkeypatch):
-    """``NotPresent`` and ``Disconnected`` adapters are treated as disabled,
-    so only_enabled=True excludes them."""
+def test_powershell_excludes_only_confirmed_disabled(monkeypatch):
+    """Cut targets are every adapter not confirmed admin-disabled: Up,
+    Disconnected (admin-enabled, no link) and unknown states such as
+    NotPresent stay in, so the cut's read-back must confirm each one."""
     payload = json.dumps([
         {"Name": "Ethernet", "Status": "Up"},
         {"Name": "Bluetooth", "Status": "NotPresent"},
         {"Name": "Cellular", "Status": "Disconnected"},
+        {"Name": "Old", "Status": "Disabled"},
     ])
     monkeypatch.setattr(cf.shutil, "which",
                         lambda name: "/usr/bin/powershell" if name == "powershell" else None)
     monkeypatch.setattr(cf.subprocess, "check_output", _stub_check_output(payload))
-    assert cf.list_windows_interfaces(only_enabled=True) == ["Ethernet"]
+    assert cf.list_windows_interfaces(only_enabled=True) == ["Ethernet", "Bluetooth", "Cellular"]
 
 
 def test_malformed_powershell_output_falls_back(monkeypatch):

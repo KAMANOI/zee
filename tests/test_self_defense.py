@@ -302,7 +302,7 @@ def test_partial_cut_records_the_interfaces_that_went_down(tmp_path, monkeypatch
     ok, _ = full_mod.cut_full(asset_id="t-host", cut_state=log)
     assert ok is False
     rec = log.latest_unresolved_for("t-host")
-    assert rec is not None and rec.modified == ("eth0",)
+    assert rec is not None and rec.modified == ("eth0", "eth1")  # failed one too (may have applied)
 
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])
@@ -1053,15 +1053,16 @@ def _egress_setup(monkeypatch, tmp_path, modified, *, outputs, tools=None):
 
 
 NFT_LIST = ("nft", "list", "table", "inet", "zee_egress")
+NFT_OK_OUT = ('table inet zee_egress {\n\tchain out {\n\t\ttype filter hook output priority filter; policy drop;\n\t\toif "lo" accept\n\t\tip daddr 10.0.0.0/8 accept\n\t}\n}')
 IPT_S = ("iptables", "-S", "ZEE_EGRESS")
-IPT_C = ("iptables", "-C", "OUTPUT", "-j", "ZEE_EGRESS")
+IPT_C = ("iptables", "-S", "OUTPUT")
 PF_RULES = ("pfctl", "-a", "com.apple/zee-egress-cut", "-s", "rules")
 PF_INFO = ("pfctl", "-s", "info")
 
 
 def test_egress_cut_confirmed_when_rule_reads_back(tmp_path, monkeypatch):
     ok, detail, rec = _egress_setup(monkeypatch, tmp_path, [NFT],
-                                    outputs={NFT_LIST: (True, "table inet zee_egress { chain out { policy drop; } }")})
+                                    outputs={NFT_LIST: (True, NFT_OK_OUT)})
     assert ok is True and rec["verified"] == "confirmed"
 
 
@@ -1080,11 +1081,12 @@ def test_egress_cut_tool_missing_is_unverified(tmp_path, monkeypatch):
 
 
 def test_iptables_egress_needs_chain_and_jump(tmp_path, monkeypatch):
-    chain = {IPT_S: (True, "-N ZEE_EGRESS\n-A ZEE_EGRESS -j DROP")}
-    no_jump = {IPT_C: (False, "iptables: Bad rule (does a matching rule exist in that chain?).")}
+    chain = {IPT_S: (True, "-N ZEE_EGRESS\n-A ZEE_EGRESS -o lo -j ACCEPT\n-A ZEE_EGRESS -j DROP")}
+    no_jump = {IPT_C: (True, "-P OUTPUT ACCEPT")}
     ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT], outputs={**chain, **no_jump})
     assert ok is False and rec["verified"] == "missing"
-    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT], outputs={**chain, IPT_C: (True, "")})
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT],
+                                outputs={**chain, IPT_C: (True, "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS")})
     assert ok is True and rec["verified"] == "confirmed"
 
 
@@ -1309,4 +1311,109 @@ def test_windows_profiles_cover_every_rule(tmp_path, monkeypatch):
         "Public Profile Settings:\n----\nState                                 OFF")
     ok, _d, rec = _egress_setup(monkeypatch, tmp_path, ["zee-egress-cut-block", "zee-egress-cut-allow-local"],
                                 outputs=_win_outputs(block, allow, profiles))
+    assert ok is False and rec["verified"] == "missing"
+
+
+
+# ── ninth external review ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("out, verified", [
+    (NFT_OK_OUT, "confirmed"),
+    ('# policy drop;\ntable inet zee_egress {\n\tchain out {\n\t\ttype filter hook input priority filter; policy drop;\n\t}\n}', "missing"),
+    ('table inet zee_egress {\n\tchain out {\n\t\ttype filter hook output priority filter; policy accept;\n\t\tcomment "drop"\n\t}\n}', "missing"),
+    ("something unexpected", "unverified"),
+])
+def test_nft_read_back_checks_hook_and_policy(tmp_path, monkeypatch, out, verified):
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [NFT], outputs={NFT_LIST: (True, out)})
+    assert rec["verified"] == verified and ok is (verified == "confirmed")
+
+
+@pytest.mark.parametrize("chain, output, verified", [
+    ('-N ZEE_EGRESS\n-A ZEE_EGRESS -m comment --comment "-j DROP" -j ACCEPT', "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS", "missing"),
+    ("-N ZEE_EGRESS\n-A ZEE_EGRESS -j ACCEPT\n-A ZEE_EGRESS -j DROP", "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS", "missing"),
+    ("-N ZEE_EGRESS\n-A ZEE_EGRESS -j DROP", "-P OUTPUT ACCEPT\n-A OUTPUT -j ACCEPT\n-A OUTPUT -j ZEE_EGRESS", "missing"),
+    ("garbage", "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS", "unverified"),
+])
+def test_iptables_read_back_checks_structure(tmp_path, monkeypatch, chain, output, verified):
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT], outputs={IPT_S: (True, chain), IPT_C: (True, output)})
+    assert ok is False and rec["verified"] == verified
+
+
+@pytest.mark.parametrize("rules, verified", [
+    ("pass out all\n# block drop out all", "missing"),
+    ("block drop in all", "missing"),
+])
+def test_pf_read_back_needs_the_outbound_block_rule(tmp_path, monkeypatch, rules, verified):
+    outputs = {PF_RULES: (True, rules), PF_INFO: (True, "Status: Enabled"),
+               ("pfctl", "-s", "rules"): (True, 'anchor "com.apple/*" all')}
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS], outputs=outputs)
+    assert ok is False and rec["verified"] == verified
+
+
+def test_full_cut_records_attempted_targets_even_when_a_command_fails(tmp_path, monkeypatch):
+    """A command that times out may still have disabled its target: record it."""
+    monkeypatch.setattr(full_mod.sys, "platform", "linux")
+    monkeypatch.setattr(full_mod.shutil, "which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(full_mod, "list_linux_interfaces", lambda: ["eth0", "eth1"])
+    def run(cmd):
+        if cmd[:2] == ["nmcli", "networking"]:
+            return False, "timed out"
+        return (cmd[3] == "eth0", "timed out")
+    monkeypatch.setattr(full_mod, "_run", run)
+    log = CutStateLog(tmp_path / "c.jsonl")
+    ok, _d = full_mod.cut_full(asset_id="t-host", cut_state=log)
+    assert ok is False
+    assert log.latest_unresolved_for("t-host").modified == (full_mod.SENTINEL_LINUX_NMCLI, "eth0", "eth1")
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_full_cut_records_failed_service_or_adapter(tmp_path, monkeypatch, platform):
+    monkeypatch.setattr(full_mod.sys, "platform", platform)
+    monkeypatch.setattr(full_mod.shutil, "which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(full_mod, "list_macos_services", lambda **k: ["Wi-Fi", "Ethernet"])
+    monkeypatch.setattr(full_mod, "list_windows_interfaces", lambda **k: ["Wi-Fi", "Ethernet"])
+    monkeypatch.setattr(full_mod, "_run", lambda cmd: ("Wi-Fi" in cmd, "timed out"))
+    log = CutStateLog(tmp_path / "c.jsonl")
+    full_mod.cut_full(asset_id="t-host", cut_state=log)
+    assert log.latest_unresolved_for("t-host").modified == ("Wi-Fi", "Ethernet")
+
+
+def test_windows_cut_targets_every_adapter_not_confirmed_disabled(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(full_mod.shutil, "which", lambda n: "C:/powershell" if n == "powershell" else None)
+    out = ('[{"Name":"Ethernet","Status":"Up"},{"Name":"Wi-Fi","Status":"Disconnected"},'
+           '{"Name":"Old","Status":"Disabled"},{"Name":"Odd"}]')
+    monkeypatch.setattr(full_mod.subprocess, "check_output", lambda *a, **k: out)
+    assert full_mod.list_windows_interfaces(only_enabled=True) == ["Ethernet", "Wi-Fi", "Odd"]
+
+
+def test_windows_cut_not_applied_when_an_adapter_is_not_confirmed_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_mod.sys, "platform", "win32")
+    monkeypatch.setattr(full_mod, "_cut_full_dispatch", lambda: (True, "cut", ["Ethernet", "Odd"]))
+    monkeypatch.setattr(full_mod, "interface_states", lambda: {"Ethernet": "disabled", "Odd": "unknown"})
+    ok, detail = full_mod.cut_full(asset_id="t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"))
+    assert ok is False and "Odd" in detail
+
+
+
+def test_ip_fallback_cut_is_not_failed_by_the_unused_nmcli_switch(tmp_path, monkeypatch):
+    """nmcli off failed, every interface went down via ip: the cut is applied
+    (the NM switch was never turned off, so it is not required to read off)."""
+    monkeypatch.setattr(full_mod.sys, "platform", "linux")
+    monkeypatch.setattr(full_mod.shutil, "which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(full_mod, "list_linux_interfaces", lambda: ["eth0", "wlan0"])
+    monkeypatch.setattr(full_mod, "_run", lambda cmd: (cmd[0] == "ip", "not authorized"))
+    monkeypatch.setattr(full_mod, "interface_states",
+                        lambda: {"eth0": "disabled", "wlan0": "disabled", full_mod.SENTINEL_LINUX_NMCLI: "enabled"})
+    log = CutStateLog(tmp_path / "c.jsonl")
+    ok, _d = full_mod.cut_full(asset_id="t-host", cut_state=log)
+    assert ok is True
+    assert full_mod.SENTINEL_LINUX_NMCLI in log.latest_unresolved_for("t-host").modified  # restore still covers it
+
+
+def test_iptables_commented_unconditional_accept_is_caught(tmp_path, monkeypatch):
+    chain = '-N ZEE_EGRESS\n-A ZEE_EGRESS -m comment --comment "sneaky" -j ACCEPT\n-A ZEE_EGRESS -j DROP'
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT],
+                                outputs={IPT_S: (True, chain), IPT_C: (True, "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS")})
     assert ok is False and rec["verified"] == "missing"

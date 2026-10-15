@@ -75,8 +75,13 @@ Not in any tagged release yet.
   cut also fails when its
   `pfctl -e` fails (other
   than "already enabled"). A partial cut records the interfaces / rules
-  it did change (full cut; Windows egress; iptables once the chain
-  exists), so restore can undo them. If the cut record cannot be
+  it did change (full cut: every target it attempted, including ones
+  whose command failed or timed out; Windows egress; iptables once the
+  chain exists), so restore can undo and re-check them. A Windows full
+  cut targets every adapter not confirmed admin-disabled. Egress
+  read-back checks rule structure (nft output hook with policy drop;
+  iptables unconditional DROP and the OUTPUT jump first; pf outbound
+  block-all) with comments ignored, not substrings. If the cut record cannot be
   written, the cut is reported as failed with `os=ok ledger=FAILED`, what
   was changed, and the `--all-interfaces` way back (no exception).
 - **Cut boundary (`zee.responder.blocker`).** Every automatic cut is

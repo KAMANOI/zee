@@ -11,6 +11,7 @@ invoke these on dry_run.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -71,12 +72,12 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
     checks: list[tuple[str, list[str], object]] = []
     for m in modified:
         if m == SENTINEL_LINUX_NFT_EGRESS:
-            checks.append(("nft", ["nft", "list", "table", "inet", "zee_egress"], "drop"))
+            checks.append(("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure))
         elif m == SENTINEL_LINUX_IPTABLES_EGRESS:
-            checks.append(("iptables chain", ["iptables", "-S", "ZEE_EGRESS"], "-j DROP"))
-            checks.append(("iptables jump", ["iptables", "-C", "OUTPUT", "-j", "ZEE_EGRESS"], ""))
+            checks.append(("iptables chain", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure))
+            checks.append(("iptables jump", ["iptables", "-S", "OUTPUT"], _iptables_jump_first))
         elif m == SENTINEL_MACOS_PFCTL_EGRESS:
-            checks.append(("pfctl rules", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], "block"))
+            checks.append(("pfctl rules", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule))
             checks.append(("pf enabled", ["pfctl", "-s", "info"], "Status: Enabled"))
             checks.append(("pf anchor reference", ["pfctl", "-s", "rules"], _pf_anchor_referenced))
         else:  # Windows rule name
@@ -111,6 +112,56 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
     if missing:
         return "missing", missing + unverified
     return ("unverified", unverified) if unverified else ("confirmed", [])
+
+
+def _lines(out: str) -> list[str]:
+    """Rule lines with comments and blank lines removed."""
+    return [ln.split("#", 1)[0].strip() for ln in out.splitlines() if ln.split("#", 1)[0].strip()]
+
+
+def _nft_structure(out: str, _profiles: set[str]) -> str:
+    """`nft list table inet zee_egress`: the table must hold a chain hooked on
+    output whose policy is drop (comments and other text do not count)."""
+    lines = _lines(out)
+    if not lines or not lines[0].startswith("table inet zee_egress"):
+        return "unverified"
+    hooked = [ln for ln in lines if ln.startswith("type filter hook ")]
+    if not hooked:
+        return "unverified"
+    ok = any(" hook output " in f" {ln} " and "policy drop;" in ln for ln in hooked)
+    return "confirmed" if ok else "missing"
+
+
+def _iptables_chain_structure(out: str, _profiles: set[str]) -> str:
+    """`iptables -S ZEE_EGRESS`: an unconditional `-j DROP` must exist and no
+    unconditional ACCEPT may come before it."""
+    lines = _lines(out)
+    if not lines or lines[0] != "-N ZEE_EGRESS":
+        return "unverified"
+    for ln in lines[1:]:
+        # A comment does not narrow a rule: drop it before judging.
+        bare = re.sub(r'\s-m comment --comment ("[^"]*"|\S+)', "", ln)
+        if bare == "-A ZEE_EGRESS -j ACCEPT":
+            return "missing"
+        if ln == "-A ZEE_EGRESS -j DROP":
+            return "confirmed"
+    return "missing"
+
+
+def _iptables_jump_first(out: str, _profiles: set[str]) -> str:
+    """`iptables -S OUTPUT`: the first OUTPUT rule must be the jump to Zee's
+    chain (Zee inserts it with -I; anything earlier could bypass it)."""
+    lines = _lines(out)
+    if not lines or not lines[0].startswith("-P OUTPUT "):
+        return "unverified"
+    rules = [ln for ln in lines if ln.startswith("-A OUTPUT")]
+    return "confirmed" if rules and rules[0] == "-A OUTPUT -j ZEE_EGRESS" else "missing"
+
+
+def _pf_block_rule(out: str, _profiles: set[str]) -> str:
+    """`pfctl -a <anchor> -s rules`: the outbound block-all rule Zee loads."""
+    lines = _lines(out)
+    return "confirmed" if "block drop out all" in lines else "missing"
 
 
 def _pf_anchor_referenced(out: str, _profiles: set[str]) -> str:
