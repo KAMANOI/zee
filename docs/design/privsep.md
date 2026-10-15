@@ -165,29 +165,40 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 ## 11. 実測の記録
 
-**commit 8d77f78（2026-10-16、4ペルソナ・レビューと Codex 6〜8回目の修正後）：3つの workflow がすべて合格。**
+**commit fb10683（2026-10-16、最終確認（Codex 09・再レビュー）と Codex 10・11 の修正後）：3つの workflow がすべて合格。**
 
-- **Privsep、run 38776780174**
-  - Linux（job 116566375547、ubuntu-24.04・`/usr/bin/python3`・配布の systemd unit をそのまま使用）：37項目すべて PASS。
+- **Privsep、run 38780924628**
+  - Linux（job 116580604559、ubuntu-24.04・`/usr/bin/python3`・配布の systemd unit をそのまま使用、コードは `/usr/local/lib/zee`）：37項目すべて PASS。
     - 対照あり：作業ディレクトリに置いた偽の `zee` は、`-P` なしでは root で実行され、`-P -s` では読まれなかった。
-    - 業務ユーザー `zeework` の `zee watch` が囮への書き込みを検知し、root の遮断部が nft で egress 遮断した。
-    - **遮断中に**業務ユーザーが ①署名なしの復旧要求（`unknown_op`）②自分の `zee restore --all-interfaces`（遮断した名前空間の中で。Z601 で失敗）③`nft delete table inet zee_egress`（`Operation not permitted (you must be root)`）を試した。どれも拒否され、そのたびに試験サーバーへ届かないままであることを確かめた。
+    - 遮断部は起動時に、Python・標準ライブラリ・site-packages・zee のコード・状態ディレクトリの配置を確かめてから動いた。
+    - 業務ユーザーの watch が検知すると、root の遮断部が nft で egress 遮断した。
+    - **遮断中に**業務ユーザーが次の3つを試し、どれも拒否されて、そのたびに届かないままだった：
+      - ① 署名なしの復旧要求 → `unknown_op`
+      - ② 自分の `zee restore --all-interfaces` → Z601 と OS の権限エラー
+      - ③ `nft delete table` → `Operation not permitted (you must be root)`
     - 署名付き復旧で届くようになり、台帳も解決済みになった。
-    - 署名付き停止の後は、遮断部が再起動されず、ソケットも答えない。
-    - 拒否はどれも「終了コードが0でない」かつ「OS の権限エラーの文言」で判定した。
-  - macOS（job 116566375885、macos-latest）：23項目すべて PASS。
-    - 偽の `zee` の対照は Linux と同じ結果。
-    - 配布の plist を LaunchDaemon として読み込めた（ソケット `/var/db/zee/cutd.sock`）。
-    - 業務ユーザー（uid 550）からは LOCAL_PEERCRED で通り、ソケットを開ける別の uid は `peer_not_allowed`。
-    - `kill`・`launchctl bootout` は通らない。署名付きの経路は通り、停止後は再起動されない。**実遮断はしていない。**
-- **Real cut、run 38776792195**：6ジョブすべて合格（Linux 4方式・macOS pf・Windows netsh）。
-- **Tests、run 38776797355**：3 OS × 3 版の9ジョブと canary smoke がすべて合格。
-- **途中の run で見つかったこと**（どれも成功とは表示されなかった）：
-  - run 38774150507：`ReadWritePaths` を `/run/zee` に絞ると iptables-legacy が `/run/xtables.lock` を作れず、復旧が Z606 になった。対処として unit が起動前にロックを作るようにした。
-  - run 38774821723：macOS の `/var/run` が root:daemon 0775 で、遮断部が起動を拒否した。そこで `/var/db/zee` に移した。
-- それ以前の run 38770329531 の記録は取り下げた（遮断中の署名なし復旧を実際には試していなかったため）。
-- **未検証**：代表の Mac を含む実機・Linux 実機・NetworkManager のある環境・スリープ／OS 更新後の復帰・macOS での遮断部経由の実遮断・遮断部経由の full 遮断・root の通知が利用者の画面に届くか。
+    - 署名付き停止の後は再起動されず、`zee privsep status` は終了コード1と Z710 を返した。
+  - macOS（job 116580604545、macos-latest・python.org 3.12 を署名確認のうえ `root:wheel`・`go-w` にしたもの）：23項目すべて PASS。
+    - LaunchDaemon として読み込めた（ソケット `/var/db/zee/cutd.sock`）。
+    - 相手の確認（LOCAL_PEERCRED）・権限・停止・署名の経路が通り、停止後は Z710 を返した。**実遮断はしていない。**
+- **Real cut、run 38780929810**：6ジョブすべて合格。
+- **Tests、run 38780934011**：3 OS × 3 版の9ジョブと canary smoke がすべて合格。
+- **途中で見つかったこと**（どれも遮断部は起動を拒否するか、成功とは表示しなかった）：
+  - run 38774150507：`/run` を読み取り専用にしたため iptables のロックファイルが作れず、復旧が Z606 になった。unit が起動前にロックを作るようにした。
+  - run 38774821723：macOS の `/var/run` は root:daemon 0775 なので起動を拒否した。ソケットを `/var/db/zee` に移した。
+  - run 38779544792：Ubuntu の `/usr/share` を見る配置の確認が厳しすぎて起動を拒否した。標準ライブラリと site-packages を見る形に直した。
+  - run 38780226639：ランナーの `/opt` は 0777 なので起動を拒否した。コードを `/usr/local/lib/zee` に移した。
+  - run 38780235706：テストがソケットの待ち受け前に接続していた（テスト側の問題）。
+- run 38776780174 以前の記録は取り下げた（その後に配置の確認を加えたため）。run 38770329531 は、遮断中の署名なし復旧を試していなかった。
+- **未検証**：
+  - 代表の Mac を含む実機・Linux 実機・NetworkManager のある環境・スリープ／OS 更新後の復帰。
+  - macOS での遮断部経由の実遮断・遮断部経由の full 遮断。
+  - root の通知が利用者の画面に届くか。
 
 外部レビュー（Codex、`~/claude-bridge/outbox/20261016-zee-privsep/`）：
-- 4ペルソナ・レビュー前：01 高4・中1 → 02 高1・中2 → 03 中1 → 04 指摘なし。
-- 4ペルソナ・レビュー（高1・中7・低4）の修正後：06 中3 → 07 高1・中2 → 08 高1・中1。08 の2件は 8d77f78 で直し、単体テストと上の CI で確かめた。**3回の上限に達したため、08 の修正への Codex の再レビューは受けていない。**
+- 01〜04（4ペルソナ・レビュー前）：高4・中1 → 高1・中2 → 中1 → 指摘なし。
+- 06〜08：中3 → 高1・中2 → 高1・中1。
+- 09（最終確認）と再レビュー：高1・中1・低7。
+- 10：高2。
+- 11：高2。
+- **11 の指摘（リンク先の検査・有効化前の点検で上のディレクトリも見る）は fb10683 で直し、単体テストと上の CI で確かめた。回数の上限に達したため、11 の修正への Codex の再レビューは受けていない。**
