@@ -36,7 +36,7 @@ Zee records detection latency, cut completion time and false-positive markers in
 ## Not covered
 
 - **Independent evaluation by outside experts or organizations:** not received.
-- **Scope of real cuts (`dry_run: false`):** run on GitHub's virtual runners (Linux inside a network namespace, macOS, en-US Windows) and one real Mac ([real-cut.md](./real-cut.md)). Not tried: real Linux / Windows hardware, non-English Windows, IPv6, connections opened before the cut, and v0.13.0's rules on a real Mac. The test suite replaces the OS cut commands to check the branching.
+- **Scope of real cuts (`dry_run: false`):** run on GitHub's virtual runners (Linux inside a network namespace, macOS, en-US Windows) and one real Mac ([real-cut.md](./real-cut.md)). Not tried: real Linux / Windows hardware, non-English Windows, IPv6, and connections opened before the cut. The test suite replaces the OS cut commands to check the branching.
 - **Continuous runs on real Linux and Windows hardware:** the CI tests and smoke test pass, but there is no long-running check on real hardware.
 - **Whether a real AI agent follows an injected instruction:** V3 and V4 are static tests of whether the checker flags a sample; agent behavior was not tried.
 - **Gate dynamic inspection, Rug Pull, and conditional runtime behavior:** not evaluated.

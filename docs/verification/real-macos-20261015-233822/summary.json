@@ -1,0 +1,8 @@
+{"mac": "MacBookPro17,1", "macos": "26.6.2",
+ "pf_status_before": "Disabled",
+ "after_zee_restore": {"pf_status_unchanged": true, "pf_main_rules_unchanged": true,
+                       "network_services_unchanged": true, "zee_anchors_empty": true},
+ "after_script_cleanup": {"pf_status_unchanged": true, "pf_main_rules_unchanged": true,
+                          "network_services_unchanged": true, "zee_anchors_empty": true},
+ "all_cut_checks_passed": true,
+ "exit_code": 0}

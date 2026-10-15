@@ -138,7 +138,7 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   GitHub Actions virtual runners — Linux inside a network namespace (nft,
   iptables-nft and iptables-legacy egress; full via `ip link`), macOS pf
   egress, en-US Windows netsh egress — and one real Mac (egress and full,
-  with the rules from just before this release). A run passes only if
+  with the rules from just before this release; re-run with the v0.13.0 rules after release — passed, and Zee's own restore returned pf state and network services to their prior state). A run passes only if
   Zee's cut and its normal restore both report success and traffic
   stopped and came back (before, reachability alone could pass).
   `.github/workflows/real-cut.yml` now runs on every push to main that
@@ -168,8 +168,7 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   implemented:** an attacker running as the same user can still stop
   Zee, read the restore token, or forge a well-formed ledger.
 - Not verified: real Linux / Windows hardware, non-English Windows,
-  Linux with NetworkManager (full cut), v0.13.0's macOS rules on a real
-  Mac. When a result cannot be read back, Zee reports FAILED / unverified,
+  Linux with NetworkManager (full cut). When a result cannot be read back, Zee reports FAILED / unverified,
   never success.
 
 ### Added
