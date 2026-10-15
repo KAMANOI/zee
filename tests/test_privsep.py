@@ -1117,3 +1117,24 @@ def test_a_real_macos_acl_is_refused():
         daemon.check_socket_dir(d)
     subprocess.run(["chmod", "-N", str(d)], check=True)
     daemon.check_socket_dir(d)
+
+
+# ---- Codex 15: a child that can't be opened is a refusal, never skipped
+def test_check_runtime_refuses_a_child_it_cannot_open(monkeypatch):
+    from zee.privsep import daemon
+    root = rtmp()
+    exe, pkg = _tree(root)
+    (pkg / "sub").mkdir(mode=0o755)
+    (pkg / "sub" / "x.py").write_text("")
+    os.chmod(pkg / "sub" / "x.py", 0o644)
+    daemon.check_runtime(str(exe), pkg)
+    real_open = os.open
+
+    def deny_sub(path, flags, mode=0o777, *, dir_fd=None):
+        if path == "sub":
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+    monkeypatch.setattr(daemon.os, "open", deny_sub)
+    monkeypatch.setattr(daemon, "fd_ops_ok", lambda: True)
+    with pytest.raises(ValueError, match="sub"):
+        daemon.check_runtime(str(exe), pkg)

@@ -578,7 +578,8 @@ def _acl_reader() -> Optional[Callable[[int], bool]]:
 
 def fd_ops_ok() -> bool:
     """Everything the placement check needs, or the daemon refuses to start (Z721)."""
-    return (all(hasattr(os, n) for n in ("O_NOFOLLOW", "O_DIRECTORY", "fwalk", "fchdir", "fchmod"))
+    return (all(hasattr(os, n) for n in ("O_NOFOLLOW", "O_DIRECTORY", "fchdir", "fchmod"))
+            and os.listdir in os.supports_fd
             and {os.open, os.mkdir, os.unlink, os.chown, os.stat} <= os.supports_dir_fd
             and {os.stat, os.chown} <= os.supports_follow_symlinks
             and _acl_reader() is not None)
@@ -711,25 +712,31 @@ def _check_file(p: str, what: str) -> None:
 
 
 def _check_tree(top: int, what: str, base) -> None:
-    """Every entry under a checked directory: no link, ours, writable by no one else, no ACL
-    (each directory through the descriptor fwalk opened, each other entry opened O_NOFOLLOW)."""
-    for root, dirs, files, rfd in os.fwalk(".", dir_fd=top, follow_symlinks=False):
-        _no_acl(rfd, what, os.path.join(base, root))
-        for n in dirs + files:
-            shown = os.path.join(base, root, n)
-            st = os.stat(n, dir_fd=rfd, follow_symlinks=False)
+    """Every entry under a checked directory, depth first: opened O_NOFOLLOW relative to its
+    checked parent's descriptor, then on that descriptor: no link, ours, writable by no one
+    else, no ACL; a directory is checked before anything in it is opened. An entry that can't
+    be listed or opened is a refusal, never skipped (os.fwalk skipped those, Codex 15)."""
+    try:
+        names = os.listdir(top)
+    except OSError as e:
+        raise ValueError(f"{what}: {base} can't be listed ({e.strerror})") from None
+    for n in names:
+        shown = os.path.join(base, n)
+        try:
+            fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
+                         dir_fd=top)
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                raise ValueError(f"{what}: {shown} is a symlink (none allowed here)") from None
+            raise ValueError(f"{what}: {shown} can't be opened to be checked ({e.strerror})") from None
+        try:
+            st = os.fstat(fd)
             _ours(st, what, shown)
-            if n in dirs:
-                continue  # fwalk opens it (above) on its own turn
-            try:
-                fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
-                             dir_fd=rfd)
-            except OSError as e:
-                raise ValueError(f"{what}: {shown} can't be opened to check its ACL ({e.strerror})") from None
-            try:
-                _no_acl(fd, what, shown)
-            finally:
-                os.close(fd)
+            _no_acl(fd, what, shown)
+            if stat.S_ISDIR(st.st_mode):
+                _check_tree(fd, what, shown)
+        finally:
+            os.close(fd)
 
 
 def check_runtime(executable: Optional[str] = None, tree: Optional[Path] = None) -> None:
@@ -745,7 +752,7 @@ def check_runtime(executable: Optional[str] = None, tree: Optional[Path] = None)
         tree = Path(__file__).parent.parent
     top = open_dir(tree, "zee code")
     try:
-        _check_tree(top, "zee code", tree)
+        _check_tree(top, "zee code", str(tree))
     finally:
         os.close(top)
 
@@ -760,7 +767,7 @@ def check_state_dir(d: Path) -> Path:
     try:
         if stat.S_IMODE(os.fstat(fd).st_mode) & 0o077:
             raise ValueError(f"state directory must be a directory owned by uid {os.geteuid()}, mode 0700: {d}")
-        _check_tree(fd, "state entry", d)
+        _check_tree(fd, "state entry", str(d))
     finally:
         os.close(fd)
     return d

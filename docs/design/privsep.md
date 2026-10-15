@@ -81,13 +81,13 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 **確かめ方（Codex 13 の後・ファイル記述子基準）**：パス文字列で確かめてから操作する形はやめた（確かめた後・操作の前に差し替える余地が残るため）。
 - `/` を開き、各段を**1つ上の確認済みディレクトリの記述子を基準に** `O_DIRECTORY|O_NOFOLLOW` で開いて（openat）、その記述子を `fstat` して規則2を確かめてから次の段へ進む（**上から下**）。リンクは開く時点で失敗する（Linux は ELOOP、macOS は ENOTDIR）。`..`・`.`・空の要素は文字列の段階で拒否する。
 - 作る時も同じ：確認済みの親の記述子で `mkdirat` し、作った物を `O_NOFOLLOW` で開き直して `fstat`（自分の所有・ディレクトリ）を確かめてから、その記述子に `fchmod`。作ってから拒否する順番にはしない。
-- zee のコードの場所は `__file__` を**解決せずに**、`.parent` を取る前の**ファイルそのもの**まで上の手順で確かめる（リンク・`..`・`.`・空の要素を含めば拒否。`/x/zee/privsep/../daemon.py` の `..` が `.parent` で落ちるのを防ぐ、Codex 14）。中身は `os.fwalk`（リンクをたどらない）で全部確かめる。
+- zee のコードの場所は `__file__` を**解決せずに**、`.parent` を取る前の**ファイルそのもの**まで上の手順で確かめる（リンク・`..`・`.`・空の要素を含めば拒否。`/x/zee/privsep/../daemon.py` の `..` が `.parent` で落ちるのを防ぐ、Codex 14）。中身は自前の再帰で全部確かめる：各項目を確認済みの親の記述子基準に `O_NOFOLLOW` で開き、その記述子で種類・所有者・権限・ACL を確かめ、ディレクトリなら中へ進む。一覧できない・開けない項目は拒否（Z721。`os.fwalk` は開けない子を黙って飛ばしていた、Codex 15）。
 - **拡張 ACL は1つも許さない（Codex 14）**：モードのビットは 0755 でも、ACL で他者に中の名前の作成・削除や書き込みを許せるため。記述子で開いた各段・対象・中身のすべてで確かめる（作成直後に親から継承した ACL も、`fchmod` の前に同じ検査で拒否）。
   - macOS：libSystem の `acl_get_fd_np(fd, ACL_TYPE_EXTENDED)`（`ACL_TYPE_EXTENDED = 0x100`、`<sys/acl.h>`）。NULL かつ errno ENOENT＝ACL 無し、取得できた＝有り（`acl_free` で解放）、それ以外の失敗＝拒否。acl_get(3) と、実ディレクトリに `chmod +a` を付け外しした実測で確認。
   - Linux：`system.posix_acl_access`（ディレクトリは `system.posix_acl_default` も。新しい中身が継承する既定の ACL、acl(5)）の拡張属性を記述子で読む。ENODATA＝無し、ENOTSUP＝その FS に拡張属性が無い（getxattr(2)）、それ以外の失敗＝拒否。
   - ACL を確かめる手段が無い環境では起動を拒否する（Z721）。
 - ソケットは `bind` に記述子基準の形が無い（macOS に bindat は無い）ので、確認済みのソケットのディレクトリへ `fchdir` して名前だけで `bind` し、すぐ元のディレクトリへ戻す。権限は `bind` 前の umask で決め（`--group` 有り 0660・無し 0600。macOS ではソケットの記述子への `fchmod` は EINVAL を実測）、グループは `fchownat(…, AT_SYMLINK_NOFOLLOW)`。ソケットのディレクトリは root 所有でグループ／他から書けない（0755）。0700・0750（root グループ）にすると watch の uid がソケットに届かないため、「中の名前を作れる・差し替えられるのは root だけ」という条件で足りるとした。（司令塔了承 2026-10-16。Linux は接続にソケットへの書き込み権限も要る＝unix(7)。ソケット自体は 0660＋`--group`）
-- 起動時に `os.open`・`os.mkdir`・`os.unlink`・`os.chown`・`os.stat` の `dir_fd` 対応と `O_NOFOLLOW`・`O_DIRECTORY`・`os.fwalk`・`os.fchdir`・`os.fchmod` を確かめ、欠ければ起動を拒否する（Z721）。
+- 起動時に `os.open`・`os.mkdir`・`os.unlink`・`os.chown`・`os.stat` の `dir_fd` 対応と `O_NOFOLLOW`・`O_DIRECTORY`・`os.listdir`（記述子）・`os.fchdir`・`os.fchmod` を確かめ、欠ければ起動を拒否する（Z721）。
 - 確かめた後、状態ディレクトリの中のファイルはパスで開く：`/` からそこまでのどの段も root しか名前を変えられないので、同じパスは同じ物に届く（境界として明記）。
 
 **単純化の経緯（2026-10-16）**：Codex 06〜12 では、リンクを許したうえで連鎖・祖先・標準ライブラリ・site-packages・.pth・正規化を起動時に検査する約150行の処理に、毎回新しい高の指摘が出た（12回目は `alias/../late.py` が正規化で検査をすり抜ける件）。設計の問題と判断し、その処理を消して上の規則1つにした。Python 自身のライブラリの検査もやめ、手順書の有効化前の点検（Python を使わない `find`）に移した。
