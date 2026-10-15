@@ -11,6 +11,8 @@ on:
     paths:
       - .github/workflows/real-cut.yml
       - scripts/real_cut_check.py
+      - src/zee/responder/**
+      - src/zee/recovery/**
 
 permissions:
   contents: read

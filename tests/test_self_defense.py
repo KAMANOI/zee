@@ -1234,7 +1234,8 @@ def test_pf_cut_loads_rules_under_the_com_apple_anchor(monkeypatch):
     assert seen[0][:3] == ["pfctl", "-a", "com.apple/zee-egress-cut"]
 
 
-ANY_V4 = ".".join(["0"] * 4) + "/0"
+from zee.responder.cut_egress import WINDOWS_BLOCK_RANGES
+ANY_V4 = ",".join(WINDOWS_BLOCK_RANGES)
 
 
 def _win_rule(name, *, enabled="Yes", direction="Out", action="Block", remote=ANY_V4,
@@ -1417,3 +1418,18 @@ def test_iptables_commented_unconditional_accept_is_caught(tmp_path, monkeypatch
     ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT],
                                 outputs={IPT_S: (True, chain), IPT_C: (True, "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS")})
     assert ok is False and rec["verified"] == "missing"
+
+
+
+def test_windows_egress_cut_is_one_block_rule_excluding_local(monkeypatch):
+    """Found by the real-cut workflow (2026-10-15): netsh rejects a /0
+    remoteip, and a Windows block rule beats any allow rule."""
+    from zee.responder import cut_egress as egress_mod
+    calls: list = []
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda n: f"C:/{n}")
+    monkeypatch.setattr(egress_mod, "_run", lambda cmd: calls.append(cmd) or (True, "Ok."))
+    ok, _d, modified = egress_mod._cut_egress_windows()
+    assert ok is True and modified == ["zee-egress-cut-block"]
+    assert len(calls) == 1 and "action=block" in calls[0]
+    remote = next(a for a in calls[0] if a.startswith("remoteip="))
+    assert "/0" not in remote and "10.0.0.0" not in remote and "127." not in remote

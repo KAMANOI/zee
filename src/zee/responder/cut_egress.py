@@ -172,10 +172,14 @@ def _pf_anchor_referenced(out: str, _profiles: set[str]) -> str:
     return "confirmed" if hit else "missing"
 
 
-# Forms netsh may show for the block rule's remoteip (Zee sets 0.0.0.0/0).
-# ponytail: exact display not checked on a real Windows host; any other form
-# is "missing" (the cut is then reported FAILED, never applied).
-_ANY_V4 = ("0.0.0.0/0", "0.0.0.0-255.255.255.255", "Any")
+# IPv4 outside RFC 1918 (10/8, 172.16/12, 192.168/16) and loopback (127/8).
+WINDOWS_BLOCK_RANGES = (
+    "0.0.0.0-9.255.255.255",
+    "11.0.0.0-126.255.255.255",
+    "128.0.0.0-172.15.255.255",
+    "172.32.0.0-192.167.255.255",
+    "192.169.0.0-255.255.255.255",
+)
 
 
 def _netsh_rule_check(name: str):
@@ -196,8 +200,10 @@ def _netsh_rule_check(name: str):
         profiles.update(p.strip() for p in fields["Profiles"].split(",") if p.strip())
         if fields["Enabled"] != "Yes" or fields["Direction"] != "Out" or fields["Action"] != want_action:
             return "missing"
-        if want_action == "Block" and fields["RemoteIP"] not in _ANY_V4:
-            return "missing"
+        if want_action == "Block":
+            shown = {r.strip() for r in fields["RemoteIP"].split(",") if r.strip()}
+            if shown != set(WINDOWS_BLOCK_RANGES):
+                return "missing"
         return "confirmed"
     return check
 
@@ -310,19 +316,16 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
 def _cut_egress_windows() -> tuple[bool, str, list[str]]:
     if not shutil.which("netsh"):
         return False, "netsh not available", []
-    # Block all outbound by default; allow local subnets.
+    # One block rule over every IPv4 range except RFC 1918 and loopback.
+    # (netsh rejects remoteip=0.0.0.0/0, and in Windows Firewall a block rule
+    # beats any allow rule, so "block all + allow local" cannot work; both
+    # were found by the real-cut workflow run on 2026-10-15.)
     commands = [
         [
             "netsh", "advfirewall", "firewall", "add", "rule",
             f"name={ZEE_RULE_TAG}-block",
             "dir=out", "action=block", "enable=yes",
-            "remoteip=0.0.0.0/0",
-        ],
-        [
-            "netsh", "advfirewall", "firewall", "add", "rule",
-            f"name={ZEE_RULE_TAG}-allow-local",
-            "dir=out", "action=allow", "enable=yes",
-            "remoteip=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8",
+            "remoteip=" + ",".join(WINDOWS_BLOCK_RANGES),
         ],
     ]
     added: list[str] = []

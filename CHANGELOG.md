@@ -57,6 +57,12 @@ Not in any tagged release yet.
   networking enabled) and re-enables macOS services the cut disabled.
   Restore notifications state that the cut ledger is writable by the
   same user Zee runs as.
+- **Windows egress cut now actually installs.** A real run on GitHub's
+  Windows runner showed netsh rejecting `remoteip=0.0.0.0/0`, so the block
+  rule was never added (Zee reported the cut as failed). Windows Firewall
+  also lets a block rule beat any allow rule, so "block all + allow local"
+  could not work anyway. The cut is now one block rule over the IPv4 ranges
+  outside RFC 1918 and loopback.
 - **A failed or empty cut is no longer reported as success.** The cut
   notification title says `Zee cut FAILED` when the cut failed (it said
   `applied`). `full` cut with no interface / service to disable returns
