@@ -133,11 +133,20 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
         with:
           persist-credentials: false
-      - name: Python readable by every user, root-owned code, a second user
+      - name: Root-owned Python 3.12 (python.org, signature checked), root-owned code, a second user
         run: |
           set -eux
-          PY=/opt/homebrew/bin/python3
+          # /usr/bin/python3 is 3.9 (no tomllib); Homebrew's Python belongs to the runner user,
+          # and the daemon refuses an interpreter anyone but root can change (check_runtime).
+          curl -fsSLo /tmp/python.pkg https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg
+          pkgutil --check-signature /tmp/python.pkg | tee /tmp/sig.txt
+          grep -q "Developer ID Installer: Python Software Foundation" /tmp/sig.txt
+          sudo installer -pkg /tmp/python.pkg -target /
+          F=/Library/Frameworks/Python.framework
+          sudo chown -R root:wheel "$F" && sudo chmod -R go-w "$F"
+          PY="$F/Versions/3.12/bin/python3.12"
           "$PY" -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+          ls -ld /Library /Library/Frameworks "$F" "/Library/Application Support"
           echo "PY=$PY" >> "$GITHUB_ENV"
           Z="/Library/Application Support/Zee"
           sudo mkdir -p "$Z" && sudo cp -R src "$Z/"

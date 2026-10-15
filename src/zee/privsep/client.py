@@ -80,7 +80,7 @@ def privsep_cut(socket_path: Path, *, server_uid: int = 0):
         except NotSent as e:
             return False, f"Z710 cut daemon unreachable ({e}); nothing was sent, so Zee cut nothing"
         except (OSError, ValueError) as e:
-            return False, (f"Z710 cut result UNKNOWN ({e}): the daemon got the request and may have cut; "
+            return False, (f"Z720 cut result UNKNOWN ({e}): the daemon got the request and may have cut; "
                            "check `zee privsep status` (unresolved) before assuming anything")
         if r.get("ok") is True:
             return True, f"cut daemon: {r.get('detail', '')}"

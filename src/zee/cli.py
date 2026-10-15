@@ -188,8 +188,12 @@ def _start_privsep_heartbeat(sock: Path, call, sender=None, every: float = 30,
                 print(f"[zee watch] cut daemon UNREACHABLE ({e}): automatic cuts will fail",
                       file=sys.stderr, flush=True)
             if not ok and up is not False:
-                announce("Zee cut daemon UNREACHABLE (Z710)",
-                         f"automatic cuts will FAIL until it answers again: {r}")
+                if "code" in r:  # it answered, but refused (e.g. Z712: this uid is not allowed)
+                    announce(f"Zee cut daemon REFUSED this watch ({r['code']})",
+                             f"automatic cuts will FAIL: {r}")
+                else:
+                    announce("Zee cut daemon UNREACHABLE (Z710)",
+                             f"automatic cuts will FAIL until it answers again: {r}")
             elif ok and up is False:
                 announce("Zee cut daemon reachable again", "automatic cuts go to the daemon again")
             up = ok

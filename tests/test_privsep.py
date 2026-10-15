@@ -30,6 +30,15 @@ from .test_egress_approval import Clock, HmacVerifier, sign
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Unix sockets / POSIX modes")
 
 WATCH, OTHER = 1001, 1002
+
+
+@pytest.fixture(autouse=True)
+def _dev_runtime(request, monkeypatch):
+    """serve() refuses a Python / zee tree others can write (the dev venv is one):
+    tested on its own below and on the CI runners; skipped for the socket tests."""
+    if "check_runtime" not in request.node.name:
+        from zee.privsep import daemon
+        monkeypatch.setattr(daemon, "check_runtime", lambda *a, **k: None)
 CFG = '''dry_run = false
 [[assets]]
 id = "ws"
@@ -575,7 +584,7 @@ def test_socket_directory_must_not_be_writable_by_others(tmp_path):
     d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier())
     loose = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
     os.chmod(loose, 0o777)
-    with pytest.raises(ValueError, match="not writable by others"):
+    with pytest.raises(ValueError, match="writable by others"):
         serve(d, loose / "s")
     real = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
     link = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "l"
@@ -745,3 +754,84 @@ def test_link_hop_in_the_middle_of_a_chain_is_checked():
         check_socket_dir(trusted / "link" / "run")
     (trusted / "direct").symlink_to(safe)
     assert check_socket_dir(trusted / "direct" / "run") == Path(os.path.realpath(safe / "run"))
+
+
+# ---- final review (Codex 09 / re-review)
+def test_gid0_group_writable_socket_dir_is_refused(monkeypatch):
+    """No group gets write access, gid 0 included (st_gid is faked: chgrp 0 needs root)."""
+    from zee.privsep import daemon
+    d = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(d, 0o775)
+    real_lstat, target = os.lstat, str(os.path.realpath(d))
+
+    def lstat(p):
+        st = real_lstat(p)
+        if str(p) == target:
+            return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, 0,
+                                   st.st_size, int(st.st_atime), int(st.st_mtime), int(st.st_ctime)))
+        return st
+    monkeypatch.setattr(daemon.os, "lstat", lstat)
+    with pytest.raises(ValueError, match="writable by others"):
+        daemon.check_socket_dir(d)
+
+
+def test_check_runtime_refuses_code_others_can_write():
+    from zee.privsep.daemon import check_runtime
+    root = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    (root / "bin").mkdir(mode=0o755)
+    exe = root / "bin" / "python3.12"
+    exe.write_text("")
+    os.chmod(exe, 0o755)
+    (root / "bin" / "python3").symlink_to("python3.12")
+    pkg = root / "zee"
+    pkg.mkdir(mode=0o755)
+    (pkg / "a.py").write_text("")
+    os.chmod(pkg / "a.py", 0o644)
+    t = {"python": root / "bin" / "python3", "prefix": root, "zee package": pkg}
+    check_runtime(t)
+    os.chmod(pkg / "a.py", 0o666)  # a module anyone can rewrite
+    with pytest.raises(ValueError, match="zee package"):
+        check_runtime(t)
+    os.chmod(pkg / "a.py", 0o644)
+    os.chmod(exe, 0o775)  # the interpreter itself group-writable
+    with pytest.raises(ValueError, match="python"):
+        check_runtime(t)
+
+
+def test_check_runtime_refuses_this_dev_venv():
+    """The real default targets: a dev checkout is not root-controlled, so a daemon refuses it."""
+    from zee.privsep.daemon import check_runtime
+    if os.geteuid() == 0:
+        pytest.skip("as root the tree may legitimately pass")
+    try:
+        check_runtime()
+    except ValueError:
+        return
+    pytest.skip("this tree happens to be owned and unwritable (e.g. CI copy)")
+
+
+def test_daemon_start_refusal_is_a_zee_error(tmp_path, capsys):
+    from zee.cli import main
+    loose = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(loose, 0o777)
+    assert main(["privsep", "daemon", "--state-dir", str(tmp_path / "s"), "--allow-uid", "1",
+                 "--socket", str(loose / "s")]) == 1
+    assert "Z721" in capsys.readouterr().err
+    assert main(["privsep", "daemon", "--state-dir", str(tmp_path / "s"), "--allow-uid", "1",
+                 "--group", "no-such-group-zee", "--socket", str(loose / "s")]) == 1
+    assert "Z721" in capsys.readouterr().err
+
+
+def test_heartbeat_names_a_refusal_by_its_code():
+    from zee import cli
+    notes, done = [], threading.Event()
+    answers = [{"ok": False, "error": "peer_not_allowed", "code": "Z712"}]
+
+    def call(sock, req, timeout):
+        if not answers:
+            done.set()
+            threading.Event().wait()
+        return answers.pop(0)
+    cli._start_privsep_heartbeat(Path("/x"), call, None, every=0, notify=lambda t, b: notes.append(t))
+    assert done.wait(5)
+    assert notes == ["Zee cut daemon REFUSED this watch (Z712)"]

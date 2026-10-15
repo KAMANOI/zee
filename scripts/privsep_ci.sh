@@ -131,10 +131,10 @@ print(json.dumps(call('$SOCK', {'op': 'restore', 'asset_id': 'ws', 'scope': 'all
   check "while cut: still unreachable after (1)" offline
   sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -m zee init-restore-token >/dev/null 2>&1
   tok=$(sudo cat "/home/$WATCH_USER/.zee/restore_token")
-  out=$(in_cut "$PY" -P -m zee -c "$WATCH_CONFIG" restore ws --all-interfaces --token "$tok" 2>&1); rc=$?
+  out=$(in_cut "$PY" -P -m zee --verbose -c "$WATCH_CONFIG" restore ws --all-interfaces --token "$tok" 2>&1); rc=$?
   echo "  -> rc=$rc $(tail -c 400 <<<"$out")"
-  check "while cut: watch user's own zee restore --all-interfaces fails (Z60x)" \
-    bash -c "[ $rc -ne 0 ] && grep -q 'Z60[16]' <<<\"\$1\"" _ "$out"
+  check "while cut: watch user's own zee restore --all-interfaces fails (Z601 + an OS permission error)" \
+    bash -c "[ $rc -ne 0 ] && grep -q 'Z601' <<<\"\$1\" && grep -Eqi 'not permitted|Permission denied' <<<\"\$1\"" _ "$out"
   check "while cut: still unreachable after (2)" offline
   check "while cut: watch user's nft delete table is refused by the OS" denied in_cut nft delete table inet zee_egress
   check "while cut: still unreachable after (3)" offline
@@ -150,7 +150,9 @@ r=$(signed stop); echo "$r"
 check "signed stop accepted" ok <<<"$r"
 sleep 5
 check "daemon stopped and not restarted by the supervisor" bash -c "! $ACTIVE_CMD"
-check "socket no longer answers" bash -c "! sudo -u '$WATCH_USER' env PYTHONPATH='$ZEE_SRC' '$PY' -m zee privsep status --socket '$SOCK' >/dev/null 2>&1"
+out=$(sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep status --socket "$SOCK" 2>&1 >/dev/null); rc=$?
+echo "  -> rc=$rc ${out:0:200}"
+check "socket no longer answers (non-zero exit and Z710)" bash -c "[ $rc -ne 0 ] && grep -q Z710 <<<\"\$1\"" _ "$out"
 
 echo "failures: $fails"
 exit $((fails > 0))

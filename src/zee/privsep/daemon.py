@@ -513,10 +513,10 @@ def _read_line(sock: socket.socket) -> Optional[bytes]:
 
 
 def _replaceable_by_others(st: os.stat_result, *, sticky_ok: bool) -> bool:
-    """Writable by anyone but root (or us): other-writable, or group-writable for any group
-    except gid 0. Sticky directories (like /tmp) are fine on the way: others can't rename
-    what root owns there."""
-    w = bool(st.st_mode & stat.S_IWOTH) or bool(st.st_mode & stat.S_IWGRP and st.st_gid != 0)
+    """Writable by anyone but the owner: group- or other-writable, whatever the group (gid 0
+    included: a non-root member of it could swap entries). Only sticky directories on the way
+    (like /tmp) are tolerated: others can't rename what root owns there."""
+    w = bool(st.st_mode & (stat.S_IWOTH | stat.S_IWGRP))
     return w and not (sticky_ok and st.st_mode & stat.S_ISVTX)
 
 
@@ -560,6 +560,38 @@ def _resolve_checked(d: Path) -> Path:
     return cur
 
 
+def check_runtime(targets: Optional[dict[str, Path]] = None) -> None:
+    """Refuse to run as root from code that anyone but root could change: the Python
+    executable, its prefix (stdlib) and the zee package, each resolved through
+    directories and links nobody else can replace, owned by us, not group/other-writable.
+    (macOS /usr/bin/python3 is 3.9; a Homebrew Python belongs to the user who installed it.)"""
+    me = os.geteuid()
+    targets = targets or {"python": Path(sys.executable), "prefix": Path(sys.prefix), "base prefix": Path(sys.base_prefix),
+               "zee package": Path(__file__).resolve().parent.parent}
+    for what, t in targets.items():
+        try:
+            real = _resolve_checked(t.parent) / t.name
+            st = os.lstat(real)
+            while stat.S_ISLNK(st.st_mode):  # e.g. bin/python3 -> python3.12, in a checked directory
+                if st.st_uid not in (0, me):
+                    raise ValueError(f"link not owned by root: {real}")
+                real = _resolve_checked((real.parent / os.readlink(real)).parent) / Path(os.readlink(real)).name
+                st = os.lstat(real)
+        except (OSError, ValueError) as e:
+            raise ValueError(f"{what} ({t}) is not root-controlled: {e}") from e
+        if st.st_uid != me or _replaceable_by_others(st, sticky_ok=False):
+            raise ValueError(f"{what} ({real}) must be owned by uid {me} and writable by no one else")
+        if stat.S_ISDIR(st.st_mode):  # the package / prefix contents too
+            for root, dirs, files in os.walk(real):
+                for n in dirs + files:
+                    sub = os.lstat(os.path.join(root, n))
+                    if sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
+                        raise ValueError(f"{what}: {os.path.join(root, n)} must be owned by uid {me} "
+                                         "and writable by no one else")
+                if what != "zee package":
+                    break  # prefix: top level only (site-packages trees can be large)
+
+
 def check_socket_dir(d: Path) -> Path:
     """The socket directory: not a symlink itself, ours, writable by no one else, reached
     only through what others can't replace. Returns the checked, resolved path."""
@@ -577,6 +609,7 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
           check_every: float = 30) -> int:
     """Bind, then serve until a signed ``stop``. Exit 0 so `KeepAlive.SuccessfulExit=false`
     (launchd) / `Restart=on-failure` (systemd) leave it stopped."""
+    check_runtime()
     socket_path = Path(os.path.abspath(socket_path))
     if not os.path.lexists(socket_path.parent):  # e.g. /var/db/zee on macOS (RuntimeDirectory on Linux)
         made = _resolve_checked(socket_path.parent.parent) / socket_path.parent.name

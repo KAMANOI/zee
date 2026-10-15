@@ -25,11 +25,12 @@
      │ 管理（復旧・設定変更・自動遮断の切替・自己防衛の切替・停止・鍵の追加削除）
      │   = {"op":"challenge"} で請求を受け取り → 別端末で署名 → {"op":"submit"}
      ▼ Unix ドメインソケット（macOS /var/db/zee/cutd.sock・Linux /run/zee/cutd.sock。root 所有・業務ユーザーだけの専用グループに 0660。
-     │   ソケットのディレクトリが root 所有・グループ／他から書けず、その上のどのディレクトリも
-     │   他人が名前を変えられない（root 所有で書けない、または /tmp のような sticky）時だけ起動する。
+     │   ソケットのディレクトリが root 所有・グループ／他から書けず（gid 0 のグループも含め、どのグループにも
+     │   書き込みを許さない）、その上のどのディレクトリも他人が名前を変えられない（root 所有でどのグループにも
+     │   書けない、または /tmp のような sticky）時だけ起動する。
      │   書かれたままの経路と解決後の経路の両方で確かめ、途中のシンボリックリンクも root 所有に限る。
-     │   以後の bind・chown・chmod は確かめた解決後の経路で行う。macOS の /var/run のように
-     │   gid 0 以外のグループが書けるディレクトリは許さない（Codex 8回目：uid の大小でグループを信用しない）。
+     │   以後の bind・chown・chmod は確かめた解決後の経路で行う。macOS の /var/run（root:daemon 0775）の
+     │   ようにグループが書けるディレクトリは、グループが何であれ許さない（Codex 8・9回目）。
      │   リンクは1段ずつたどり、途中のリンク（連鎖の中間を含む）とそれが置かれたディレクトリをすべて確かめる。
      │   業務側も、接続した相手の uid が 0 であることをカーネルから確かめてから送る（差し替えたソケットに
      │   「遮断した」と嘘をつかせない）。送った後に返事が来なければ「遮断の結果は不明」と通知し、
@@ -61,7 +62,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 | 対象 | 置き場所（Linux／macOS） | 所有者・権限 | 業務ユーザーから |
 |---|---|---|---|
 | 遮断部のコード | `/opt/zee/src`／`/Library/Application Support/Zee/src` | root、ディレクトリ 755・ファイル 644 | 読めるが書けない |
-| Python 本体 | `/usr/bin/python3` 等 | **root 所有であること**（業務ユーザーが書ける Python を root で動かすと、その人に root を渡す）。**root で動かす時は必ず `-P -s`**（作業ディレクトリとユーザーの site-packages を import しない）で、`cd /` から、ファイルは絶対パスで。付けないと、業務ユーザーが書ける場所に置いた `zee/__main__.py` が root で動く（4ペルソナ・レビューで再現、CI で毎回確認）。常駐の定義（plist・unit）にも `-P -s` を入れた | 書けない |
+| Python 本体 | Linux `/usr/bin/python3`／macOS は python.org の 3.11+ を入れて `chown -R root:wheel`・`chmod -R go-w` したもの（macOS の `/usr/bin/python3` は 3.9 で動かず、Homebrew の Python は利用者の所有） | **root 所有であること**。遮断部は起動時に、Python の実体・`sys.prefix`・zee のコード一式が root 所有でグループ／他から書けず、そこへの経路も差し替えられないことを確かめ、満たさなければ起動を拒否する（Z721）。（業務ユーザーが書ける Python を root で動かすと、その人に root を渡す）。**root で動かす時は必ず `-P -s`**（作業ディレクトリとユーザーの site-packages を import しない）で、`cd /` から、ファイルは絶対パスで。付けないと、業務ユーザーが書ける場所に置いた `zee/__main__.py` が root で動く（4ペルソナ・レビューで再現、CI で毎回確認）。常駐の定義（plist・unit）にも `-P -s` を入れた | 書けない |
 | 状態ディレクトリ | `/var/lib/zee-cutd`／`/Library/Application Support/Zee/cutd` | root、700 | 一覧も読めない |
 | 　承認済みの assets.toml | 同上 `assets.toml` | root、600 | 読めない・書けない |
 | 　自動遮断の許可 | 同上 `auto_containment.json`（permission.py の形式） | root、600 | 同上 |

@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Zee cut daemon (privsep prototype) — docs/design/privsep.md
      Install as root: /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist (root:wheel 0644).
-     Replace PYTHON_BIN (Python 3.11+, readable by root) / WATCH_UID / WATCH_GROUP / WATCH_CONFIG. The code under
+     Replace PYTHON_BIN (a root-owned Python 3.11+: e.g. python.org 3.12 after chown -R root:wheel and chmod -R go-w on /Library/Frameworks/Python.framework; the daemon refuses anything else) / WATCH_UID / WATCH_GROUP / WATCH_CONFIG. The code under
      /Library/Application Support/Zee/src must be root-owned (0755 dirs, 0644 files). -->
 <plist version="1.0">
 <dict>

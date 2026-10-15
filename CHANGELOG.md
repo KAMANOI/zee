@@ -29,7 +29,7 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   by root (kernel peer credentials) and reports "result unknown", never
   "nothing was cut", when a request was sent but no answer came back. Every admin
   request is bound to an applied-operation generation, so a newer approval
-  voids older unused ones. Replies carry codes Z710–Z719
+  voids older unused ones. Replies carry codes Z710–Z721
   (docs/maintenance/privsep_install.md §7); `zee privsep digest` shows what
   is being approved and asks for "yes". Root commands and the shipped
   launchd / systemd definitions run Python with `-P -s` (never import from
@@ -37,7 +37,7 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   its socket directory is not root-owned or is group/other-writable, or if
   any directory or symlink on the way to it (resolved one component at a
   time, every link hop included) could be replaced by anyone but root;
-  only gid 0 may share write access. It then binds the checked path. The
+  no group may write any of them, gid 0 included. It then binds the checked path. The
   macOS socket is `/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775). An
   approved `stop` completes even if the requester hangs up. The admin CLI
   reports Z710 when nothing was sent and Z720 (result unknown) when a

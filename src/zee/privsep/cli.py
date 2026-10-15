@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .. import errors
 from ..egress.signing import payload_digest
-from ..errors import ZeeError, Z710_CUTD_UNREACHABLE, Z719_PRIVSEP_REQUEST_FILE, Z720_CUTD_RESULT_UNKNOWN
+from ..errors import ZeeError, Z710_CUTD_UNREACHABLE, Z719_PRIVSEP_REQUEST_FILE, Z720_CUTD_RESULT_UNKNOWN, Z721_CUTD_START_REFUSED
 from .client import DEFAULT_SOCKET, NotSent, call as _raw_call
 
 DEFAULT_STATE = Path("/Library/Application Support/Zee/cutd" if sys.platform == "darwin"
@@ -56,12 +56,17 @@ def _daemon(a: argparse.Namespace) -> int:
     if os.geteuid() != 0:
         print("[zee cutd] warning: not running as root (cuts and restores will fail)", file=sys.stderr)
     import grp  # POSIX only: imported here so Windows can load the CLI
-    group = None
-    if a.group is not None:
-        group = int(a.group) if a.group.isdigit() else grp.getgrnam(a.group).gr_gid
-    d = CutDaemon(a.state_dir, set(a.allow_uid), watch_config=a.watch_config,
-                  tamper_grace=a.tamper_grace)
-    return serve(d, a.socket, group=group, check_every=a.check_every)
+    try:
+        group = None
+        if a.group is not None:
+            group = int(a.group) if a.group.isdigit() else grp.getgrnam(a.group).gr_gid
+        d = CutDaemon(a.state_dir, set(a.allow_uid), watch_config=a.watch_config,
+                      tamper_grace=a.tamper_grace)
+        return serve(d, a.socket, group=group, check_every=a.check_every)
+    except KeyError as e:
+        raise ZeeError(Z721_CUTD_START_REFUSED, f"no such group: {a.group}") from e
+    except (ValueError, OSError) as e:  # unsafe layout, unusable state / socket directory
+        raise ZeeError(Z721_CUTD_START_REFUSED, str(e)) from e
 
 
 def _status(a: argparse.Namespace) -> int:

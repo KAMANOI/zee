@@ -17,7 +17,19 @@ cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3
   **それが root で実行される**（4ペルソナ・レビューで再現。CI でも「付けないと実行される／付けると実行されない」を毎回確かめる）。
 - `-s`：ユーザーの site-packages を読まない（macOS の sudo は HOME を引き継ぐため）。
 - `cd /`：念のため、業務ユーザーが書けない場所から実行する。ファイル（公開鍵など）は**絶対パス**で渡す。
-- Python 本体も root 所有のものを使う（macOS の Homebrew の Python は業務ユーザーの所有なので**使わない**）。
+- Python 本体も root 所有の 3.11 以上を使う。遮断部は起動時に、Python の実体・`sys.prefix`・zee のコード一式が
+  root 所有でグループ／他から書けないことを確かめ、満たさなければ起動を拒否する（Z721）。
+  - Linux：ディストリビューションの `/usr/bin/python3`（3.11 以上であること）。
+  - macOS：`/usr/bin/python3` は 3.9 なので使えない。Homebrew の Python は利用者の所有なので**使わない**。
+    python.org のインストーラを入れ、署名を確かめてから root 専用にする：
+    ```sh
+    curl -fsSLo /tmp/python.pkg https://www.python.org/ftp/python/3.12.10/python-3.12.10-macos11.pkg
+    pkgutil --check-signature /tmp/python.pkg   # "Developer ID Installer: Python Software Foundation" を確かめる
+    sudo installer -pkg /tmp/python.pkg -target /
+    sudo chown -R root:wheel /Library/Frameworks/Python.framework
+    sudo chmod -R go-w /Library/Frameworks/Python.framework   # 既定は root:admin 775＝admin に root を渡す
+    # 以後 <root 所有の python3> は /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+    ```
 
 ## 0. 先に用意するもの
 
@@ -42,12 +54,12 @@ socket = "/var/db/zee/cutd.sock"   # macOS。Linux は "/run/zee/cutd.sock"
 ```sh
 cd /
 Z="/Library/Application Support/Zee"
-sudo mkdir -p "$Z" && sudo cp -R <リポジトリ>/src "$Z/" && sudo chown -R root:wheel "$Z" && sudo chmod -R go-w "$Z"
+sudo mkdir -p "$Z" && sudo cp -R /絶対パス/<リポジトリ>/src "$Z/" && sudo chown -R root:wheel "$Z" && sudo chmod -R go-w "$Z"
 sudo install -d -m 700 -o root -g wheel "$Z/cutd"
 sudo install -m 600 -o root -g wheel <業務ユーザーの assets.toml の絶対パス> "$Z/cutd/assets.toml"
 # examples/privsep/io.github.kamanoi.zee-cutd.plist の PYTHON_BIN（root 所有の python3）/ WATCH_UID（id -u <業務ユーザー>）/
 # WATCH_GROUP（専用グループの gid）/ WATCH_CONFIG（業務ユーザーの assets.toml の絶対パス）を書き換えて：
-sudo install -m 644 -o root -g wheel io.github.kamanoi.zee-cutd.plist /Library/LaunchDaemons/
+sudo install -m 644 -o root -g wheel /絶対パス/io.github.kamanoi.zee-cutd.plist /Library/LaunchDaemons/
 sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
 cd / && sudo env PYTHONPATH="$Z/src" <root 所有の python3> -P -s -m zee privsep bootstrap-key \
   --key-id phone --public-key /絶対パス/pub.pem
@@ -57,11 +69,11 @@ cd / && sudo env PYTHONPATH="$Z/src" <root 所有の python3> -P -s -m zee privs
 
 ```sh
 cd /
-sudo mkdir -p /opt/zee && sudo cp -R <リポジトリ>/src /opt/zee/ && sudo chown -R root:root /opt/zee && sudo chmod -R go-w /opt/zee
+sudo mkdir -p /opt/zee && sudo cp -R /絶対パス/<リポジトリ>/src /opt/zee/ && sudo chown -R root:root /opt/zee && sudo chmod -R go-w /opt/zee
 sudo install -d -m 700 /var/lib/zee-cutd
 sudo install -m 600 <業務ユーザーの assets.toml の絶対パス> /var/lib/zee-cutd/assets.toml
 # examples/privsep/zee-cutd.service の WATCH_UID / WATCH_GROUP（専用グループ）/ WATCH_CONFIG を書き換えて：
-sudo install -m 644 zee-cutd.service /etc/systemd/system/
+sudo install -m 644 /絶対パス/zee-cutd.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now zee-cutd
 cd / && sudo env PYTHONPATH=/opt/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
   --key-id phone --public-key /絶対パス/pub.pem
@@ -118,3 +130,4 @@ root で：①遮断部を止める ②`<状態ディレクトリ>/admin_keys.js
 | Z718 | 署名は通ったが操作自体が失敗（例：復旧が Z601／Z606） | 返答の `detail` |
 | Z719 | `--request`／`--signature`／`--public-key` のファイルが無い・読めない・壊れている | ファイルのパス |
 | Z720 | 要求は届いたが返事が無い（実行済みの可能性あり） | `zee privsep status` で unresolved・auto を確かめてから次へ |
+| Z721 | 遮断部が起動を拒否（Python・zee のコード・ソケットの置き場所を root 以外が変えられる、または `--group` が無い） | 遮断部のログの理由、冒頭の「root で Python を動かす時の決まり」 |
