@@ -179,7 +179,7 @@ def test_iptables_first_command_timeout_is_recorded(monkeypatch):
     monkeypatch.setattr(egress_mod.sys, "platform", "linux")
     monkeypatch.setattr(egress_mod.shutil, "which", lambda n: "/sbin/iptables" if n == "iptables" else None)
     monkeypatch.setattr(egress_mod, "_run", lambda cmd: (False, "timed out"))
-    assert egress_mod._cut_egress_dispatch()[2] == [IPT]
+    assert egress_mod._cut_egress_dispatch()[2] == [IPT, full_mod.IPT_BACKEND_PREFIX + "unknown"]
 
 
 # ── 4-persona #1: pf enable reference released on restore ─────────────
@@ -370,3 +370,53 @@ def test_pf_sibling_anchors_under_com_apple(monkeypatch, sibling_rules, verdict)
         if cmd[1:3] == ["-a", "com.apple/aaa"] else (False, "unexpected"))
     out = "  com.apple/aaa\n  com.apple/zee-egress-cut\n"
     assert egress_mod._pf_siblings_clear(out, set()) == verdict
+
+
+# ── Codex re-review round 2 ───────────────────────────────────────────
+
+
+def test_old_record_without_backend_stays_unknown_after_a_newer_tagged_cut(tmp_path):
+    log = CutStateLog(tmp_path / "c.jsonl")
+    log.record_cut(asset_id="a", method="egress", platform="linux", modified=[IPT])  # pre-0.13
+    log.record_cut(asset_id="a", method="egress", platform="linux",
+                   modified=[IPT, full_mod.IPT_BACKEND_PREFIX + "nf_tables"])
+    rec = log.latest_unresolved_for("a")
+    assert full_mod.IPT_BACKEND_PREFIX + "unknown" in rec.modified
+
+
+def test_unknown_backend_needs_both_even_with_a_known_one(monkeypatch):
+    _ipt_restore(monkeypatch, {"iptables", "iptables-nft"},
+                 {"iptables": "iptables v1.8.10 (nf_tables)", "iptables-nft": "iptables v1.8.10 (nf_tables)"})
+    steps = dict(restore_mod._firewall_steps("linux", (IPT, full_mod.IPT_BACKEND_PREFIX + "nf_tables",
+                                                         full_mod.IPT_BACKEND_PREFIX + "unknown")))
+    assert steps["iptables legacy backend:not-found"] is None
+
+
+def test_emergency_restore_uses_the_readable_record(tmp_path, monkeypatch):
+    """Codex repro: legacy cut on record, only nf_tables tools now: the
+    emergency path must be unverified too, and the cut stays unresolved."""
+    from zee.errors import ZeeError
+    monkeypatch.setattr(restore_mod.sys, "platform", "linux")
+    monkeypatch.setattr(restore_mod, "notify_local", lambda t, b: True)
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    _ipt_restore(monkeypatch, {"ip", "nft", "iptables", "iptables-nft"},
+                 {"iptables": "iptables v1.8.10 (nf_tables)", "iptables-nft": "iptables v1.8.10 (nf_tables)"})
+    log = CutStateLog(tmp_path / "c.jsonl")
+    log.record_cut(asset_id="a", method="egress", platform="linux",
+                   modified=[IPT, full_mod.IPT_BACKEND_PREFIX + "legacy"])
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("a", cut_state=log, all_interfaces=True)
+    assert ei.value.code == "Z606" and log.latest_unresolved_for("a") is not None
+
+
+def test_emergency_restore_releases_the_recorded_pf_token(tmp_path, monkeypatch):
+    monkeypatch.setattr(restore_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    log = CutStateLog(tmp_path / "c.jsonl")
+    log.record_cut(asset_id="a", method="egress", platform="darwin", modified=[PF, TOKEN])
+    status, _d, _t = restore_mod._restore_compat(restore_mod._recorded_firewall(log, "a"))
+    assert ["pfctl", "-X", "987654321"] in calls and status is True

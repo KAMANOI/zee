@@ -39,6 +39,9 @@ def default_cut_state_path() -> Path:
 # Recorded for a Linux full cut done with `nmcli networking off` (not an
 # interface name; Linux interface names are at most 15 characters).
 SENTINEL_LINUX_NMCLI = "__zee_nmcli_networking__"
+# iptables egress cut and the kernel backend its `iptables` used.
+SENTINEL_LINUX_IPTABLES_EGRESS = "__zee_iptables_egress_chain__"
+IPT_BACKEND_PREFIX = "__zee_iptables_backend__:"
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,12 @@ def _parse(raw: object) -> "CutRecord | str":
     if not isinstance(modified, list) or not modified or \
             not all(isinstance(m, str) and m for m in modified):
         raise ValueError("modified must be a non-empty list of names")
+    if SENTINEL_LINUX_IPTABLES_EGRESS in modified and not any(
+            m.startswith(IPT_BACKEND_PREFIX) for m in modified):
+        # Per record, before records are merged: an iptables cut that did not
+        # say its backend (before v0.13.0) stays "unknown" even when a later
+        # cut of the same asset names one, so restore checks both.
+        modified = [*modified, IPT_BACKEND_PREFIX + "unknown"]
     return CutRecord(asset_id=asset_id, cut_at=cut_at, method=raw["method"],
                      platform=platform, modified=tuple(modified))
 

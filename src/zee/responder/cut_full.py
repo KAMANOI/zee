@@ -19,7 +19,12 @@ import subprocess
 import sys
 from typing import Optional
 
-from ..telemetry.cut_state import SENTINEL_LINUX_NMCLI, CutStateLog
+from ..telemetry.cut_state import (  # noqa: F401 - re-exported
+    IPT_BACKEND_PREFIX,
+    SENTINEL_LINUX_IPTABLES_EGRESS,
+    SENTINEL_LINUX_NMCLI,
+    CutStateLog,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +32,10 @@ logger = logging.getLogger(__name__)
 # tied to a specific interface name. recovery/restore.py branches on
 # these to undo the right side-effect.
 SENTINEL_LINUX_NFT_EGRESS = "__zee_nft_egress_table__"
-SENTINEL_LINUX_IPTABLES_EGRESS = "__zee_iptables_egress_chain__"
 SENTINEL_MACOS_PFCTL_EGRESS = "__zee_pfctl_egress_anchor__"
 # `pfctl -E` returns a token for the pf enable reference Zee took; recorded as
 # "<prefix><token>" so restore can release exactly that one (`pfctl -X`).
 PF_TOKEN_PREFIX = "__zee_pf_enable_token__:"
-# The kernel backend the cut's `iptables` used ("legacy" / "nf_tables"), so
-# restore can insist on a tool that reads that backend back.
-IPT_BACKEND_PREFIX = "__zee_iptables_backend__:"
 
 
 def iptables_backend(version_out: str) -> Optional[str]:

@@ -48,7 +48,8 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   kernel backend, and `iptables` may have been switched since the cut);
   the iptables cut records its kernel backend (legacy / nf_tables, from
   `iptables --version`) and restore is unverified unless a tool of that
-  backend is installed (a record without it needs both). Recorded interfaces / services are re-read afterwards and must
+  backend is installed (an unknown backend, including any record from
+  before v0.13.0, needs both — kept per record when records are merged). Recorded interfaces / services are re-read afterwards and must
   be positively read back as enabled: disabled fails (Z601); not listed,
   unknown state (including NetworkManager not answering) or an unreadable
   / empty listing is unverified (Z606). Disabled ones outside the record
@@ -99,9 +100,10 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   with no other anchor or `pass ... quick` rule ahead of it (a reference
   such as `anchor "com.apple/*" in on lo0` no longer counts), and no
   other anchor under `com.apple/` holding a `pass ... quick` rule that is
-  not inbound-only, or a nested anchor. If `pfctl -E` fails or times out,
-  any token it printed is still recorded, and a reference that cannot be
-  known is recorded as unknown (restore then says unverified). A partial cut records the interfaces / rules
+  not inbound-only, or a nested anchor. If `pfctl -E` fails, times out
+  or prints no token, any token it printed is still recorded, and a
+  reference that cannot be known is recorded as unknown (restore then
+  says unverified). A partial cut records the interfaces / rules
   it did change (full cut: every target it attempted, including ones
   whose command failed or timed out; every egress backend when the
   outcome is uncertain — an nft or pf command that timed out, any failed
@@ -155,9 +157,11 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
 - **macOS: rules added after the cut are not watched**, and anchors
   nested more than one level under `com.apple/` are not read (one found
   makes the cut unconfirmed).
-- **The emergency restore (`--all-interfaces`) does not release the pf
-  enable reference** (it does not use the ledger): rules are removed and
-  traffic comes back, but pf may stay enabled.
+- **The emergency restore (`--all-interfaces`) uses the cut record only
+  when it is readable** (it then releases the pf enable reference and
+  checks the recorded iptables backend like the normal restore). Without
+  a readable record it removes Zee's rules on the installed tools but
+  cannot release the pf reference, so pf may stay enabled.
 - **Privilege separation (`docs/design/self-defense.md` §7) is not
   implemented:** an attacker running as the same user can still stop
   Zee, read the restore token, or forge a well-formed ledger.

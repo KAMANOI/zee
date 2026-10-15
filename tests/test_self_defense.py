@@ -274,13 +274,15 @@ def test_iptables_partial_install_is_recorded(monkeypatch):
     monkeypatch.setattr(egress_mod.shutil, "which", lambda name: "/sbin/iptables" if name == "iptables" else None)
     monkeypatch.setattr(egress_mod, "_run", lambda cmd: (cmd[1] != "-I", "boom"))
     ok, _detail, modified = egress_mod._cut_egress_dispatch()
-    assert ok is False and modified == [full_mod.SENTINEL_LINUX_IPTABLES_EGRESS]
+    assert ok is False and modified == [full_mod.SENTINEL_LINUX_IPTABLES_EGRESS,
+                                        full_mod.IPT_BACKEND_PREFIX + "unknown"]
 
 
 @pytest.mark.parametrize("rc, err, expect_ok, expect_mod", [
     (0, "No ALTQ support in kernel\npf enabled\nToken : 12345678901234\n", True,
      [full_mod.SENTINEL_MACOS_PFCTL_EGRESS, full_mod.PF_TOKEN_PREFIX + "12345678901234"]),
-    (0, "pf enabled\n", True, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]),  # no token: nothing to release
+    (0, "pf enabled\n", True,   # no token: reference unknown, restore says unverified
+     [full_mod.SENTINEL_MACOS_PFCTL_EGRESS, full_mod.PF_TOKEN_PREFIX + "unknown"]),
     (1, "pfctl: permission denied", False,   # reference unknown: restore says unverified
      [full_mod.SENTINEL_MACOS_PFCTL_EGRESS, full_mod.PF_TOKEN_PREFIX + "unknown"]),
 ])
@@ -667,7 +669,7 @@ def test_notifications_say_the_ledger_is_user_writable(tmp_path, monkeypatch):
     bodies: list = []
     monkeypatch.setattr(restore_mod, "notify_local", lambda t, b: bodies.append(b) or True)
     monkeypatch.setattr(restore_mod, "interface_states", lambda: _AllEnabled())
-    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on", ("eth0",)))
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda *_a: (True, "all on", ("eth0",)))
     restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"), all_interfaces=True)
     assert "writable by the same user" in bodies[-1]
 
@@ -676,7 +678,7 @@ def test_ledger_exception_does_not_block_emergency_restore(tmp_path, monkeypatch
     class Exploding(CutStateLog):
         def unresolved_for(self, asset_id):
             raise RuntimeError("boom")
-    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on", ("eth0",)))
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda *_a: (True, "all on", ("eth0",)))
     assert restore_mod.restore("t-host", cut_state=Exploding(tmp_path / "c.jsonl"), all_interfaces=True)[0] is True
 
 

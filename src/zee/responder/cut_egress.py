@@ -329,7 +329,9 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
         ]
         ok_v, version = _run(["iptables", "--version"])
         backend = iptables_backend(version) if ok_v else None
-        tags = [SENTINEL_LINUX_IPTABLES_EGRESS] + ([IPT_BACKEND_PREFIX + backend] if backend else [])
+        # The kernel backend the cut's `iptables` used, so restore insists on
+        # a tool that reads that backend back ("unknown" = check both).
+        tags = [SENTINEL_LINUX_IPTABLES_EGRESS, IPT_BACKEND_PREFIX + (backend or "unknown")]
         for cmd in commands:
             ok, msg = _run(cmd)
             if not ok:
@@ -384,10 +386,9 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
         modified.append(PF_TOKEN_PREFIX + (m.group(1) if m else "unknown"))
         return False, f"pfctl -E failed: {out.strip()}", modified
     note = ""
-    if m:
-        modified.append(PF_TOKEN_PREFIX + m.group(1))
-    else:
-        note = "; pf enable token not reported (restore cannot release it)"
+    modified.append(PF_TOKEN_PREFIX + (m.group(1) if m else "unknown"))
+    if not m:
+        note = "; pf enable token not reported (restore will report pf's state as unverified)"
     return True, (f"pfctl anchor {PF_ANCHOR} loaded (new connections only: connections "
                   f"already open keep their pf state){note}"), modified
 
