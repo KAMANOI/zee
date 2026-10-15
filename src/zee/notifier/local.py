@@ -48,12 +48,12 @@ def _notify_linux(title: str, body: str) -> bool:
 
 def _notify_macos(title: str, body: str) -> bool:
     # Title and body travel as argv, never as script text: an asset id with a
-    # quote or backslash can't become AppleScript (the cut daemon runs this as root).
+    # quote or backslash can't become AppleScript.
     try:
         subprocess.run(
             ["osascript", "-e", "on run argv", "-e",
              "display notification (item 2 of argv) with title (item 1 of argv)",
-             "-e", "end run", title, body],
+             "-e", "end run", "--", title, body],
             check=False,
             timeout=3,
         )

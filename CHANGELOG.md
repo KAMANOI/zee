@@ -57,22 +57,34 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
 
 ### Security
 
-- **macOS notifications no longer build AppleScript from text.** Title and
-  body are passed as `osascript` arguments. Before, an asset id containing a
-  quote and backslash could escape the string and run AppleScript (found by
-  the external review of the privsep daemon, which sends notifications as
-  root; the in-process path ran it as the operator's user).
 - **iptables lock under the shipped systemd unit.** A read-only `/run`
   made iptables-legacy fail to open `/run/xtables.lock`; Zee then reported
   the restore as unverified (Z606), never as done. The unit now creates the
   lock before the sandbox applies.
-  The Windows toast is still built as a PowerShell command string with the
-  same escaping; it runs as the operator's own user and is not changed here.
 
 ### Verification
 
 - `.github/workflows/privsep.yml` + `scripts/privsep_ci.sh` on disposable
   runners only (results in docs/design/privsep.md §11).
+
+## [0.13.2] — 2026-10-16
+
+### Security
+
+- **macOS notifications no longer build AppleScript from the asset id or
+  message.** Up to v0.13.1 the title and body were escaped and pasted into
+  an `osascript -e` script, so an asset id containing a quote could run
+  AppleScript (including `do shell script`) as the user running Zee —
+  confirmed on a real Mac with the v0.13.1 code (a crafted asset id ran a
+  shell command). The asset id comes from `assets.toml`, which only the
+  user running Zee can write, so this gives no extra privilege today; it
+  would have under the privilege-separation prototype, where the cut
+  daemon runs as root. Title and body now travel as `argv` (after `--`)
+  to a fixed script; a test round-trips quotes, backslashes, newlines,
+  empty and `-e` arguments through the real `osascript`. Found by an external review of
+  the privilege-separation prototype (not yet released). The Windows
+  balloon still builds a PowerShell string with the same escaping; it runs
+  as the same user and is tracked for the next release.
 
 ## [0.13.1] — 2026-10-16
 
