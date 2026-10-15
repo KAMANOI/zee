@@ -10,11 +10,13 @@ must not invoke these functions at all; they are not safe-by-default.
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from typing import Optional
@@ -57,6 +59,35 @@ SBIN_PATH = os.pathsep.join(filter(None, [os.environ.get("PATH", ""), "/usr/sbin
 def sbin_which(name: str) -> Optional[str]:
     found = shutil.which(name, path=SBIN_PATH)
     return os.path.abspath(found) if found else None
+
+
+def kernel_ipv6_absent() -> bool:
+    """True only when the HOST kernel has no IPv6 (ipv6.disable=1, or built
+    without it). Two independent signs are required: this process cannot
+    open an IPv6 socket (EAFNOSUPPORT), and the kernel's own records say IPv6
+    is off. A process that is only forbidden AF_INET6 (seccomp, e.g.
+    systemd RestrictAddressFamilies) gets the same EAFNOSUPPORT while IPv6
+    works for everyone else, so the socket alone is never enough.
+    Linux net/ipv6/af_inet6.c inet6_init(): with disable_ipv6_mod it returns
+    before sock_register(&inet6_family_ops) and if6_proc_init(), so
+    /proc/net/if_inet6 is absent; the `disable` parameter is 0444."""
+    try:
+        socket.socket(socket.AF_INET6, socket.SOCK_DGRAM).close()
+        return False
+    except OSError as e:
+        if e.errno != errno.EAFNOSUPPORT:
+            return False
+    except AttributeError:  # Python built without IPv6: cannot tell
+        return False
+    try:
+        with open("/sys/module/ipv6/parameters/disable", encoding="ascii") as f:
+            if f.read().strip() == "1":
+                return True
+    except OSError:
+        pass
+    # Built without IPv6: /proc/net readable but no if_inet6 (and no ipv6 module).
+    return (os.path.exists("/proc/net/dev") and not os.path.exists("/proc/net/if_inet6")
+            and not os.path.exists("/sys/module/ipv6"))
 
 
 def _abs(cmd: list[str]) -> list[str]:

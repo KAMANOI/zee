@@ -173,11 +173,16 @@ honestly-published boundaries of what Zee is and is not:
   well. Measured on Linux (network namespace; nft, iptables nf_tables
   and legacy). **On Windows, IPv6 traffic stopping is not measured**
   (the runner has no outbound IPv6); the rule was accepted and read back
-  as set. On a Linux kernel without IPv6 (`ipv6.disable=1`: an IPv6
-  socket cannot be opened, EAFNOSUPPORT), the iptables cut adds no IPv6
-  rule and says so ("IPv6 is disabled in the kernel"); restore treats
-  ip6tables' "Address family not supported by protocol" answer as no
-  IPv6 chain (libiptc cannot open its IPv6 socket there).
+  as set. On a Linux kernel without IPv6 (`ipv6.disable=1`), the
+  iptables cut adds no IPv6 rule and says so ("IPv6 is disabled in the
+  kernel"), and restore treats ip6tables' "Address family not supported
+  by protocol" answer as no IPv6 chain. Both require two independent
+  signs: an IPv6 socket cannot be opened (EAFNOSUPPORT) **and** the
+  kernel's own records say IPv6 is off (`/sys/module/ipv6/parameters/disable`
+  is 1, or no `/proc/net/if_inet6` with no ipv6 module). A process that is
+  merely denied IPv6 sockets (e.g. systemd `RestrictAddressFamilies`)
+  gets the same socket error while IPv6 works for the rest of the host;
+  there the cut is FAILED and restore is unverified (Z606).
 - **On macOS and Windows the egress cut stops new connections;
   connections opened before the cut may continue.** pf passes packets
   that match an existing state entry without evaluating the new rules,

@@ -237,37 +237,73 @@ NO_V6 = ("ip6tables v1.8.7 (legacy): can't initialize ip6tables table `filter': 
          "Address family not supported by protocol")
 
 
-def test_ipv6_disabled_kernel_answer_is_absent_for_ip6tables_only(monkeypatch):
+@pytest.mark.parametrize("host_has_no_ipv6, expect", [(True, True), (False, None)])
+def test_ipv6_disabled_kernel_answer_is_absent_only_when_the_host_has_no_ipv6(monkeypatch, host_has_no_ipv6, expect):
+    """Codex round 6: a process only forbidden AF_INET6 (seccomp) gets the
+    same answer while the chain may still exist: then unverified."""
+    monkeypatch.setattr(restore_mod, "kernel_ipv6_absent", lambda: host_has_no_ipv6)
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, NO_V6))
-    assert restore_mod._verify_absent("ip6tables-legacy", ["ip6tables-legacy", "-S", "ZEE_EGRESS"]) is True
+    assert restore_mod._verify_absent("ip6tables-legacy", ["ip6tables-legacy", "-S", "ZEE_EGRESS"]) is expect
     msg4 = NO_V6.replace("ip6tables", "iptables")
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, msg4))
     assert restore_mod._verify_absent("iptables-legacy", ["iptables-legacy", "-S", "ZEE_EGRESS"]) is None
 
 
-def test_ipv6_disabled_kernel_needs_no_ipv6_rule(monkeypatch):
+@pytest.mark.parametrize("absent, expect_ok", [(True, True), (False, False)])
+def test_ipv6_disabled_kernel_needs_no_ipv6_rule(monkeypatch, absent, expect_ok):
     calls = _linux(monkeypatch, {"iptables", "ip6tables"},
-                   {"iptables": "iptables v1.8.7 (legacy)", "ip6tables": "ip6tables v1.8.7 (legacy)"})
-    monkeypatch.setattr(egress_mod, "_kernel_has_ipv6", lambda: False)
+                   {"iptables": "iptables v1.8.7 (legacy)", "ip6tables": "ip6tables v1.8.7 (legacy)"},
+                   fail=("ip6tables", "-N"))
+    monkeypatch.setattr(egress_mod, "kernel_ipv6_absent", lambda: absent)
     ok, detail, modified = egress_mod._cut_egress_linux()
-    assert ok is True and "IPv6 is disabled in the kernel" in detail and "NOT blocked" not in detail
-    assert IP6T not in modified and not any(c[0].startswith("ip6tables") for c in calls)
+    assert ok is expect_ok
+    if absent:
+        assert "IPv6 is disabled in the kernel" in detail and IP6T not in modified
+        assert not any(c[0].startswith("ip6tables") for c in calls)
+    else:  # e.g. only this process is denied AF_INET6: never a success
+        assert "IPv6 NOT blocked" in detail
 
 
-@pytest.mark.parametrize("err, has", [(97, False), (13, True), (None, True)])
-def test_kernel_has_ipv6(monkeypatch, err, has):
+class _Sock:
+    def __init__(self, code):
+        self.code = code
+
+    def __call__(self, *a):
+        if self.code is not None:
+            raise OSError(self.code, "x")
+        return self
+
+    def close(self):
+        pass
+
+
+@pytest.mark.parametrize("sock_err, files, expect", [
+    (None, {}, False),                                            # IPv6 socket opens
+    ("EACCES", {}, False),                                        # other error: cannot tell
+    ("EAFNOSUPPORT", {"disable": "1"}, True),                     # ipv6.disable=1
+    ("EAFNOSUPPORT", {"disable": "0", "if_inet6": True}, False),  # seccomp-only (RestrictAddressFamilies)
+    ("EAFNOSUPPORT", {"if_inet6": True, "sysmod": True}, False),
+    ("EAFNOSUPPORT", {}, True),                                   # built without IPv6
+])
+def test_kernel_ipv6_absent_needs_two_independent_signs(monkeypatch, sock_err, files, expect):
+    import builtins
     import errno as errno_mod
+    import io
+    code = getattr(errno_mod, sock_err) if sock_err else None
+    monkeypatch.setattr(full_mod.socket, "socket", _Sock(code))
+    real_open = builtins.open
 
-    class Sock:
-        def __init__(self, *a):
-            if err is not None:
-                code = errno_mod.EAFNOSUPPORT if err == 97 else errno_mod.EACCES
-                raise OSError(code, "x")
-
-        def close(self):
-            pass
-    monkeypatch.setattr(egress_mod.socket, "socket", Sock)
-    assert egress_mod._kernel_has_ipv6() is has
+    def fake_open(path, *a, **k):
+        if path == "/sys/module/ipv6/parameters/disable":
+            if "disable" not in files:
+                raise FileNotFoundError(path)
+            return io.StringIO(files["disable"] + "\n")
+        return real_open(path, *a, **k)
+    monkeypatch.setattr(builtins, "open", fake_open)
+    exists = {"/proc/net/dev": True, "/proc/net/if_inet6": files.get("if_inet6", False),
+              "/sys/module/ipv6": files.get("sysmod", "disable" in files)}
+    monkeypatch.setattr(full_mod.os.path, "exists", lambda p: exists.get(p, False))
+    assert full_mod.kernel_ipv6_absent() is expect
 
 
 def test_ip6tables_failure_says_the_ipv4_chain_stays(monkeypatch):

@@ -150,10 +150,14 @@ v0.3 で解消済みです。以下は、現時点の Zee が「できること�
   Linux（ネットワーク名前空間。nft・iptables nf_tables 版・legacy 版）で実測済みです。
   **Windows で IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が
   無いため。規則が入り、読み直しで一致することは確認）。カーネルで IPv6 を無効にした
-  Linux（`ipv6.disable=1`。IPv6 のソケットが開けない＝EAFNOSUPPORT）では、iptables の
-  遮断は IPv6 の規則を入れず、結果にそう書きます（「IPv6 is disabled in the kernel」）。
-  復旧は ip6tables の「Address family not supported by protocol」という応答を
-  「IPv6 のチェーンは無い」と扱います（libiptc がそこで IPv6 のソケットを開けないため）。
+  Linux（`ipv6.disable=1`）では、iptables の遮断は IPv6 の規則を入れず、結果にそう
+  書きます（「IPv6 is disabled in the kernel」）。復旧は ip6tables の「Address family not
+  supported by protocol」という応答を「IPv6 のチェーンは無い」と扱います。どちらも
+  独立した2つの根拠を要求します：IPv6 のソケットが開けない（EAFNOSUPPORT）**かつ**
+  カーネル自身の記録が IPv6 無効を示す（`/sys/module/ipv6/parameters/disable` が 1、
+  または ipv6 モジュールが無く `/proc/net/if_inet6` も無い）。IPv6 のソケットだけを
+  禁じられたプロセス（systemd の `RestrictAddressFamilies` など）は同じエラーを受けますが、
+  端末の他の通信は IPv6 で出られるため、その場合の遮断は FAILED、復旧は未確認（Z606）です。
 - **macOS・Windows の外向き遮断が止めるのは新しい接続です。遮断の前から開いていた
   接続は続く場合があります。** pf は状態表に載った接続のパケットを新しい規則で
   評価し直さず、Windows ファイアウォールも接続を張る時に規則を当てます。Linux の

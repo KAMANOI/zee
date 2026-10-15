@@ -37,6 +37,7 @@ from ..responder.cut_full import (
     IPT_BACKEND_PREFIX,
     PF_TOKEN_PREFIX,
     iptables_backend,
+    kernel_ipv6_absent,
     SENTINEL_LINUX_IP6TABLES_EGRESS,
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
@@ -428,11 +429,13 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
         # up, so no chain of Zee's can be in it. "Address family not
         # supported by protocol": ip6tables-legacy could not open its IPv6
         # socket (libiptc TC_INIT: socket(AF_INET6) fails with EAFNOSUPPORT,
-        # printed via strerror) -- the kernel has no IPv6 (ipv6.disable=1),
-        # so no IPv6 chain can exist.
+        # printed via strerror). Absent only if the host kernel itself has
+        # no IPv6 (kernel_ipv6_absent): a process merely forbidden AF_INET6
+        # gets the same answer while the chain may still be there.
         absent = msg.startswith(("iptables", "ip6tables")) and (
             "No chain/target/match by that name" in msg or "Table does not exist" in msg
-            or (tool in _IP6TABLES and "Address family not supported by protocol" in msg))
+            or (tool in _IP6TABLES and "Address family not supported by protocol" in msg
+                and kernel_ipv6_absent()))
     elif tool == "netsh":
         absent = "No rules match the specified criteria" in msg
     else:

@@ -43,11 +43,15 @@ update.** Up to v0.13.0 those two paths did not stop outbound IPv6.
 
 - **Windows: IPv6 traffic stopping is not measured** (see above).
 - **Linux with IPv6 disabled in the kernel** (`ipv6.disable=1`): the
-  iptables cut checks that an IPv6 socket cannot be opened (EAFNOSUPPORT)
-  and then adds no IPv6 rule, saying so in the result; restore reads
-  ip6tables' "Address family not supported by protocol" (libiptc's
+  iptables cut adds no IPv6 rule, saying so in the result, and restore
+  reads ip6tables' "Address family not supported by protocol" (libiptc's
   strerror of the failed IPv6 socket) as no IPv6 chain, so nft and full
-  restores do not turn unverified (Z606) on such hosts. Not measured.
+  restores do not turn unverified (Z606) on such hosts. Both need two
+  independent signs: the IPv6 socket fails with EAFNOSUPPORT and the
+  kernel's records say IPv6 is off (`/sys/module/ipv6/parameters/disable`
+  = 1, or no `/proc/net/if_inet6` and no ipv6 module); a process merely
+  denied AF_INET6 (seccomp, systemd `RestrictAddressFamilies`) gets FAILED
+  / Z606 instead. Not measured on a real host.
 - **VPNs and overlays on private / ULA addresses** (Tailscale
   `fd7a:115c:a1e0::/48`, ZeroTier, IPv4 VPNs over RFC 1918) are passed as
   "local", so the egress cut does not stop traffic to remote peers over

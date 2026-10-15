@@ -10,12 +10,10 @@ invoke these on dry_run.
 
 from __future__ import annotations
 
-import errno
 import ipaddress
 import logging
 import re
 import shutil
-import socket
 import subprocess
 import sys
 from typing import Optional
@@ -29,6 +27,7 @@ from .cut_full import (
     IPT_BACKEND_PREFIX,
     PF_TOKEN_PREFIX,
     iptables_backend,
+    kernel_ipv6_absent,
     record_or_report,
     sbin_which,
 )
@@ -394,10 +393,11 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
                 return False, f"{' '.join(cmd)}: {msg} (IPv6 NOT blocked)", tags
         # IPv6 has its own table: the same chain through ip6tables of the
         # same kernel backend. Without it the cut is a failure, never an
-        # IPv4-only success -- unless the kernel has no IPv6 at all
-        # (ipv6.disable=1): then no IPv6 socket can be opened, so nothing can
-        # leave over IPv6, and ip6tables-legacy cannot even initialise.
-        if not _kernel_has_ipv6():
+        # IPv4-only success -- unless the host kernel has no IPv6 at all
+        # (ipv6.disable=1, confirmed by two independent signs, see
+        # kernel_ipv6_absent): nothing can leave over IPv6 then, and
+        # ip6tables-legacy cannot even initialise.
+        if kernel_ipv6_absent():
             return True, ("iptables ZEE_EGRESS chain installed; IPv6 is disabled in the kernel "
                           "(no IPv6 socket can be opened): no IPv6 rule needed"), tags
         v6 = _ip6tables_tool(backend)
@@ -416,18 +416,6 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
         return True, f"iptables + {v6} ZEE_EGRESS chains installed (IPv4 and IPv6)", tags
 
     return False, "no supported backend (need nft or iptables)", []
-
-
-def _kernel_has_ipv6() -> bool:
-    """False only when the kernel refuses IPv6 sockets (EAFNOSUPPORT, as
-    with ipv6.disable=1). Any other answer counts as IPv6 present."""
-    try:
-        socket.socket(socket.AF_INET6, socket.SOCK_DGRAM).close()
-    except OSError as e:
-        return e.errno != errno.EAFNOSUPPORT
-    except AttributeError:  # Python built without IPv6: cannot tell
-        return True
-    return True
 
 
 def _recorded_backend(modified) -> Optional[str]:
