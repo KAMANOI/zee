@@ -512,37 +512,62 @@ def _read_line(sock: socket.socket) -> Optional[bytes]:
     return line + nl if nl and len(line) < MAX_LINE else None
 
 
-def check_socket_dir(d: Path) -> None:
-    """Whoever can rename or write any directory on the way could swap the socket for their own.
-    The socket directory must be a real directory owned by us (root), not group/other-writable;
-    every ancestor (after resolving system links such as macOS /var -> /private/var) must be
-    owned by root or us and not group/other-writable, unless sticky (like /tmp)."""
-    if os.path.islink(d):
-        raise ValueError(f"socket directory is a symlink: {d}")
+def _group_has_people(gid: int) -> bool:
+    """True unless every member of the group is a system account (macOS /var/run is
+    group-writable by "daemon"; a group with a login user in it, like staff, counts)."""
+    try:
+        import grp
+        import pwd
+        names = set(grp.getgrgid(gid).gr_mem) | {u.pw_name for u in pwd.getpwall() if u.pw_gid == gid}
+        first = 500 if sys.platform == "darwin" else 1000
+        return any(pwd.getpwnam(n).pw_uid >= first for n in names)
+    except (ImportError, KeyError, OSError):
+        return True  # can't tell: treat as writable by people
+
+
+def _writable_by_others(st: os.stat_result) -> bool:
+    return bool(st.st_mode & stat.S_IWOTH) or bool(st.st_mode & stat.S_IWGRP and _group_has_people(st.st_gid))
+
+
+def _check_chain(d: Path, *, own_final: bool) -> None:
+    """Every component of ``d`` as written AND as resolved: directories owned by root or us,
+    not writable by other people unless sticky (like /tmp); links owned by root or us (their
+    directory is checked as the next component, their target by the resolved pass). With
+    ``own_final`` the last directory must be ours, not a link, and not writable by others."""
     me = os.geteuid()
-    real = Path(os.path.realpath(d))
-    for i, p in enumerate([real, *real.parents]):
-        st = os.lstat(p)
-        writable = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
-        if i == 0:
-            ok = stat.S_ISDIR(st.st_mode) and st.st_uid == me and not writable
-        else:
-            ok = stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me) and (
-                not writable or st.st_mode & stat.S_ISVTX)
-        if not ok:
-            raise ValueError(f"socket directory must be owned by uid {me} and not group/other-writable, "
-                             f"and no directory above it replaceable by others: {p}")
+    for path in (Path(os.path.abspath(d)), Path(os.path.realpath(d))):
+        for i, p in enumerate([path, *path.parents]):
+            st = os.lstat(p)
+            final = own_final and i == 0
+            if stat.S_ISLNK(st.st_mode):
+                ok = not final and st.st_uid in (0, me)
+            elif final:
+                ok = stat.S_ISDIR(st.st_mode) and st.st_uid == me and not _writable_by_others(st)
+            else:
+                ok = stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me) and (
+                    not _writable_by_others(st) or bool(st.st_mode & stat.S_ISVTX))
+            if not ok:
+                raise ValueError(f"socket directory must be owned by uid {me}, not a symlink and not "
+                                 f"writable by others, and no directory or link on the way may be "
+                                 f"replaceable by others: {p}")
+
+
+def check_socket_dir(d: Path) -> Path:
+    """Checks the socket directory and returns its resolved path, used for every later step."""
+    _check_chain(d, own_final=True)
+    return Path(os.path.realpath(d))
 
 
 def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
           check_every: float = 30) -> int:
     """Bind, then serve until a signed ``stop``. Exit 0 so `KeepAlive.SuccessfulExit=false`
     (launchd) / `Restart=on-failure` (systemd) leave it stopped."""
-    socket_path = Path(socket_path)
-    if not socket_path.parent.exists():  # e.g. /var/run/zee on macOS (systemd's RuntimeDirectory on Linux)
-        socket_path.parent.mkdir(parents=True)
+    socket_path = Path(os.path.abspath(socket_path))
+    if not os.path.lexists(socket_path.parent):  # e.g. /var/run/zee on macOS (RuntimeDirectory on Linux)
+        _check_chain(socket_path.parent.parent, own_final=False)
+        socket_path.parent.mkdir()
         os.chmod(socket_path.parent, 0o755)  # the daemon's umask (077) would make it untraversable
-    check_socket_dir(socket_path.parent)
+    socket_path = check_socket_dir(socket_path.parent) / socket_path.name  # fixed, checked path
     if socket_path.is_symlink():
         raise ValueError(f"symlink refused: {socket_path}")
     if socket_path.exists():
@@ -566,9 +591,11 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
                 reply = {"ok": False, "error": "malformed", "code": "Z711"}
             else:
                 reply = daemon.handle_line(line, uid)
-            self.request.sendall(json.dumps(reply).encode() + b"\n")
-            if daemon.stopping:
-                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            try:
+                self.request.sendall(json.dumps(reply).encode() + b"\n")
+            finally:  # an approved stop completes even if the requester hung up
+                if daemon.stopping:
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     class Server(socketserver.ThreadingUnixStreamServer):
         daemon_threads = True

@@ -64,6 +64,7 @@ Z716_CUTD_INTERNAL = ("Z716", "遮断部の内部エラー、または遮断・�
 Z717_CUTD_RATE_LIMITED = ("Z717", "署名請求の頻度の上限（1分に10件）を超えました。少し待ってからやり直してください")
 Z718_CUTD_OPERATION_FAILED = ("Z718", "署名は受け付けられましたが、操作そのものが失敗しました（詳細は返答の detail）")
 Z719_PRIVSEP_REQUEST_FILE = ("Z719", "--request／--signature／--public-key のファイルが無い・読めない・形が正しくありません")
+Z720_CUTD_RESULT_UNKNOWN = ("Z720", "要求は遮断部に届きましたが返事が得られませんでした。実行済みの可能性があります。`zee privsep status`（unresolved・auto）で状態を確かめてから次の操作をしてください")
 
 # Z10xx
 Z1001_UNKNOWN_RECIPIENT = ("Z1001", "--recipient は police / ppc のいずれかを指定してください")

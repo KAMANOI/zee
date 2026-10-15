@@ -35,7 +35,11 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   launchd / systemd definitions run Python with `-P -s` (never import from
   the working directory or the user site). The daemon refuses to start if
   its socket directory is not root-owned or is group/other-writable, or if
-  any directory above it could be renamed by another user.
+  any directory or symlink on the way to it (as written and as resolved)
+  could be replaced by another user; it then binds the resolved path. An
+  approved `stop` completes even if the requester hangs up. The admin CLI
+  reports Z710 when nothing was sent and Z720 (result unknown) when a
+  request was sent but no answer came back.
   `zee watch` uses it only when `assets.toml` has `[privsep] socket = ...`;
   without it the in-process cut is unchanged. With it, losing the daemon is
   announced once (local notification + webhook), and once when it is back.

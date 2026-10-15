@@ -28,7 +28,8 @@ ProtectHome=read-only
 # on first use, which a read-only /run refuses (seen on the CI runner: restore was
 # then unverifiable, Z606), so it is created before the sandbox applies ("+").
 ExecStartPre=+/usr/bin/touch /run/xtables.lock
-ReadWritePaths=/run/zee /run/xtables.lock
+# "-": the namespace of ExecStartPre itself is set up before the file exists (systemd 255)
+ReadWritePaths=/run/zee -/run/xtables.lock
 
 [Install]
 WantedBy=multi-user.target

@@ -10,21 +10,23 @@ from pathlib import Path
 
 from .. import errors
 from ..egress.signing import payload_digest
-from ..errors import ZeeError, Z710_CUTD_UNREACHABLE, Z719_PRIVSEP_REQUEST_FILE
-from .client import DEFAULT_SOCKET, call as _raw_call
+from ..errors import ZeeError, Z710_CUTD_UNREACHABLE, Z719_PRIVSEP_REQUEST_FILE, Z720_CUTD_RESULT_UNKNOWN
+from .client import DEFAULT_SOCKET, NotSent, call as _raw_call
 
 DEFAULT_STATE = Path("/Library/Application Support/Zee/cutd" if sys.platform == "darwin"
                      else "/var/lib/zee-cutd")
 
 
-_MEANING = {v[0]: v[1] for k, v in vars(errors).items() if k.startswith("Z71")}
+_MEANING = {v[0]: v[1] for k, v in vars(errors).items() if k.startswith(("Z71", "Z72"))}
 
 
 def call(sock: Path, req: dict) -> dict:
     try:
         return _raw_call(sock, req)
-    except (OSError, ValueError) as e:  # no daemon, refused, no permission, garbled reply
+    except NotSent as e:  # no daemon, refused, no permission, not served by root
         raise ZeeError(Z710_CUTD_UNREACHABLE, f"{sock}: {e}") from e
+    except (OSError, ValueError) as e:  # sent, but no usable answer: it may have been carried out
+        raise ZeeError(Z720_CUTD_RESULT_UNKNOWN, f"{req.get('op')}: {e}") from e
 
 
 def _read(path: Path, kind: str = "text"):

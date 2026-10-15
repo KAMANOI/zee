@@ -575,7 +575,7 @@ def test_socket_directory_must_not_be_writable_by_others(tmp_path):
     d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier())
     loose = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
     os.chmod(loose, 0o777)
-    with pytest.raises(ValueError, match="not group/other-writable"):
+    with pytest.raises(ValueError, match="not writable by others"):
         serve(d, loose / "s")
     real = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
     link = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "l"
@@ -617,7 +617,7 @@ def test_heartbeat_announces_loss_and_return_once_each(monkeypatch):
     def call(sock, req, timeout):
         if not answers:
             done.set()
-            time.sleep(10)
+            threading.Event().wait()  # park the daemon thread for the rest of the run
         a = answers.pop(0)
         if isinstance(a, Exception):
             raise a
@@ -667,3 +667,53 @@ def test_cut_result_unknown_after_the_request_was_sent():
     threading.Thread(target=accept_and_hang_up, daemon=True).start()
     ok, detail = privsep_cut(sock, server_uid=os.geteuid())(CutRequest("ws", "change", "high"))
     assert ok is False and "UNKNOWN" in detail and "nothing was sent" not in detail
+
+
+# ---- Codex 7
+def test_socket_path_through_a_replaceable_link_is_refused():
+    from zee.privsep.daemon import check_socket_dir
+    safe = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    (safe / "run").mkdir(mode=0o755)
+    open_dir = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(open_dir, 0o777)  # anyone may swap entries here (not sticky)
+    (open_dir / "link").symlink_to(safe)
+    assert (open_dir / "link" / "run").is_dir()
+    with pytest.raises(ValueError, match="replaceable"):
+        check_socket_dir(open_dir / "link" / "run")  # the resolved path alone would pass
+    assert check_socket_dir(safe / "run") == Path(os.path.realpath(safe / "run"))
+
+
+def test_approved_stop_completes_even_if_the_requester_hangs_up(tmp_path):
+    from zee.privsep.daemon import CutDaemon, serve
+    state = tmp_path / "cutd"
+    state.mkdir(mode=0o700)
+    (state / "assets.toml").write_text(CFG)
+    d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
+    d.engine.state["keys"]["k1"] = "s1"
+    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
+    t = threading.Thread(target=serve, args=(d, sock), kwargs={"check_every": 60}, daemon=True)
+    t.start()
+    for _ in range(100):
+        if sock.exists():
+            break
+        time.sleep(0.02)
+    ch = d.handle_line(json.dumps({"op": "challenge", "admin_op": "stop", "args": {}}).encode(), os.geteuid())
+    sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    c.connect(str(sock))
+    c.sendall(json.dumps({"op": "submit", "payload": ch["payload"], "entered": ch["code"],
+                          "key_id": "k1", "signature": sig}).encode() + b"\n")
+    c.close()  # gone before the reply
+    t.join(5)
+    assert not t.is_alive() and d.stopping
+
+
+def test_cli_reports_unknown_result_after_sending(monkeypatch, capsys):
+    from zee.cli import main
+    from zee.privsep import cli as pcli
+
+    def sent_but_no_answer(sock, req):
+        raise TimeoutError("timed out")
+    monkeypatch.setattr(pcli, "_raw_call", sent_but_no_answer)
+    assert main(["privsep", "status", "--socket", "/nonexistent"]) == 1
+    assert "Z720" in capsys.readouterr().err
