@@ -187,7 +187,7 @@ def test_old_auto_on_signature_cannot_approve_a_newer_config(env, tmp_path):
     assert signed(d, "config_set", path=str(new), sha256=hashlib.sha256(new.read_bytes()).hexdigest())["ok"]
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
     r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
-    assert r["ok"] is False and "config changed" in r["detail"]
+    assert r["ok"] is False and "config_sha256" in r["detail"]
     assert cut(d)["refused"] == "auto_off" and cuts.calls == []
 
 
@@ -197,23 +197,50 @@ def test_old_restore_signature_cannot_undo_a_newer_cut(env):
     d.cut_state.record_cut(asset_id="ws", method="egress", platform=sys.platform, modified=["x"])
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
     r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
-    assert r["ok"] is False and "ledger changed" in r["detail"] and restores == []
+    assert r["ok"] is False and "ledger_sha256" in r["detail"] and restores == []
 
 
 def test_bound_fields_cannot_be_supplied_by_the_requester(env):
     d, _, _, _ = env
-    for op, args in (("auto_set", {"state": "on", "config_sha256": "0" * 64}),
+    for op, args in (("auto_set", {"state": "on", "config_sha256": "0" * 64}), ("stop", {"gen": "0"}),
                      ("restore", {"asset_id": "ws", "scope": "all", "ledger_sha256": "absent"})):
         assert req(d, OTHER, op="challenge", admin_op=op, args=args)["refused"] == "bad_args"
 
 
-def test_auto_off_is_never_blocked_by_binding(env, tmp_path):
+def test_old_auto_on_signature_cannot_undo_a_newer_off(env):
+    """Codex 2: hold an 'on' signature, let a newer 'off' apply, then replay the old 'on'."""
+    d, cuts, _, _ = env
+    old = req(d, OTHER, op="challenge", admin_op="auto_set", args={"state": "on"})
+    assert signed(d, "auto_set", state="off")["ok"]
+    sig = base64.b64encode(sign("s1", old["payload"], old["code"])).decode()
+    r = req(d, OTHER, op="submit", payload=old["payload"], entered=old["code"], key_id="k1", signature=sig)
+    assert r["ok"] is False and "gen" in r["detail"]
+    assert cut(d)["refused"] == "auto_off" and cuts.calls == []
+
+
+def test_old_tamper_off_cannot_undo_a_newer_on(env):
     d, _, _, _ = env
-    signed(d, "auto_set", state="on")
-    ch = req(d, OTHER, op="challenge", admin_op="auto_set", args={"state": "off"})
-    (d.dir / "assets.toml").write_text(CFG + "\n")
-    sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
-    assert req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)["ok"]
+    old = req(d, OTHER, op="challenge", admin_op="tamper_set", args={"action": "off"})
+    assert signed(d, "tamper_set", action="full")["ok"]
+    sig = base64.b64encode(sign("s1", old["payload"], old["code"])).decode()
+    assert req(d, OTHER, op="submit", payload=old["payload"], entered=old["code"],
+               key_id="k1", signature=sig)["ok"] is False
+    assert d.tamper_action() == "full"
+
+
+def test_config_set_rejects_odd_asset_ids(env, tmp_path):
+    d, _, _, _ = env
+    new = tmp_path / "q.toml"
+    new.write_text(CFG.replace('"ws"', '"w\\"s"'))
+    r = signed(d, "config_set", path=str(new), sha256=hashlib.sha256(new.read_bytes()).hexdigest())
+    assert r["ok"] is False and "asset ids" in r["detail"]
+
+
+def test_large_ledger_still_hashes(env):
+    from zee.privsep.daemon import file_sha256
+    d, _, _, _ = env
+    d.ledger_path.write_bytes(b"x" * (3 * 1024 * 1024))
+    assert len(file_sha256(d.ledger_path)) == 64
 
 
 def test_cut_asset_removed_from_config_stays_restorable_and_visible(env, tmp_path):

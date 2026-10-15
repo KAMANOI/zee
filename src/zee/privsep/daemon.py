@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import socketserver
 import stat
@@ -51,15 +52,20 @@ TAMPER_ASSET = "zee-tamper"  # ledger id of a cut made by the tamper response
 MAX_LINE = 16 * 1024
 MAX_CONFIG = 256 * 1024
 MAX_PENDING = 16
-ADMIN_OPS = {"restore": ("asset_id", "scope", "ledger_sha256"), "config_set": ("path", "sha256"),
-             "auto_set": ("state", "config_sha256"), "tamper_set": ("action",), "stop": (),
-             "key_add": ("key_id", "public_key"), "key_remove": ("key_id",)}
+_ASSET_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# Bound fields: filled in by the daemon when it issues the request (never by the
+# requester) and re-checked right before applying, so an old, unused signature can't
+# act on a later state. "gen" counts applied admin operations (persisted): any newer
+# approval voids every older pending one (e.g. an old "auto on" after a newer "off").
+# A restore also binds the whole cut ledger (egress rules are host-wide, so a newer
+# cut of any asset voids it); auto_set binds the approved config.
+BOUND = ("gen", "config_sha256", "ledger_sha256")
+ADMIN_OPS = {"restore": ("asset_id", "scope", "ledger_sha256", "gen"),
+             "config_set": ("path", "sha256", "gen"), "auto_set": ("state", "config_sha256", "gen"),
+             "tamper_set": ("action", "gen"), "stop": ("gen",),
+             "key_add": ("key_id", "public_key", "gen"), "key_remove": ("key_id", "gen")}
 _CHOICES = {"scope": ("recorded", "all"), "state": ("on", "off"),
             "action": ("off", "egress", "full")}
-# Filled in by the daemon when it issues the request (never by the requester) and
-# re-checked right before applying: an old, unused signature can't approve another
-# config or undo a newer cut (a restore removes host-wide rules, so the whole ledger counts).
-_BOUND = {"auto_set": ("config_sha256", "config_path"), "restore": ("ledger_sha256", "ledger_path")}
 
 
 def read_bounded(path: Path, limit: int = MAX_CONFIG) -> bytes:
@@ -76,10 +82,18 @@ def read_bounded(path: Path, limit: int = MAX_CONFIG) -> bytes:
 
 
 def file_sha256(path: Path) -> str:
+    """Streaming hash of a regular file (no size limit: the ledger only grows); "absent" if missing."""
     try:
-        return hashlib.sha256(read_bounded(path, 64 * 1024 * 1024)).hexdigest()
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         return "absent"
+    h = hashlib.sha256()
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError(f"not a regular file: {path}")
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def peer_uid(sock: socket.socket) -> int:
@@ -113,9 +127,8 @@ class AdminEngine(Engine):
     OPS = ADMIN_OPS
     STATE_FILE, LOG_FILE = "admin_keys.json", "admin.jsonl"
 
-    def __init__(self, state_dir: Path, verifier: Verifier, apply: Callable[[str, dict], tuple[bool, str]],
-                 **kw) -> None:
-        self._apply_admin = apply
+    def __init__(self, state_dir: Path, verifier: Verifier, daemon: "CutDaemon", **kw) -> None:
+        self.daemon = daemon
         self.outcome: tuple[bool, str] = (False, "")
         super().__init__(state_dir, verifier, **kw)
 
@@ -126,10 +139,17 @@ class AdminEngine(Engine):
 
     def _apply(self, req, key_id: str) -> list[str]:
         op, args = req.payload["op"], req.payload["args"]
+        stale = [k for k, v in self.daemon.bindings(op).items() if args.get(k) != v]
+        if stale:
+            self.outcome = (False, f"refused: state changed since this request was issued ({', '.join(stale)}); "
+                                   "ask for a new one")
+            self._log("denied", req=req.id, op=op, key_id=key_id, reason="stale:" + ",".join(stale))
+            return []
+        self.daemon.bump_gen()  # before acting: a crash mid-way still voids older approvals
         if op in ("key_add", "key_remove"):
             self.outcome = (True, op)
             return super()._apply(req, key_id)
-        self.outcome = self._apply_admin(op, args)
+        self.outcome = self.daemon._apply_admin(op, args)
         self._log("config_applied", req=req.id, op=op, key_id=key_id, args=args,
                   ok=self.outcome[0], detail=self.outcome[1][:500])
         return []
@@ -149,7 +169,7 @@ class CutDaemon:
         self.restore_fn = restore_fn
         self.cut_state = CutStateLog(self.dir / "cut_state.jsonl")
         self.lock = threading.Lock()  # ponytail: one lock for everything; cuts are rare and serial
-        self.engine = AdminEngine(self.dir, verifier or OpensslVerifier(), self._apply_admin, clock=clock)
+        self.engine = AdminEngine(self.dir, verifier or OpensslVerifier(), self, clock=clock)
         self.stopping = False
         self.last_seen: Optional[float] = None
         self.findings: list[str] = []
@@ -160,6 +180,25 @@ class CutDaemon:
     @property
     def config_path(self) -> Path:
         return self.dir / "assets.toml"
+
+    def bindings(self, op: str) -> dict[str, str]:
+        b = {"gen": str(self._gen())}
+        if op == "auto_set":
+            b["config_sha256"] = file_sha256(self.config_path)
+        if op == "restore":
+            b["ledger_sha256"] = file_sha256(self.ledger_path)
+        return b
+
+    def _gen(self) -> int:
+        try:
+            return int((self.dir / "admin_gen").read_text())
+        except FileNotFoundError:
+            return 0
+        # anything else (unreadable, not a number) raises: no request is issued or applied
+
+    def bump_gen(self) -> None:
+        tmp = permission.private_temp(self.dir / "admin_gen", str(self._gen() + 1))
+        os.replace(tmp, self.dir / "admin_gen")
 
     @property
     def ledger_path(self) -> Path:
@@ -258,9 +297,7 @@ class CutDaemon:
         why = self._check_args(req["admin_op"], args)
         if why:
             return {"ok": False, "refused": why}
-        if req["admin_op"] in _BOUND:
-            field, attr = _BOUND[req["admin_op"]]
-            args = {**args, field: file_sha256(getattr(self, attr))}
+        args = {**args, **self.bindings(req["admin_op"])}
         try:
             r = self.engine.request_config(req["admin_op"], **args)
         except (ValueError, PermissionError, TypeError) as e:
@@ -268,8 +305,7 @@ class CutDaemon:
         return {"ok": True, "payload": r.payload, "code": r.code}
 
     def _check_args(self, op: str, args: dict) -> Optional[str]:
-        bound = {_BOUND[op][0]} if op in _BOUND else set()
-        if op not in ADMIN_OPS or set(args) != set(ADMIN_OPS[op]) - bound \
+        if op not in ADMIN_OPS or set(args) != set(ADMIN_OPS[op]) - set(BOUND) \
                 or not all(type(v) is str and 0 < len(v) <= 4096 for v in args.values()):
             return "bad_args"
         for k, choices in _CHOICES.items():
@@ -331,11 +367,6 @@ class CutDaemon:
         return ids
 
     def _apply_admin(self, op: str, a: dict) -> tuple[bool, str]:
-        if op in _BOUND and not (op == "auto_set" and a["state"] == "off"):  # off is always safe
-            field, attr = _BOUND[op]
-            if file_sha256(getattr(self, attr)) != a[field]:
-                return False, (f"refused: {'config' if op == 'auto_set' else 'cut ledger'} changed since "
-                               "this request was issued; ask for a new one")
         if op == "restore":
             try:
                 return self.restore_fn(a["asset_id"], cut_state=self.cut_state,
@@ -369,10 +400,13 @@ class CutDaemon:
             return False, "not UTF-8"
         tmp = permission.private_temp(self.config_path, text)
         try:
-            Config.load(tmp)
+            bad = [a.id for a in Config.load(tmp).assets if not _ASSET_ID.fullmatch(str(a.id))]
         except ZeeError as e:
             tmp.unlink(missing_ok=True)
             return False, f"invalid config: {e}"
+        if bad:  # ids reach notifications and ledgers run by root: keep them plain
+            tmp.unlink(missing_ok=True)
+            return False, f"asset ids must match {_ASSET_ID.pattern}: {bad[:3]}"
         os.replace(tmp, self.config_path)
         self._auto_set(False)  # a new config is never covered by the old switch
         return True, "config replaced; auto-cut is now OFF until a new signed auto_set on"
