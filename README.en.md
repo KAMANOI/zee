@@ -20,6 +20,12 @@ Implemented (v0.12.0): entry gate (zee gate), decoy tripwires with opt-in contai
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
+> ⚠️ **Known defect (disclosed 2026-10-15) — On macOS, the outbound cut (`cut_method: egress`) does not block traffic in the current release.**
+> Zee loads its block rules into its own pf anchor, but the stock macOS `/etc/pf.conf` only evaluates anchors under `anchor "com.apple/*"`, so the rules are never used (pf.conf(5), ANCHORS). Zee nevertheless reported the cut as applied. The defect has existed since the 2026-05-30 implementation; we confirmed it on 2026-10-15.
+> - If you use `cut_method: egress` on macOS, **assume you are not cut off.**
+> - Including the default `cut_method: full` (whole-network cut), **we have not yet confirmed on real hardware, on any OS, that automatic containment actually stops traffic** (verification so far is the test suite and dry_run demonstrations only).
+> - A fix (re-read the OS state after cutting and restoring, and report success only when confirmed) is in progress on branch `feat/self-defense-20261015`. Only a version confirmed on real hardware will be merged to main, with the results recorded here.
+
 ---
 
 ## Why Zee exists
