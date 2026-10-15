@@ -112,6 +112,7 @@ class CutStateLog:
         method: str,
         platform: str,
         modified: list[str],
+        verified: Optional[str] = None,
     ) -> None:
         rec = {
             "type": "cut",
@@ -121,6 +122,8 @@ class CutStateLog:
             "platform": platform,
             "modified": list(modified),
         }
+        if verified is not None:  # read-back after the cut: confirmed / missing / unverified
+            rec["verified"] = verified
         self._append(rec)
 
     def mark_resolved(self, asset_id: str) -> None:

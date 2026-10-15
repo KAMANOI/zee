@@ -22,6 +22,7 @@ from .cut_full import (
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_MACOS_PFCTL_EGRESS,
     record_or_report,
+    sbin_which,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,11 +37,58 @@ def cut_egress(
     cut_state: Optional[CutStateLog] = None,
 ) -> tuple[bool, str]:
     ok, detail, modified = _cut_egress_dispatch()
+    verified: Optional[str] = None
+    if ok and modified:
+        # Exit codes are not proof: Zee's rules must be listed back by the
+        # same backend before the cut is reported as applied.
+        verified, missing = _verify_egress(modified)
+        if verified != "confirmed":
+            ok = False
+            detail += f"; cut not confirmed by read-back ({verified}): {', '.join(missing)}"
     # Same as cut_full: record partial changes too (restore needs the record).
     if asset_id and cut_state is not None and modified:
         return record_or_report(cut_state, ok, detail, asset_id=asset_id,
-                                method="egress", modified=modified)
+                                method="egress", modified=modified, verified=verified)
     return ok, detail
+
+
+# Messages meaning "nothing by that name" (the rule really is not there).
+_ABSENT = ("No such file or directory", "No chain/target/match by that name",
+           "does a matching rule exist", "No rules match the specified criteria")
+
+
+def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
+    """Read Zee's rules back. Returns ("confirmed" | "missing" | "unverified",
+    names of the checks that did not confirm). "missing" = the tool says the
+    rule is not there; "unverified" = tool absent / unreadable / odd output."""
+    checks: list[tuple[str, list[str], str]] = []  # (label, show command, text that must appear)
+    for m in modified:
+        if m == SENTINEL_LINUX_NFT_EGRESS:
+            checks.append(("nft", ["nft", "list", "table", "inet", "zee_egress"], "drop"))
+        elif m == SENTINEL_LINUX_IPTABLES_EGRESS:
+            checks.append(("iptables chain", ["iptables", "-S", "ZEE_EGRESS"], "-j DROP"))
+            checks.append(("iptables jump", ["iptables", "-C", "OUTPUT", "-j", "ZEE_EGRESS"], ""))
+        elif m == SENTINEL_MACOS_PFCTL_EGRESS:
+            checks.append(("pfctl rules", ["pfctl", "-a", ZEE_RULE_TAG, "-s", "rules"], "block"))
+            checks.append(("pf enabled", ["pfctl", "-s", "info"], "Status: Enabled"))
+        else:  # Windows rule name
+            checks.append((m, ["netsh", "advfirewall", "firewall", "show", "rule", f"name={m}"], m))
+    missing: list[str] = []
+    unverified: list[str] = []
+    for label, cmd, must in checks:
+        exe = sbin_which(cmd[0])
+        if exe is None:
+            unverified.append(label)
+            continue
+        ok, out = _run([exe, *cmd[1:]])
+        if ok and must in out:
+            continue
+        absent = (not ok and any(a in out for a in _ABSENT)) or (
+            ok and cmd[:2] == ["pfctl", "-a"] and not out.strip())  # empty anchor = no rules
+        (missing if absent else unverified).append(label)
+    if missing:
+        return "missing", missing + unverified
+    return ("unverified", unverified) if unverified else ("confirmed", [])
 
 
 def _cut_egress_dispatch() -> tuple[bool, str, list[str]]:
@@ -160,7 +208,7 @@ def _cut_egress_windows() -> tuple[bool, str, list[str]]:
 
 def _run(cmd: list[str]) -> tuple[bool, str]:
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        cp = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
     if cp.returncode != 0:

@@ -57,7 +57,12 @@ Not in any tagged release yet.
   notification title says `Zee cut FAILED` when the cut failed (it said
   `applied`). `full` cut with no interface / service to disable returns
   failure, and so does a full cut whose changed interfaces / services
-  do not read back as disabled, and so does a macOS egress cut whose
+  do not read back as disabled, and so does an egress cut whose
+  Zee-named rules are not listed back by the same backend (nft table,
+  iptables chain + OUTPUT jump, pf anchor + pf enabled, netsh rules);
+  the cut record stores the read-back result (`verified`). Tool output
+  in an undecodable code page no longer raises mid-cut. A macOS egress
+  cut also fails when its
   `pfctl -e` fails (other
   than "already enabled"). A partial cut records the interfaces / rules
   it did change (full cut; Windows egress; iptables once the chain

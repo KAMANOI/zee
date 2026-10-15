@@ -483,6 +483,8 @@ def test_ledger_write_failure_is_reported_not_raised(tmp_path, monkeypatch, mod_
     mod = importlib.import_module(f"zee.responder.{mod_name}")
     monkeypatch.setattr(mod, f"_{mod_name}_dispatch", lambda: (True, "os cut done", ["eth0"]))
     monkeypatch.setattr(full_mod, "interface_states", lambda: {"eth0": "disabled"})
+    if mod_name == "cut_egress":
+        monkeypatch.setattr(mod, "_verify_egress", lambda m: ("confirmed", []))
     ok, detail = getattr(mod, mod_name)(asset_id="t-host", cut_state=_BrokenLedger(tmp_path / "c.jsonl"))
     assert ok is False
     assert "os=ok" in detail and "ledger=FAILED" in detail and "--all-interfaces" in detail
@@ -978,10 +980,13 @@ def test_full_cut_is_confirmed_by_read_back(tmp_path, monkeypatch, platform, sta
     monkeypatch.setattr(full_mod.sys, "platform", platform)
     monkeypatch.setattr(full_mod, "_cut_full_dispatch", lambda: (True, "cut", ["eth0"]))
     monkeypatch.setattr(full_mod, "interface_states", lambda: {"eth0": state} if state else {})
-    ok, detail = full_mod.cut_full(asset_id="t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"))
+    log = CutStateLog(tmp_path / "c.jsonl")
+    ok, detail = full_mod.cut_full(asset_id="t-host", cut_state=log)
     assert ok is expect
     if not expect:
         assert "not confirmed" in detail
+    verified = _json.loads(log.path.read_text())["verified"]
+    assert verified == {"disabled": "confirmed", "enabled": "missing"}.get(state, "unverified")
 
 
 def test_full_cut_unreadable_state_is_not_confirmed(tmp_path, monkeypatch):
@@ -1020,3 +1025,124 @@ def test_windows_states_fall_back_to_netsh(monkeypatch):
              "Activé         Connecté       Dédié            Local\n")
     _stub_check_output(monkeypatch, {"netsh": netsh})
     assert full_mod.interface_states() == {"Ethernet 2": "enabled", "Wi-Fi": "disabled", "Local": "unknown"}
+
+
+# ── egress cut is confirmed by reading the rules back (appendix A-4 #6) ──
+
+import json as _json
+
+
+def _egress_setup(monkeypatch, tmp_path, modified, *, outputs, tools=None):
+    """outputs: {tuple(cmd): (ok, text)}; unlisted commands fail."""
+    from zee.responder import cut_egress as egress_mod
+    monkeypatch.setattr(egress_mod, "_cut_egress_dispatch", lambda: (True, "rules installed", list(modified)))
+    monkeypatch.setattr(egress_mod, "sbin_which",
+                        lambda n: f"/sbin/{n}" if tools is None or n in tools else None)
+    monkeypatch.setattr(egress_mod, "_run",
+                        lambda cmd: outputs.get(tuple([cmd[0].rsplit("/", 1)[-1], *cmd[1:]]), (False, "boom")))
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    ok, detail = egress_mod.cut_egress(asset_id="t-host", cut_state=log)
+    rec = _json.loads(log.path.read_text().splitlines()[-1])
+    return ok, detail, rec
+
+
+NFT_LIST = ("nft", "list", "table", "inet", "zee_egress")
+IPT_S = ("iptables", "-S", "ZEE_EGRESS")
+IPT_C = ("iptables", "-C", "OUTPUT", "-j", "ZEE_EGRESS")
+PF_RULES = ("pfctl", "-a", "zee-egress-cut", "-s", "rules")
+PF_INFO = ("pfctl", "-s", "info")
+
+
+def test_egress_cut_confirmed_when_rule_reads_back(tmp_path, monkeypatch):
+    ok, detail, rec = _egress_setup(monkeypatch, tmp_path, [NFT],
+                                    outputs={NFT_LIST: (True, "table inet zee_egress { chain out { policy drop; } }")})
+    assert ok is True and rec["verified"] == "confirmed"
+
+
+@pytest.mark.parametrize("outputs, verified", [
+    ({NFT_LIST: (False, "Error: No such file or directory")}, "missing"),
+    ({NFT_LIST: (False, "Operation not permitted")}, "unverified"),
+])
+def test_egress_cut_not_confirmed_is_failed(tmp_path, monkeypatch, outputs, verified):
+    ok, detail, rec = _egress_setup(monkeypatch, tmp_path, [NFT], outputs=outputs)
+    assert ok is False and f"not confirmed by read-back ({verified})" in detail and rec["verified"] == verified
+
+
+def test_egress_cut_tool_missing_is_unverified(tmp_path, monkeypatch):
+    ok, detail, rec = _egress_setup(monkeypatch, tmp_path, [NFT], outputs={}, tools=())
+    assert ok is False and rec["verified"] == "unverified"
+
+
+def test_iptables_egress_needs_chain_and_jump(tmp_path, monkeypatch):
+    chain = {IPT_S: (True, "-N ZEE_EGRESS\n-A ZEE_EGRESS -j DROP")}
+    no_jump = {IPT_C: (False, "iptables: Bad rule (does a matching rule exist in that chain?).")}
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT], outputs={**chain, **no_jump})
+    assert ok is False and rec["verified"] == "missing"
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [IPT], outputs={**chain, IPT_C: (True, "")})
+    assert ok is True and rec["verified"] == "confirmed"
+
+
+def test_pf_egress_needs_rules_and_pf_enabled(tmp_path, monkeypatch):
+    sentinel = full_mod.SENTINEL_MACOS_PFCTL_EGRESS
+    rules = {PF_RULES: (True, "block drop out all\npass out on lo0 all")}
+    ok, _d, _r = _egress_setup(monkeypatch, tmp_path, [sentinel],
+                               outputs={**rules, PF_INFO: (True, "Status: Disabled")})
+    assert ok is False
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [sentinel],
+                                outputs={**rules, PF_INFO: (True, "Status: Enabled for 0 days")})
+    assert ok is True and rec["verified"] == "confirmed"
+
+
+def test_windows_egress_rule_missing_is_failed(tmp_path, monkeypatch):
+    show = lambda r: ("netsh", "advfirewall", "firewall", "show", "rule", f"name={r}")
+    outputs = {show("zee-egress-cut-block"): (True, "Rule Name: zee-egress-cut-block"),
+               show("zee-egress-cut-allow-local"): (False, "No rules match the specified criteria.")}
+    ok, detail, rec = _egress_setup(monkeypatch, tmp_path, ["zee-egress-cut-block", "zee-egress-cut-allow-local"],
+                                    outputs=outputs)
+    assert ok is False and rec["verified"] == "missing"
+
+
+def test_full_cut_records_read_back_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_mod, "_cut_full_dispatch", lambda: (True, "cut", ["eth0"]))
+    monkeypatch.setattr(full_mod, "interface_states", lambda: {"eth0": "disabled"})
+    log = CutStateLog(tmp_path / "c.jsonl")
+    full_mod.cut_full(asset_id="t-host", cut_state=log)
+    assert _json.loads(log.path.read_text())["verified"] == "confirmed"
+
+
+def test_handle_notifies_unconfirmed_egress_cut(tmp_path, monkeypatch):
+    import zee.responder.cut_egress as egress_mod
+    bodies: list = []
+    monkeypatch.setattr(seq, "notify_local", lambda t, b: bodies.append((t, b)) or True)
+    monkeypatch.setattr(egress_mod, "_cut_egress_dispatch", lambda: (True, "rules installed", [NFT]))
+    monkeypatch.setattr(egress_mod, "_verify_egress", lambda m: ("unverified", ["nft"]))
+    monkeypatch.setattr(seq, "cut_egress", egress_mod.cut_egress)
+    seq.handle(_event(), _asset(), dry_run=False, event_log=EventLog(log_dir=tmp_path),
+               cut_state=CutStateLog(tmp_path / "c.jsonl"))
+    title, body = bodies[-1]
+    assert "FAILED" in title and "not confirmed by read-back (unverified)" in body
+
+
+@pytest.mark.parametrize("mod_path", ["zee.responder.cut_egress", "zee.responder.cut_full", "zee.recovery.restore"])
+def test_undecodable_tool_output_never_raises(monkeypatch, mod_path):
+    """Non-English Windows: OEM code page output must not crash a cut after
+    the rules are already in (it would skip the ledger and the notification)."""
+    import importlib
+    import subprocess
+    mod = importlib.import_module(mod_path)
+    def run(argv, **k):
+        if k.get("errors") is None:
+            raise UnicodeDecodeError("cp1252", b"\x81", 0, 1, "undefined")
+        return subprocess.CompletedProcess(argv, 1, "", "R\ufffdgle introuvable")
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    if hasattr(mod, "sbin_which"):
+        monkeypatch.setattr(mod, "sbin_which", lambda n: f"C:/{n}", raising=False)
+    monkeypatch.setattr(mod, "_which", lambda n: f"C:/{n}", raising=False)
+    ok, _msg = mod._run(["netsh", "advfirewall", "firewall", "show", "rule", "name=x"])
+    assert ok is False
+
+
+def test_empty_pf_anchor_is_missing(tmp_path, monkeypatch):
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS],
+                                outputs={PF_RULES: (True, ""), PF_INFO: (True, "Status: Enabled")})
+    assert ok is False and rec["verified"] == "missing"

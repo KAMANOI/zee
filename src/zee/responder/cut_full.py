@@ -58,6 +58,7 @@ def cut_full(
     ``--all-interfaces`` emergency restore can undo it.
     """
     ok, detail, modified = _cut_full_dispatch()
+    verified: Optional[str] = None
     if ok and modified:
         # Exit codes are not proof: every changed interface / service must
         # read back as disabled, or the cut is not reported as applied.
@@ -65,19 +66,24 @@ def cut_full(
         unconfirmed = [m for m in modified if (states or {}).get(m) != "disabled"]
         if states is None or unconfirmed:
             ok = False
-            detail += ("; cut not confirmed by read-back: "
+            verified = "unverified" if states is None or any(
+                (states or {}).get(m) != "enabled" for m in unconfirmed) else "missing"
+            detail += (f"; cut not confirmed by read-back ({verified}): "
                        + ("state unreadable" if states is None else ", ".join(unconfirmed)))
+        else:
+            verified = "confirmed"
     # Record whatever actually changed, even on a partial failure: restore
     # refuses without a record, so an unrecorded partial cut could only be
     # undone by the broad emergency restore.
     if asset_id and cut_state is not None and modified:
         return record_or_report(cut_state, ok, detail, asset_id=asset_id,
-                                method="full", modified=modified)
+                                method="full", modified=modified, verified=verified)
     return ok, detail
 
 
 def record_or_report(cut_state, ok: bool, detail: str, *, asset_id: str,
-                     method: str, modified: list[str]) -> tuple[bool, str]:
+                     method: str, modified: list[str],
+                     verified: Optional[str] = None) -> tuple[bool, str]:
     """Write the cut record; a write failure turns the result into a failure.
 
     The OS cut and the ledger write are reported separately in ``detail``
@@ -86,7 +92,7 @@ def record_or_report(cut_state, ok: bool, detail: str, *, asset_id: str,
     """
     try:
         cut_state.record_cut(asset_id=asset_id, method=method,
-                             platform=sys.platform, modified=modified)
+                             platform=sys.platform, modified=modified, verified=verified)
     except OSError as e:
         logger.error("cut_state write failed for %s: %s", asset_id, e)
         return False, (
@@ -319,7 +325,7 @@ def _list_windows_interfaces_via_netsh(*, only_enabled: bool = True) -> list[str
 
 def _run(cmd: list[str]) -> tuple[bool, str]:
     try:
-        cp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        cp = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
     if cp.returncode != 0:

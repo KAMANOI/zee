@@ -362,7 +362,7 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
     if exe is None:
         return False, f"{_LAUNCH_FAILED}{cmd[0]} not found"
     try:
-        cp = subprocess.run([exe, *cmd[1:]], capture_output=True, text=True, timeout=10)
+        cp = subprocess.run([exe, *cmd[1:]], capture_output=True, text=True, errors="replace", timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
         return False, f"{_LAUNCH_FAILED}{e}"
     if cp.returncode != 0:

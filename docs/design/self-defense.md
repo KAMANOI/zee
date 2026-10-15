@@ -136,7 +136,7 @@ OS の権限を変える操作・root での実行・実機の pf 有効化は�
 
 **意図して入れなかったもの**：`permission.py` の配線（10/13 に未配線のまま入れる判断がされている）、心拍・監督（同じユーザーで動く監督は、監督対象と一緒に止められるので意味がない。第二段で別ユーザーとして作る）、ソケット・別プロセス化（§7 の承認後）。
 
-テスト：`tests/test_self_defense.py` 131件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 667 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
+テスト：`tests/test_self_defense.py` 144件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 680 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
 
 <a id="privileged-deployment"></a>
 ## 7. 【代表承認事項】権限分離を実地に適用する手順案
@@ -223,7 +223,7 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 | 記録外で有効でないもの | 無効・不明 | 警告として表示（判定は変えない） | `test_readback_outside_record_is_only_a_warning`・`test_unknown_state_outside_record_is_reported` |
 | 解決済みの記録 | ✅ の時だけ | ❌・❓ では未解決のまま | `test_recorded_nft_with_nft_missing_is_unverified` |
 
-### A-3. 遮断（`cut_full`）
+### A-3. 遮断（`cut_full`・`cut_egress`）
 
 | 手順 | 結果 | 判定 | テスト |
 |---|---|---|---|
@@ -233,6 +233,8 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 | 同上 | 有効・不明・一覧に無い・読めない | **FAILED**（コマンドの成功だけでは遮断と言わない。点検で見つけて修正） | 同上・`test_full_cut_unreadable_state_is_not_confirmed` |
 | 読み直しの道具 | Linux で `ip` が無い・Windows で PowerShell が無い | 遮断で使える代わりの道具（nmcli・netsh）でも読み直す。netsh の Admin State が英語以外なら「不明」 | `test_linux_states_keep_nmcli_when_ip_fails`・`test_windows_states_fall_back_to_netsh` |
 | 台帳に書けない | — | FAILED（`os=… ledger=FAILED` と戻し方を表示） | `test_ledger_write_failure_is_reported_not_raised` |
+| egress 遮断（`cut_egress`）の規則の読み直し | 全部確認 | 成功（台帳に `verified: confirmed`） | `test_egress_cut_confirmed_when_rule_reads_back`・`test_iptables_egress_needs_chain_and_jump`・`test_pf_egress_needs_rules_and_pf_enabled` |
+| 同上 | 無い（missing）・読めない／ツールなし（unverified） | FAILED。通知の本文に「not confirmed by read-back」と理由。台帳に結果 | `test_egress_cut_not_confirmed_is_failed`・`test_egress_cut_tool_missing_is_unverified`・`test_windows_egress_rule_missing_is_failed`・`test_handle_notifies_unconfirmed_egress_cut` |
 
 ### A-4. 点検で見つけた追加の穴
 
@@ -241,4 +243,4 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 3. **（今回の修正で入れた退行）全面復旧で nmcli が成功した後の個別インターフェースの失敗が、全体を FAILED にしていた**（消えた veth 1つで「復旧失敗」と誤報）。修正済み：その手順は未確認にし、名前ごとの読み直しで決める。
 4. **遮断の読み直しが、遮断と同じ代わりの道具を持っていなかった**（Linux で `ip` が無い・Windows で PowerShell が無いと、遮断できていても FAILED）。修正済み：nmcli・netsh でも読み直す。
 5. **未対応**：Linux の full 遮断は `nmcli networking off` が成功すると `ip link down` を行わず、確認も NetworkManager の状態だけ。NetworkManager の管理外のインターフェースは止まらない可能性がある（実機での確認が要る。§7.3 の隔離環境で確かめる）。
-6. **未対応**：egress 遮断（`cut_egress.py`）は規則を入れたあと読み直していない（コマンドの終了コードで判定）。復旧側と同じ読み直しを入れるのが次の手。
+6. **egress 遮断（`cut_egress.py`）が規則を入れたあと読み直していなかった**（コマンドの終了コードで「applied」）。修正済み：同じバックエンドの表示コマンドで Zee 固有名の規則を読み直し（nft はテーブルに drop、iptables はチェーンの DROP と OUTPUT からの jump、pfctl はアンカーの block と pf の有効、netsh は各ルール名）、確認できた時だけ applied。ツールが「無い」と答えたら missing、ツールが無い・読めない・形が違えば unverified で、どちらも FAILED と通知に書く。台帳の遮断記録に読み直しの結果（`verified`: confirmed／missing／unverified）を残す（full 遮断も同じ。full では、まだ有効と読めた＝missing、読めない・不明＝unverified）。pf のアンカーが空なら missing。ツールの出力が読めない文字コードでも例外で止まらず（置き換えて読む）、台帳と通知まで必ず進む。
