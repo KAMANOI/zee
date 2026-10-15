@@ -184,14 +184,24 @@ def _recorded_targets(cut_state: CutStateLog, asset_id: str) -> Optional[tuple[s
     return None if rec is None or damaged else tuple(n for k, n in rec.entries() if k != "firewall")
 
 
+# What the emergency restore assumes when the ledger cannot be read: an
+# iptables cut on an unknown backend may exist, so both backends must be
+# readable (on Linux; ignored elsewhere).
+_LEDGER_UNREADABLE = (IPT_BACKEND_PREFIX + "unknown",)
+
+
 def _recorded_firewall(cut_state: CutStateLog, asset_id: str) -> tuple[str, ...]:
-    """Firewall entries of the unresolved cut, or () (never raises)."""
+    """Firewall entries of the unresolved cut; () when the ledger says there
+    is none; ``_LEDGER_UNREADABLE`` when it is damaged or unreadable ("no
+    record" and "cannot tell" are not the same). Never raises."""
     try:
         rec, damaged = cut_state.unresolved_for(asset_id)
-    except Exception as e:  # noqa: BLE001 - any ledger problem = no record
+    except Exception as e:  # noqa: BLE001 - any ledger problem = cannot tell
         logger.warning("cut_state unusable for emergency restore: %s", e)
-        return ()
-    if rec is None or damaged:
+        return _LEDGER_UNREADABLE
+    if damaged:
+        return _LEDGER_UNREADABLE
+    if rec is None:
         return ()
     return tuple(n for k, n in rec.entries() if k == "firewall")
 

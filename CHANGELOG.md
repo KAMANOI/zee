@@ -159,9 +159,11 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   makes the cut unconfirmed).
 - **The emergency restore (`--all-interfaces`) uses the cut record only
   when it is readable** (it then releases the pf enable reference and
-  checks the recorded iptables backend like the normal restore). Without
-  a readable record it removes Zee's rules on the installed tools but
-  cannot release the pf reference, so pf may stay enabled.
+  checks the recorded iptables backend like the normal restore). With a
+  damaged or unreadable ledger it assumes an iptables cut of unknown
+  backend may exist (both backends must be readable, else Z606); with no
+  record at all it checks the installed tools only. Without a readable
+  record it cannot release the pf reference, so pf may stay enabled.
 - **Privilege separation (`docs/design/self-defense.md` §7) is not
   implemented:** an attacker running as the same user can still stop
   Zee, read the restore token, or forge a well-formed ledger.

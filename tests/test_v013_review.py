@@ -420,3 +420,34 @@ def test_emergency_restore_releases_the_recorded_pf_token(tmp_path, monkeypatch)
     log.record_cut(asset_id="a", method="egress", platform="darwin", modified=[PF, TOKEN])
     status, _d, _t = restore_mod._restore_compat(restore_mod._recorded_firewall(log, "a"))
     assert ["pfctl", "-X", "987654321"] in calls and status is True
+
+
+# ── Codex re-review round 3 ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("ledger", ["damaged", "raises"])
+def test_emergency_restore_with_unreadable_ledger_still_needs_both_backends(tmp_path, monkeypatch, ledger):
+    from zee.errors import ZeeError
+    monkeypatch.setattr(restore_mod.sys, "platform", "linux")
+    monkeypatch.setattr(restore_mod, "notify_local", lambda t, b: True)
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
+    _ipt_restore(monkeypatch, {"ip", "nft", "iptables", "iptables-nft"},
+                 {"iptables": "iptables v1.8.10 (nf_tables)", "iptables-nft": "iptables v1.8.10 (nf_tables)"})
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    p = tmp_path / "c.jsonl"
+    if ledger == "damaged":
+        p.write_text('{"type":"cut","asset_id":"a","method":"egress","platform":"linux",'
+                     '"modified":["__zee_iptables_egress_chain__","__zee_iptables_backend__:legacy"]}\n{oops\n')
+        log = CutStateLog(p)
+    else:
+        class Exploding(CutStateLog):
+            def unresolved_for(self, asset_id):
+                raise OSError("unreadable")
+        log = Exploding(p)
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("a", cut_state=log, all_interfaces=True)
+    assert ei.value.code == "Z606"
+
+
+def test_emergency_restore_without_any_record_checks_installed_tools_only(tmp_path):
+    assert restore_mod._recorded_firewall(CutStateLog(tmp_path / "none.jsonl"), "a") == ()
