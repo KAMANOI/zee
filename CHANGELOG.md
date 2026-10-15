@@ -5,6 +5,19 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.13.2] — 2026-10-16
+
+### Security
+
+- **macOS notifications no longer build AppleScript from the asset id or
+  message.** Up to v0.13.1 the title and body were escaped and pasted into
+  an `osascript -e` script, so an asset id containing a quote could run
+  AppleScript (including `do shell script`) as the user running Zee. They
+  now travel as `argv` to a fixed script. Found by an external review of
+  the privilege-separation prototype (not yet released). The Windows
+  balloon still builds a PowerShell string with the same escaping; it runs
+  as the same user and is tracked for the next release.
+
 ## [0.13.1] — 2026-10-16
 
 **If you use `cut_method: egress` on Linux without nft, or on Windows,

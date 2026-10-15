@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.13.1
+Early Public / Research Project — v0.13.2
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.13.1): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.13.2): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -119,7 +119,7 @@ zee gate audit
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.13.1"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.13.2"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git

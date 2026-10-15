@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.13.1
+Early Public / Research Project — v0.13.2
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.13.1): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.13.2): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -118,7 +118,7 @@ The MVP lives under `src/zee/`. **It runs dry_run by default and does not actual
 
 ```bash
 # Install in one line, pinned to a tag (recommended — no external registry involved)
-uv tool install "git+https://github.com/KAMANOI/zee@v0.13.1"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.13.2"
 
 # Or, to develop locally
 git clone https://github.com/KAMANOI/zee.git
