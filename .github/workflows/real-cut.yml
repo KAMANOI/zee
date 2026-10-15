@@ -61,14 +61,21 @@ jobs:
           sudo ip netns exec zt ip link set zt-in up
           sudo ip netns exec zt ip link set lo up
           # IPv6 too: 2001:db8::/32 (RFC 3849) is neither ULA nor link-local,
-          # so the cut must block it. nodad: usable at once.
+          # so the cut must block it. nodad: usable at once. keep_addr_on_down:
+          # Linux flushes static IPv6 addresses when a link goes down (the full
+          # cut), and nothing here would configure them again (on a real host,
+          # SLAAC / DHCPv6 / NetworkManager does; see docs/design/self-defense.md).
+          sudo sysctl -qw net.ipv6.conf.zt-host.keep_addr_on_down=1
+          sudo ip netns exec zt sysctl -qw net.ipv6.conf.zt-in.keep_addr_on_down=1
           sudo ip -6 addr add 2001:db8::1/64 dev zt-host nodad
           sudo ip netns exec zt ip -6 addr add 2001:db8::2/64 dev zt-in nodad
           nohup python -m http.server 8080 --bind 198.51.100.1 > /tmp/http.log 2>&1 &
           nohup python -m http.server 8081 --bind 2001:db8::1 > /tmp/http6.log 2>&1 &
-          sleep 1
-          sudo ip netns exec zt curl -sS -m 3 -o /dev/null -w '%{http_code}\n' http://198.51.100.1:8080/
-          sudo ip netns exec zt curl -sS -m 3 -o /dev/null -w '%{http_code}\n' 'http://[2001:db8::1]:8081/'
+          # --retry-connrefused: the servers may take a moment to listen.
+          for u in http://198.51.100.1:8080/ 'http://[2001:db8::1]:8081/'; do
+            sudo ip netns exec zt curl -sS -m 3 --retry 10 --retry-delay 1 --retry-connrefused \
+              -o /dev/null -w '%{http_code}\n' "$u"
+          done
       - name: Backend selection (PATH with only the chosen firewall tool)
         run: |
           set -eux
