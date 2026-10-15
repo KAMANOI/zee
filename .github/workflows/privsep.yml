@@ -36,6 +36,8 @@ jobs:
           set -eux
           sudo apt-get update -qq && sudo apt-get install -y -qq nftables jq
           /usr/bin/python3 --version
+          # the unit names the real file: the daemon refuses an executable that is a link
+          test "$(readlink -f /usr/bin/python3)" = /usr/bin/python3.12
           sudo useradd -m -s /bin/bash zeework
           sudo useradd -m -s /bin/bash -G zeework zeeother   # can open the socket, uid not allowed
           sudo mkdir -p /usr/local/lib/zee && sudo cp -R src /usr/local/lib/zee/
@@ -86,6 +88,15 @@ jobs:
           for _ in $(seq 20); do test -S /run/zee/cutd.sock && break; sleep 0.5; done
           sudo systemctl status zee-cutd --no-pager
           ls -l /run/zee/cutd.sock
+      - name: Runbook pre-enable check (no Python)
+        run: |
+          set -eux
+          for t in /usr/local/lib/zee/src /var/lib/zee-cutd; do test -z "$(sudo find "$t" -type l)"; done
+          test -z "$(sudo find /usr/lib/python3.12 /usr/local/lib/zee/src /var/lib/zee-cutd ! -user root)"
+          test -z "$(sudo find /usr/lib/python3.12 /usr/local/lib/zee/src /var/lib/zee-cutd ! -type l -perm /022)"
+          for t in /usr/bin/python3.12 /usr/local/lib/zee/src /var/lib/zee-cutd /run/zee; do
+            p=$t; while [ "$p" != "/" ]; do ls -ld "$p"; p=$(dirname "$p"); done
+          done
       - name: Approver key (runner user only) and root bootstrap
         run: |
           set -eux
@@ -177,9 +188,22 @@ jobs:
           sudo chmod 644 /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
           plutil -lint /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
           sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
-          for _ in $(seq 20); do test -S /var/db/zee/cutd.sock && break; sleep 0.5; done
+          for _ in $(seq 20); do test -S /private/var/db/zee/cutd.sock && break; sleep 0.5; done
           sudo launchctl print system/io.github.kamanoi.zee-cutd | head -30
-          ls -l /var/db/zee/cutd.sock
+          ls -l /private/var/db/zee/cutd.sock
+      - name: Runbook pre-enable check (no Python) and the python.org framework's links
+        run: |
+          set -eux
+          F=/Library/Frameworks/Python.framework
+          Z="/Library/Application Support/Zee"
+          sudo find "$F" -type l -exec ls -l {} + | tee /tmp/links.txt
+          wc -l < /tmp/links.txt
+          for t in "$Z/src" "$Z/cutd"; do test -z "$(sudo find "$t" -type l)"; done
+          test -z "$(sudo find "$F" "$Z/src" "$Z/cutd" ! -user root)"
+          test -z "$(sudo find "$F" "$Z/src" "$Z/cutd" ! -type l -perm +022)"
+          for t in "$PY" "$Z/src" "$Z/cutd" /private/var/db/zee; do
+            p=$t; while [ "$p" != "/" ]; do ls -ld "$p"; p=$(dirname "$p"); done
+          done
       - name: Approver key (runner user only) and root bootstrap
         run: |
           set -eux
@@ -187,11 +211,11 @@ jobs:
           openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
           openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
           cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -m zee privsep bootstrap-key \
-            --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /var/db/zee/cutd.sock
+            --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /private/var/db/zee/cutd.sock
       - name: Checks
         env:
           ZEE_SRC: /Library/Application Support/Zee/src
-          SOCK: /var/db/zee/cutd.sock
+          SOCK: /private/var/db/zee/cutd.sock
           STATE: /Library/Application Support/Zee/cutd
           WATCH_USER: zeework
           OUTSIDER: runner

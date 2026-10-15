@@ -33,20 +33,17 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   (docs/maintenance/privsep_install.md §7); `zee privsep digest` shows what
   is being approved and asks for "yes". Root commands and the shipped
   launchd / systemd definitions run Python with `-P -s` (never import from
-  the working directory or the user site). The daemon refuses to start if
-  its socket directory is not root-owned or is group/other-writable, or if
-  any directory or symlink on the way to it (resolved one component at a
-  time, every link hop included) could be replaced by anyone but root;
-  no group may write any of them, gid 0 included. It then binds the checked path. The
-  macOS socket is `/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775).
-  It also refuses to start (Z721) unless the Python executable, the standard
-  library, the site-packages directories (top level) and the zee package are
-  root-owned and writable by no one else, and unless the state directory
-  (approver key registry included) is root-owned 0700 with no links and no
-  entry anyone else can write. These checks run after Python has started:
-  the runbook adds a check of the trees and of every directory above them
-  before enabling. Symlinks inside these trees are judged by their owner and
-  their target (linked directories are walked too). An
+  the working directory or the user site). The daemon refuses to start
+  (Z721) unless the paths it trusts — its Python executable, the zee code,
+  the state directory and the socket directory — contain no `..` and no
+  symlink anywhere (each is its own realpath), every directory above them is
+  root-owned and writable by no one else (sticky ones excepted), the zee
+  tree holds no symlink, and everything in the zee tree and the state
+  directory (0700) is root-owned and writable by no one else. The Python
+  installation's own library is trusted, as for any root service; the
+  runbook checks it with `find` before enabling. The macOS socket is
+  `/private/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775, `/var` is
+  a link). An
   approved `stop` completes even if the requester hangs up. The admin CLI
   reports Z710 when nothing was sent and Z720 (result unknown) when a
   request was sent but no answer came back.

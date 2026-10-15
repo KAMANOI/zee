@@ -41,7 +41,7 @@ class AssetProfile:
 class Config:
     assets: tuple[AssetProfile, ...]
     dry_run: bool = True  # spec §2: 既定は dry_run
-    # [privsep] socket = "/run/zee/cutd.sock" (Linux) / "/var/db/zee/cutd.sock" (macOS): send cuts to the root cut
+    # [privsep] socket = "/run/zee/cutd.sock" (Linux) / "/private/var/db/zee/cutd.sock" (macOS): send cuts to the root cut
     # daemon instead of cutting in-process (docs/design/privsep.md). None = as before.
     privsep_socket: Optional[str] = None
 

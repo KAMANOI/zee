@@ -519,166 +519,71 @@ def _replaceable_by_others(st: os.stat_result, *, sticky_ok: bool) -> bool:
     return w and not (sticky_ok and st.st_mode & stat.S_ISVTX)
 
 
-def _resolve_checked(d: Path) -> Path:
-    """Resolve ``d`` one component at a time. Every directory entered must be owned by root
-    or us and not replaceable by others; every symlink followed (including hops in the
-    middle of a chain) must be owned by root or us, and it lives in a directory already
-    checked. Returns the resolved path; callers use it, never a second realpath()."""
-    me = os.geteuid()
+def plain_path(p: Path, what: str) -> Path:
+    """The one placement rule for every path the daemon trusts.
 
-    def bad(p: Path) -> ValueError:
-        return ValueError(f"socket directory must be owned by uid {me}, not a symlink and not "
-                          f"writable by others, and no directory or link on the way may be "
-                          f"replaceable by others: {p}")
-    todo, cur, hops = list(Path(os.path.abspath(d)).parts[1:]), Path("/"), 0
-    st = os.lstat(cur)
-    if st.st_uid not in (0, me) or _replaceable_by_others(st, sticky_ok=True):
-        raise bad(cur)
-    while todo:
-        name = todo.pop(0)
-        if name in ("", "."):
-            continue
-        if name == "..":
-            cur = cur.parent
-            continue
-        nxt = cur / name
-        st = os.lstat(nxt)
-        if stat.S_ISLNK(st.st_mode):
-            hops += 1
-            if st.st_uid not in (0, me) or hops > 40:
-                raise bad(nxt)
-            target = Path(os.readlink(nxt))
-            if target.is_absolute():
-                cur = Path("/")
-            todo = [*target.parts[1 if target.is_absolute() else 0:], *todo]
-            continue
+    The path must be absolute, contain no "..", and be its own realpath (no symlink
+    anywhere on it). Every directory above it must be owned by root (or us), and writable
+    by no one else; a sticky one (like /tmp) is the only exception. With no symlinks and no
+    replaceable directory on the way, nobody else can redirect the path after this check."""
+    s = os.fspath(p)
+    if not os.path.isabs(s) or ".." in s.split(os.sep) or os.path.realpath(s) != s:
+        raise ValueError(f"{what} must be an absolute path with no symlink and no '..' "
+                         f"(write it as {os.path.realpath(s)}): {s}")
+    me = os.geteuid()
+    for a in Path(s).parents:
+        st = os.lstat(a)
         if not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, me) \
                 or _replaceable_by_others(st, sticky_ok=True):
-            raise bad(nxt)
-        cur = nxt
-    return cur
+            raise ValueError(f"{what}: {a} must be a directory owned by root that no one else can write")
+    return Path(s)
 
 
-def _runtime_targets() -> dict[str, tuple[Path, str]]:
-    """What a root daemon actually executes: (path, depth) with depth "tree" (every file),
-    "top" (the directory and its entries: site-packages, where .pth files run at start-up)."""
-    import site
-    import sysconfig
-    t = {"python": (Path(sys.executable), "tree"),
-         "zee package": (Path(__file__).resolve().parent.parent, "tree")}
-    for k in ("stdlib", "platstdlib"):
-        t[k] = (Path(sysconfig.get_paths()[k]), "tree")
-    for n, sp in enumerate(site.getsitepackages()):
-        if os.path.isdir(sp):
-            t[f"site-packages {n}"] = (Path(sp), "top")
-    return t
+def _owned(path: str, what: str, *, links_ok: bool = False) -> os.stat_result:
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) and not links_ok:
+        raise ValueError(f"{what}: {path} is a symlink (none allowed here)")
+    if st.st_uid != os.geteuid() or _replaceable_by_others(st, sticky_ok=False):
+        raise ValueError(f"{what}: {path} must be owned by uid {os.geteuid()} and writable by no one else")
+    return st
 
 
-_THIRD_PARTY = {"site-packages", "dist-packages"}  # checked at the top level as their own targets
-
-
-def check_runtime(targets: Optional[dict[str, tuple[Path, str]]] = None) -> None:
-    """Refuse to run as root from code that anyone but root could change: the Python
-    executable, the standard library, the site-packages directories (top level: .pth files
-    run at start-up) and the zee package. Each is reached through directories and links
-    nobody else can replace, owned by us, writable by no one else (no group, gid 0 included).
-    (macOS /usr/bin/python3 is 3.9; a Homebrew Python belongs to the user who installed it.)"""
-    me = os.geteuid()
-    for what, (t, depth) in (targets or _runtime_targets()).items():
-        try:
-            real = _resolve_checked(t.parent) / t.name
-            st = os.lstat(real)
-            while stat.S_ISLNK(st.st_mode):  # e.g. bin/python3 -> python3.12, in a checked directory
-                if st.st_uid not in (0, me):
-                    raise ValueError(f"link not owned by root: {real}")
-                link = Path(os.readlink(real))
-                real = _resolve_checked((real.parent / link).parent) / link.name
-                st = os.lstat(real)
-        except (OSError, ValueError) as e:
-            raise ValueError(f"{what} ({t}) is not root-controlled: {e}") from e
-        if st.st_uid != me or _replaceable_by_others(st, sticky_ok=False):
-            raise ValueError(f"{what} ({real}) must be owned by uid {me} and writable by no one else")
-        if not stat.S_ISDIR(st.st_mode):
-            continue
-        _check_tree(what, real, depth, me, set())
-
-
-def _check_tree(what: str, top: Path, depth: str, me: int, seen: set) -> None:
-    """Every entry under ``top``: ours and writable by no one else. A symlink is judged by its
-    owner (its mode means nothing) and by its target: the path to the target must not be
-    replaceable, the target must pass the same test, and a linked directory is walked too."""
-    if str(top) in seen:  # link cycles
-        return
-    seen.add(str(top))
-    for root, dirs, files in os.walk(top):
-        if depth == "tree":
-            dirs[:] = [d for d in dirs if d not in _THIRD_PARTY]
+def check_runtime(executable: Optional[str] = None, tree: Optional[Path] = None) -> None:
+    """The interpreter file and the zee code: placed by plain_path, owned by us, writable by
+    no one else, and no symlink anywhere in the zee tree. The interpreter's own library is
+    trusted like any root service's (the runbook checks it before enabling)."""
+    exe = plain_path(Path(executable or sys.executable), "python executable")
+    _owned(str(exe), "python executable")
+    tree = plain_path(tree or Path(__file__).resolve().parent.parent, "zee code")
+    _owned(str(tree), "zee code")
+    for root, dirs, files in os.walk(tree):
         for n in dirs + files:
-            path = os.path.join(root, n)
-            sub = os.lstat(path)
-            if stat.S_ISLNK(sub.st_mode):
-                target = Path(os.path.normpath(os.path.join(root, os.readlink(path))))
-                try:
-                    if sub.st_uid not in (0, me):
-                        raise ValueError("link not owned by root")
-                    resolved = _resolve_checked(target.parent) / target.name
-                    tst = os.lstat(resolved)
-                    while stat.S_ISLNK(tst.st_mode):
-                        if tst.st_uid not in (0, me):
-                            raise ValueError("link not owned by root")
-                        nxt = Path(os.path.normpath(os.path.join(resolved.parent, os.readlink(resolved))))
-                        resolved = _resolve_checked(nxt.parent) / nxt.name
-                        tst = os.lstat(resolved)
-                except (OSError, ValueError) as e:
-                    raise ValueError(f"{what}: link {path} -> {target} is not root-controlled: {e}") from e
-                if tst.st_uid != me or _replaceable_by_others(tst, sticky_ok=False):
-                    raise ValueError(f"{what}: {path} -> {resolved} must be owned by uid {me} "
-                                     "and writable by no one else")
-                if stat.S_ISDIR(tst.st_mode) and depth == "tree":
-                    _check_tree(what, resolved, depth, me, seen)
-                continue
-            if sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
-                raise ValueError(f"{what}: {path} must be owned by uid {me} and writable by no one else")
-        if depth == "top":
-            break
+            _owned(os.path.join(root, n), "zee code")
 
 
 def check_state_dir(d: Path) -> Path:
-    """The state directory holds the approver key registry: if anyone but root could put a
-    file there (or swap the directory), they could register their own key. Reached through
-    nothing others can replace; ours, 0700; every entry ours, a regular file or directory
-    (no links), writable by no one else. Created 0700 when missing. Returns the checked path."""
-    d = Path(os.path.abspath(d))
-    if os.path.islink(d):
-        raise ValueError(f"state directory is a symlink: {d}")
-    parent = _resolve_checked(d.parent)
-    real = parent / d.name
-    if not os.path.lexists(real):
-        real.mkdir(mode=0o700)
-    me = os.geteuid()
-    st = os.lstat(real)
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != me or stat.S_IMODE(st.st_mode) & 0o077:
-        raise ValueError(f"state directory must be a directory owned by uid {me}, mode 0700: {real}")
-    for root, dirs, files in os.walk(real):
+    """Holds the approver key registry: placed by plain_path, ours, 0700, every entry ours,
+    no links, writable by no one else. Created 0700 when missing (its parent checked first)."""
+    d = Path(d)
+    if not os.path.lexists(d):
+        plain_path(d.parent, "state directory parent")
+        d.mkdir(mode=0o700)
+    d = plain_path(d, "state directory")
+    st = _owned(str(d), "state directory")
+    if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
+        raise ValueError(f"state directory must be a directory owned by uid {os.geteuid()}, mode 0700: {d}")
+    for root, dirs, files in os.walk(d):
         for n in dirs + files:
-            sub = os.lstat(os.path.join(root, n))
-            if stat.S_ISLNK(sub.st_mode) or sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
-                raise ValueError(f"state entry must be ours, not a link, writable by no one else: "
-                                 f"{os.path.join(root, n)}")
-    return real
+            _owned(os.path.join(root, n), "state entry")
+    return d
 
 
 def check_socket_dir(d: Path) -> Path:
-    """The socket directory: not a symlink itself, ours, writable by no one else, reached
-    only through what others can't replace. Returns the checked, resolved path."""
-    if os.path.islink(os.path.abspath(d)):
-        raise ValueError(f"socket directory is a symlink: {d}")
-    real = _resolve_checked(d)
-    st = os.lstat(real)
-    if st.st_uid != os.geteuid() or _replaceable_by_others(st, sticky_ok=False):
-        raise ValueError(f"socket directory must be owned by uid {os.geteuid()} and not "
-                         f"writable by others: {real}")
-    return real
+    """Placed by plain_path, ours, a directory writable by no one else."""
+    d = plain_path(Path(d), "socket directory")
+    if not stat.S_ISDIR(_owned(str(d), "socket directory").st_mode):
+        raise ValueError(f"socket directory is not a directory: {d}")
+    return d
 
 
 def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
@@ -686,12 +591,12 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
     """Bind, then serve until a signed ``stop``. Exit 0 so `KeepAlive.SuccessfulExit=false`
     (launchd) / `Restart=on-failure` (systemd) leave it stopped."""
     check_runtime()
-    socket_path = Path(os.path.abspath(socket_path))
-    if not os.path.lexists(socket_path.parent):  # e.g. /var/db/zee on macOS (RuntimeDirectory on Linux)
-        made = _resolve_checked(socket_path.parent.parent) / socket_path.parent.name
-        made.mkdir()
-        os.chmod(made, 0o755)  # the daemon's umask (077) would make it untraversable
-    socket_path = check_socket_dir(socket_path.parent) / socket_path.name  # fixed, checked path
+    socket_path = Path(socket_path)
+    if not os.path.lexists(socket_path.parent):  # macOS /private/var/db/zee (RuntimeDirectory on Linux)
+        plain_path(socket_path.parent.parent, "socket directory parent")
+        socket_path.parent.mkdir()
+        os.chmod(socket_path.parent, 0o755)  # the daemon's umask (077) would make it untraversable
+    socket_path = check_socket_dir(socket_path.parent) / socket_path.name
     if socket_path.is_symlink():
         raise ValueError(f"symlink refused: {socket_path}")
     if socket_path.exists():

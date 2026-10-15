@@ -75,6 +75,11 @@ def env(tmp_path):
     return d, cuts, restores, clock
 
 
+def rtmp() -> Path:
+    """A fresh directory under /tmp, written as its realpath (macOS: /private/tmp)."""
+    return Path(os.path.realpath(tempfile.mkdtemp(prefix="zt", dir="/tmp")))
+
+
 def _wait_listening(sock: Path) -> None:
     """The socket file appears at bind(); connect() works only after listen()."""
     for _ in range(250):
@@ -487,7 +492,7 @@ def test_serve_end_to_end(tmp_path):
     (state / "assets.toml").write_text(CFG)
     cuts = Cuts()
     d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=cuts.fns())
-    sockdir = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))  # AF_UNIX paths are short
+    sockdir = rtmp()  # AF_UNIX paths are short
     sock = sockdir / "s"
     t = threading.Thread(target=serve, args=(d, sock), kwargs={"check_every": 0.05}, daemon=True)
     t.start()
@@ -540,7 +545,7 @@ def test_slow_and_excess_connections_cannot_block_the_daemon(tmp_path, monkeypat
     state.mkdir(mode=0o700)
     (state / "assets.toml").write_text(CFG)
     d = dm.CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
-    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
+    sock = rtmp() / "s"
     threading.Thread(target=dm.serve, args=(d, sock), kwargs={"check_every": 60}, daemon=True).start()
     _wait_listening(sock)
     time.sleep(0.3)  # let the probe connection release its slot
@@ -589,12 +594,12 @@ def test_socket_directory_must_not_be_writable_by_others(tmp_path):
     state = tmp_path / "cutd"
     state.mkdir(mode=0o700)
     d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier())
-    loose = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    loose = rtmp()
     os.chmod(loose, 0o777)
-    with pytest.raises(ValueError, match="writable by others"):
+    with pytest.raises(ValueError, match="writable by no one else"):
         serve(d, loose / "s")
-    real = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    link = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "l"
+    real = rtmp()
+    link = rtmp() / "l"
     link.symlink_to(real)
     with pytest.raises(ValueError):
         serve(d, link / "s")
@@ -602,7 +607,7 @@ def test_socket_directory_must_not_be_writable_by_others(tmp_path):
 
 def test_cli_without_daemon_gives_z710_not_a_traceback(tmp_path, capsys):
     from zee.cli import main
-    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "none"
+    sock = rtmp() / "none"
     assert main(["privsep", "status", "--socket", str(sock)]) == 1
     assert "Z710" in capsys.readouterr().err
     assert main(["privsep", "submit", "--socket", str(sock), "--request", str(tmp_path / "missing.json"),
@@ -657,12 +662,12 @@ def test_submit_is_rate_limited_per_uid(env):
 
 def test_socket_dir_under_a_replaceable_parent_is_refused():
     from zee.privsep.daemon import check_socket_dir
-    parent = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    parent = rtmp()
     child = parent / "run"
     child.mkdir(mode=0o755)
     check_socket_dir(child)
     os.chmod(parent, 0o777)  # others could rename "run" and plant their own socket
-    with pytest.raises(ValueError, match="replaceable"):
+    with pytest.raises(ValueError, match="no one else can write"):
         check_socket_dir(child)
     os.chmod(parent, 0o1777)  # sticky (like /tmp): others can't rename our directory
     check_socket_dir(child)
@@ -671,7 +676,7 @@ def test_socket_dir_under_a_replaceable_parent_is_refused():
 def test_cut_result_unknown_after_the_request_was_sent():
     from zee.privsep.client import privsep_cut
     from zee.responder.blocker import CutRequest
-    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
+    sock = rtmp() / "s"
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(str(sock))
     srv.listen(1)
@@ -685,20 +690,6 @@ def test_cut_result_unknown_after_the_request_was_sent():
     assert ok is False and "UNKNOWN" in detail and "nothing was sent" not in detail
 
 
-# ---- Codex 7
-def test_socket_path_through_a_replaceable_link_is_refused():
-    from zee.privsep.daemon import check_socket_dir
-    safe = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    (safe / "run").mkdir(mode=0o755)
-    open_dir = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    os.chmod(open_dir, 0o777)  # anyone may swap entries here (not sticky)
-    (open_dir / "link").symlink_to(safe)
-    assert (open_dir / "link" / "run").is_dir()
-    with pytest.raises(ValueError, match="replaceable"):
-        check_socket_dir(open_dir / "link" / "run")  # the resolved path alone would pass
-    assert check_socket_dir(safe / "run") == Path(os.path.realpath(safe / "run"))
-
-
 def test_approved_stop_completes_even_if_the_requester_hangs_up(tmp_path):
     from zee.privsep.daemon import CutDaemon, serve
     state = tmp_path / "cutd"
@@ -706,7 +697,7 @@ def test_approved_stop_completes_even_if_the_requester_hangs_up(tmp_path):
     (state / "assets.toml").write_text(CFG)
     d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
     d.engine.state["keys"]["k1"] = "s1"
-    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
+    sock = rtmp() / "s"
     t = threading.Thread(target=serve, args=(d, sock), kwargs={"check_every": 60}, daemon=True)
     t.start()
     _wait_listening(sock)
@@ -735,36 +726,21 @@ def test_cli_reports_unknown_result_after_sending(monkeypatch, capsys):
 # ---- Codex 8
 def test_group_writable_parent_is_refused_whatever_the_group():
     from zee.privsep.daemon import check_socket_dir
-    parent = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    parent = rtmp()
     (parent / "run").mkdir(mode=0o755)
     if os.getgid() == 0:
         pytest.skip("running with gid 0")
     os.chown(parent, -1, os.getgid())  # a group other than gid 0 (BSD /tmp gives wheel)
     os.chmod(parent, 0o775)
-    with pytest.raises(ValueError, match="replaceable"):
+    with pytest.raises(ValueError, match="no one else can write"):
         check_socket_dir(parent / "run")
-
-
-def test_link_hop_in_the_middle_of_a_chain_is_checked():
-    from zee.privsep.daemon import check_socket_dir
-    safe = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    (safe / "run").mkdir(mode=0o755)
-    untrusted = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    os.chmod(untrusted, 0o777)
-    (untrusted / "hop").symlink_to(safe)
-    trusted = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    (trusted / "link").symlink_to(untrusted / "hop")
-    with pytest.raises(ValueError, match="replaceable"):
-        check_socket_dir(trusted / "link" / "run")
-    (trusted / "direct").symlink_to(safe)
-    assert check_socket_dir(trusted / "direct" / "run") == Path(os.path.realpath(safe / "run"))
 
 
 # ---- final review (Codex 09 / re-review)
 def test_gid0_group_writable_socket_dir_is_refused(monkeypatch):
     """No group gets write access, gid 0 included (st_gid is faked: chgrp 0 needs root)."""
     from zee.privsep import daemon
-    d = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    d = rtmp()
     os.chmod(d, 0o775)
     real_lstat, target = os.lstat, str(os.path.realpath(d))
 
@@ -775,43 +751,13 @@ def test_gid0_group_writable_socket_dir_is_refused(monkeypatch):
                                    st.st_size, int(st.st_atime), int(st.st_mtime), int(st.st_ctime)))
         return st
     monkeypatch.setattr(daemon.os, "lstat", lstat)
-    with pytest.raises(ValueError, match="writable by others"):
+    with pytest.raises(ValueError, match="writable by no one else"):
         daemon.check_socket_dir(d)
-
-
-def test_check_runtime_refuses_code_others_can_write():
-    from zee.privsep.daemon import check_runtime
-    root = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    (root / "bin").mkdir(mode=0o755)
-    exe = root / "bin" / "python3.12"
-    exe.write_text("")
-    os.chmod(exe, 0o755)
-    (root / "bin" / "python3").symlink_to("python3.12")
-    pkg = root / "zee"
-    pkg.mkdir(mode=0o755)
-    (pkg / "a.py").write_text("")
-    os.chmod(pkg / "a.py", 0o644)
-    (root / "site-packages").mkdir(mode=0o755)
-    t = {"python": (root / "bin" / "python3", "tree"), "site": (root / "site-packages", "top"),
-         "zee package": (pkg, "tree")}
-    check_runtime(t)
-    os.chmod(pkg / "a.py", 0o666)  # a module anyone can rewrite
-    with pytest.raises(ValueError, match="zee package"):
-        check_runtime(t)
-    os.chmod(pkg / "a.py", 0o644)
-    os.chmod(exe, 0o775)  # the interpreter itself group-writable
-    with pytest.raises(ValueError, match="python"):
-        check_runtime(t)
-    os.chmod(exe, 0o755)
-    (root / "site-packages" / "evil.pth").write_text("")
-    os.chmod(root / "site-packages" / "evil.pth", 0o666)  # a .pth anyone can rewrite runs at start-up
-    with pytest.raises(ValueError, match="site"):
-        check_runtime(t)
 
 
 def test_daemon_start_refusal_is_a_zee_error(tmp_path, capsys):
     from zee.cli import main
-    loose = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    loose = rtmp()
     os.chmod(loose, 0o777)
     assert main(["privsep", "daemon", "--state-dir", str(tmp_path / "s"), "--allow-uid", "1",
                  "--socket", str(loose / "s")]) == 1
@@ -862,32 +808,68 @@ def test_state_dir_must_be_root_controlled(tmp_path):
 
 def test_state_dir_under_a_replaceable_parent_is_refused():
     from zee.privsep.daemon import CutDaemon
-    parent = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    parent = rtmp()
     os.chmod(parent, 0o777)  # anyone could swap "cutd" for a directory with their own key
-    with pytest.raises(ValueError, match="replaceable"):
+    with pytest.raises(ValueError, match="no one else can write"):
         CutDaemon(parent / "cutd", {WATCH}, verifier=HmacVerifier())
 
 
-# ---- Codex 11
-def test_check_runtime_follows_links_to_their_targets():
-    from zee.privsep.daemon import check_runtime
-    root = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+# ---- Codex 12: one placement rule (no symlink, no "..", root-only ancestors)
+def test_dotdot_through_an_alias_is_refused():
+    """alias/../late.py used to be folded by normpath before the check (Codex 12)."""
+    from zee.privsep.daemon import plain_path
+    root = rtmp()
+    (root / "real").mkdir(mode=0o755)
+    (root / "alias").symlink_to(root / "real")
+    with pytest.raises(ValueError, match="no symlink and no '..'"):
+        plain_path(root / "alias" / ".." / "late.py", "x")
+    with pytest.raises(ValueError, match="no symlink and no '..'"):
+        plain_path(Path(str(root / "real") + "/../real"), "x")
+
+
+def test_any_symlink_on_a_trusted_path_is_refused():
+    from zee.privsep.daemon import check_socket_dir, plain_path
+    root = rtmp()
+    (root / "real").mkdir(mode=0o755)
+    (root / "alias").symlink_to(root / "real")
+    with pytest.raises(ValueError, match="no symlink"):
+        check_socket_dir(root / "alias")
+    assert check_socket_dir(root / "real") == root / "real"
+    if os.path.realpath("/tmp") != "/tmp":  # macOS: /tmp -> private/tmp is itself a link
+        with pytest.raises(ValueError, match="no symlink"):
+            plain_path(Path("/tmp") / root.name, "x")
+
+
+def _tree(root: Path) -> tuple[Path, Path]:
+    (root / "bin").mkdir(mode=0o755)
+    exe = root / "bin" / "python3.12"
+    exe.write_text("")
+    os.chmod(exe, 0o755)
     pkg = root / "zee"
     pkg.mkdir(mode=0o755)
-    open_dir = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    os.chmod(open_dir, 0o777)
-    (open_dir / "mod.py").write_text("")
-    os.chmod(open_dir / "mod.py", 0o644)
-    (pkg / "mod.py").symlink_to(open_dir / "mod.py")  # target sits where anyone can swap it
-    with pytest.raises(ValueError, match="mod.py"):
-        check_runtime({"zee package": (pkg, "tree")})
-    (pkg / "mod.py").unlink()
-    safe = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
-    (safe / "inner").mkdir(mode=0o755)
-    (safe / "inner" / "x.py").write_text("")
-    os.chmod(safe / "inner" / "x.py", 0o666)  # inside a linked directory
-    (pkg / "sub").symlink_to(safe / "inner")
-    with pytest.raises(ValueError, match="x.py"):
-        check_runtime({"zee package": (pkg, "tree")})
-    os.chmod(safe / "inner" / "x.py", 0o644)
-    check_runtime({"zee package": (pkg, "tree")})  # a safe link is fine whatever its own mode
+    (pkg / "a.py").write_text("")
+    os.chmod(pkg / "a.py", 0o644)
+    return exe, pkg
+
+
+def test_check_runtime_accepts_a_plain_tree_and_refuses_links_or_writable_code():
+    from zee.privsep.daemon import check_runtime
+    root = rtmp()
+    exe, pkg = _tree(root)
+    check_runtime(str(exe), pkg)
+    (root / "bin" / "python3").symlink_to("python3.12")
+    with pytest.raises(ValueError, match="no symlink"):  # the executable itself a link
+        check_runtime(str(root / "bin" / "python3"), pkg)
+    elsewhere = rtmp()
+    (elsewhere / "b.py").write_text("")
+    (pkg / "b.py").symlink_to(elsewhere / "b.py")
+    with pytest.raises(ValueError, match="symlink"):  # any link inside the zee tree
+        check_runtime(str(exe), pkg)
+    (pkg / "b.py").unlink()
+    os.chmod(pkg / "a.py", 0o664)
+    with pytest.raises(ValueError, match="writable by no one else"):
+        check_runtime(str(exe), pkg)
+    os.chmod(pkg / "a.py", 0o644)
+    os.chmod(exe, 0o775)
+    with pytest.raises(ValueError, match="python executable"):
+        check_runtime(str(exe), pkg)

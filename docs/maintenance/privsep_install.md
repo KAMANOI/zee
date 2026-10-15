@@ -17,9 +17,9 @@ cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3
   **それが root で実行される**（4ペルソナ・レビューで再現。CI でも「付けないと実行される／付けると実行されない」を毎回確かめる）。
 - `-s`：ユーザーの site-packages を読まない（macOS の sudo は HOME を引き継ぐため）。
 - `cd /`：念のため、業務ユーザーが書けない場所から実行する。ファイル（公開鍵など）は**絶対パス**で渡す。
-- Python 本体も root 所有の 3.11 以上を使う。遮断部は起動時に、Python の実体・`sys.prefix`・zee のコード一式が
-  root 所有でグループ／他から書けないことを確かめ、満たさなければ起動を拒否する（Z721）。
-  - Linux：ディストリビューションの `/usr/bin/python3`（3.11 以上であること）。
+- Python 本体も root 所有の 3.11 以上を使う。**常駐の定義（plist・unit）には、シンボリックリンクではない実体のパスを書く**
+  （`readlink -f`／`realpath` で確かめる。遮断部はリンクの実行ファイルを拒否する）。
+  - Linux：ディストリビューションの Python。Ubuntu 24.04 なら `/usr/bin/python3` はリンクなので、実体の `/usr/bin/python3.12`。
   - macOS：`/usr/bin/python3` は 3.9 なので使えない。Homebrew の Python は利用者の所有なので**使わない**。
     python.org のインストーラを入れ、署名を確かめてから root 専用にする：
     ```sh
@@ -28,30 +28,39 @@ cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3
     sudo installer -pkg /tmp/python.pkg -target /
     sudo chown -R root:wheel /Library/Frameworks/Python.framework
     sudo chmod -R go-w /Library/Frameworks/Python.framework   # 既定は root:admin 775＝admin に root を渡す
-    # 以後 <root 所有の python3> は /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
+    # 以後 <root 所有の python3> は実体の /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
     ```
 
-### 有効にする前の点検（Python の外の道具で）
+### 遮断部が起動時に確かめること（規則は1つ）
 
-遮断部は起動のたびに Python・標準ライブラリ・site-packages・zee のコード・状態ディレクトリの所有者と権限を確かめ、
-root 以外が書き換えられる配置なら起動を拒否する（Z721）。ただしこの確認は Python が起動して zee を読み込んだ**後**に
-走るので、すでに書き換えられた Python・zee が相手では意味がない。だから**有効にする前に一度**、root 所有でない、
-またはグループ／他から書けるものが1つも無いことを、Python 以外の道具で確かめる（何か表示されたら直してから進む）：
+遮断部が信用するパス（Python の実行ファイル・zee のコード一式・状態ディレクトリ・ソケットのディレクトリ）は、
+**`..` を含まず、どこにもシンボリックリンクが無い**（`realpath` が自分自身）こと。そのうえで、上のディレクトリが
+すべて root 所有でグループ／他から書けない（`/tmp` のような sticky だけは可）こと。zee のコード一式の中には
+リンクが1つも無く、全部が root 所有でグループ／他から書けないこと。満たさなければ起動を拒否する（Z721）。
+**Python 自身のライブラリ（標準ライブラリ・site-packages）は、root で動くサービス一般と同じく信頼する**
+（遮断部は確かめない）。だから下の点検で、有効にする前に一度確かめる。macOS のソケットは `/var` がリンクなので
+実体の `/private/var/db/zee/cutd.sock` と書く。
+
+### 有効にする前の点検（Python を使わずに。何か表示されたら直してから進む）
+
+起動時の確認は Python が起動して zee を読み込んだ**後**に走るので、すでに書き換えられた Python・zee が相手では効かない。
+有効にする前に一度、次を root で実行する。`<prefix>` は Linux なら `/usr/lib/python3.12`、macOS なら
+`/Library/Frameworks/Python.framework`。
 
 ```sh
-sudo find <python の prefix> <zee の src> <状態ディレクトリ> \( ! -user root -o \( ! -type l \( -perm -g+w -o -perm -o+w \) \) \) -print
-# シンボリックリンクは常に lrwxrwxrwx と表示されるので権限では見ない（所有者だけ見る）
-```
-
-`find` は指定したディレクトリの中しか見ない。**そこへ至る上のディレクトリも**、root 所有で、グループ／他から書けない
-（`/tmp` のような sticky は可）ことを、書いたままの経路と実体の経路の両方で確かめる。途中にシンボリックリンクがあれば、
-そのリンクが root 所有かも見る（下は対象ごとに上へたどって表示するだけ。1行ずつ目で確かめる）：
-
-```sh
-for t in <python の prefix> <zee の src> <状態ディレクトリ> <ソケットのディレクトリ>; do
-  for p in "$t" "$(cd "$t" && pwd -P)"; do
-    while [ "$p" != "/" ]; do ls -ld "$p"; p=$(dirname "$p"); done; ls -ld /
-  done
+# 1) zee のコード一式・状態ディレクトリにリンクが無い（何も表示されないこと）
+sudo find <zee の src> <状態ディレクトリ> -type l
+# 2) root 以外の持ち物が無い（何も表示されないこと）
+sudo find <prefix> <zee の src> <状態ディレクトリ> ! -user root
+# 3) グループ／他から書けるものが無い（リンクは除く。何も表示されないこと）
+sudo find <prefix> <zee の src> <状態ディレクトリ> ! -type l -perm +022    # macOS
+sudo find <prefix> <zee の src> <状態ディレクトリ> ! -type l -perm /022    # Linux
+# 4) Python の中のリンクの行き先を目で確かめる（python.org の配布には Versions/Current・bin/python3 など
+#    24 本ある。行き先が同じフレームワークの中であること）
+sudo find <prefix> -type l -exec ls -l {} +
+# 5) それぞれの上のディレクトリ：root 所有で、グループ／他から書けない（sticky の /tmp だけは可）
+for t in <Python の実行ファイル> <zee の src> <状態ディレクトリ> <ソケットのディレクトリ>; do
+  p=$t; while [ "$p" != "/" ]; do ls -ld "$p"; p=$(dirname "$p"); done; ls -ld /
 done
 ```
 
@@ -72,7 +81,7 @@ Linux の置き場所は `/usr/local/lib/zee` を使う（GitHub の Ubuntu ラ�
 
 ```toml
 [privsep]
-socket = "/var/db/zee/cutd.sock"   # macOS。Linux は "/run/zee/cutd.sock"
+socket = "/private/var/db/zee/cutd.sock"   # macOS（/var はリンクなので実体で書く）。Linux は "/run/zee/cutd.sock"
 ```
 
 ## 2. macOS（LaunchDaemon）
@@ -83,7 +92,7 @@ Z="/Library/Application Support/Zee"
 sudo mkdir -p "$Z" && sudo cp -R /絶対パス/<リポジトリ>/src "$Z/" && sudo chown -R root:wheel "$Z" && sudo chmod -R go-w "$Z"
 sudo install -d -m 700 -o root -g wheel "$Z/cutd"
 sudo install -m 600 -o root -g wheel <業務ユーザーの assets.toml の絶対パス> "$Z/cutd/assets.toml"
-# examples/privsep/io.github.kamanoi.zee-cutd.plist の PYTHON_BIN（root 所有の python3）/ WATCH_UID（id -u <業務ユーザー>）/
+# examples/privsep/io.github.kamanoi.zee-cutd.plist の PYTHON_BIN（root 所有の python3 の実体のパス）/ WATCH_UID（id -u <業務ユーザー>）/
 # WATCH_GROUP（専用グループの gid）/ WATCH_CONFIG（業務ユーザーの assets.toml の絶対パス）を書き換えて：
 sudo install -m 644 -o root -g wheel /絶対パス/io.github.kamanoi.zee-cutd.plist /Library/LaunchDaemons/
 sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
@@ -101,7 +110,7 @@ sudo install -m 600 <業務ユーザーの assets.toml の絶対パス> /var/lib
 # examples/privsep/zee-cutd.service の WATCH_UID / WATCH_GROUP（専用グループ）/ WATCH_CONFIG を書き換えて：
 sudo install -m 644 /絶対パス/zee-cutd.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now zee-cutd
-cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
+cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3.12 -P -s -m zee privsep bootstrap-key \
   --key-id phone --public-key /絶対パス/pub.pem
 ```
 

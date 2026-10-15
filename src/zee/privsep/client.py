@@ -11,7 +11,7 @@ from ..responder.blocker import CutRequest
 
 # macOS: /var/db (root:wheel 0755 all the way up). Not /var/run: it is root:daemon 0775,
 # so a non-root service account could replace the socket (Codex review 8).
-DEFAULT_SOCKET = Path("/var/db/zee/cutd.sock" if sys.platform == "darwin" else "/run/zee/cutd.sock")
+DEFAULT_SOCKET = Path("/private/var/db/zee/cutd.sock" if sys.platform == "darwin" else "/run/zee/cutd.sock")
 
 
 class NotSent(OSError):
