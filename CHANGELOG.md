@@ -12,8 +12,14 @@ releases.
 - **macOS notifications no longer build AppleScript from the asset id or
   message.** Up to v0.13.1 the title and body were escaped and pasted into
   an `osascript -e` script, so an asset id containing a quote could run
-  AppleScript (including `do shell script`) as the user running Zee. They
-  now travel as `argv` to a fixed script. Found by an external review of
+  AppleScript (including `do shell script`) as the user running Zee —
+  confirmed on a real Mac with the v0.13.1 code (a crafted asset id ran a
+  shell command). The asset id comes from `assets.toml`, which only the
+  user running Zee can write, so this gives no extra privilege today; it
+  would have under the privilege-separation prototype, where the cut
+  daemon runs as root. Title and body now travel as `argv` (after `--`)
+  to a fixed script; a test round-trips quotes, backslashes, newlines,
+  empty and `-e` arguments through the real `osascript`. Found by an external review of
   the privilege-separation prototype (not yet released). The Windows
   balloon still builds a PowerShell string with the same escaping; it runs
   as the same user and is tracked for the next release.

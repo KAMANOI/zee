@@ -53,7 +53,7 @@ def _notify_macos(title: str, body: str) -> bool:
         subprocess.run(
             ["osascript", "-e", "on run argv", "-e",
              "display notification (item 2 of argv) with title (item 1 of argv)",
-             "-e", "end run", title, body],
+             "-e", "end run", "--", title, body],
             check=False,
             timeout=3,
         )

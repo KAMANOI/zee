@@ -14,4 +14,29 @@ def test_macos_title_and_body_are_argv_not_script(monkeypatch):
         "display notification (item 2 of argv) with title (item 1 of argv)",
         "end run",
     ]
-    assert cmd[-2:] == [evil, evil + "\\"]
+    assert cmd[-3:] == ["--", evil, evil + "\\"]
+
+
+def test_leading_hyphen_title_is_not_an_option(monkeypatch):
+    calls = []
+    monkeypatch.setattr(local.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+    local._notify_macos("-e", "do shell script \"id\"")
+    (cmd,) = calls
+    assert cmd[cmd.index("end run") + 1] == "--"
+
+
+import shutil, subprocess, sys
+import pytest
+
+
+@pytest.mark.skipif(sys.platform != "darwin" or not shutil.which("osascript"), reason="macOS only")
+def test_osascript_receives_argv_verbatim():
+    """Round trip through the real osascript without showing a notification."""
+    evil = ['-e', 'x" & (do shell script "id") & "\\', "", "line1\nline2"]
+    out = subprocess.run(
+        ["osascript", "-e", "on run argv", "-e",
+         "set AppleScript's text item delimiters to (ASCII character 0)",
+         "-e", "return argv as text", "-e", "end run", "--", *evil],
+        capture_output=True, text=True, timeout=10,
+    ).stdout.rstrip("\n")
+    assert out.split("\x00") == evil
