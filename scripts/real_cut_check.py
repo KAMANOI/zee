@@ -20,14 +20,17 @@ Not part of the zee package; stdlib only.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import platform
+import socket
 import sys
 import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,12 +38,40 @@ from pathlib import Path
 ASSET = "verify-real-cut"
 
 
+# No proxy: a configured proxy would carry the probe over its own path.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def reachable(url: str, timeout: float) -> tuple[bool, str]:
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 - fixed test URL
+        with _OPENER.open(url, timeout=timeout) as r:  # noqa: S310 - fixed test URL
             return True, f"HTTP {r.status}"
     except urllib.error.HTTPError as e:  # any HTTP answer means the network path works
         return True, f"HTTP {e.code}"
+    except Exception as e:  # noqa: BLE001 - every failure is "not reachable"
+        return False, f"{type(e).__name__}: {e}"
+
+
+def reachable6(url: str, timeout: float) -> tuple[bool, str]:
+    """HTTP over IPv6 only: the socket is AF_INET6 (no IPv4 fallback, no
+    proxy, no redirect). Any HTTP answer means the IPv6 path works."""
+    u = urllib.parse.urlsplit(url)
+    try:
+        port = u.port or 80
+        addr = socket.getaddrinfo(u.hostname, port, socket.AF_INET6, socket.SOCK_STREAM)[0][4]
+        if addr[0].lower().startswith("::ffff:"):  # IPv4-mapped = IPv4 on the wire
+            return False, f"not an IPv6 destination: {addr[0]}"
+        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        conn = http.client.HTTPConnection(u.hostname, port, timeout=timeout)
+        try:
+            sock.connect(addr)
+            conn.sock = sock  # http.client uses an already-set socket as is
+            conn.request("GET", u.path or "/")
+            return True, f"HTTP {conn.getresponse().status} via [{addr[0]}]"
+        finally:
+            conn.close()
+            sock.close()
     except Exception as e:  # noqa: BLE001 - every failure is "not reachable"
         return False, f"{type(e).__name__}: {e}"
 
@@ -84,6 +115,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.require_ipv6 and not args.url6:
         ap.error("--require-ipv6 needs --url6")
+    if args.url6 and not args.url6.startswith("http://"):
+        ap.error("--url6 must be http:// (probed over a raw IPv6 socket)")
 
     from zee.recovery.restore import restore
     from zee.responder.cut_egress import cut_egress
@@ -116,7 +149,8 @@ def main() -> int:
                 result["restore"] = {"by": why, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
     def probe(url: str) -> dict:
-        return dict(zip(("reachable", "detail"), reachable(url, args.probe_timeout)))
+        check = reachable6 if url == args.url6 else reachable
+        return dict(zip(("reachable", "detail"), check(url, args.probe_timeout)))
 
     v6: dict = {"url": args.url6} if args.url6 else {}
     result["before"] = probe(args.url)
@@ -146,12 +180,12 @@ def main() -> int:
         after = reachable(args.url, args.probe_timeout)
     result["after"] = dict(zip(("reachable", "detail"), after))
     if args.url6:
-        after6 = reachable(args.url6, args.probe_timeout)
+        after6 = reachable6(args.url6, args.probe_timeout)
         for _ in range(5):
             if after6[0] or not v6["before"]["reachable"]:
                 break
             time.sleep(3.0)
-            after6 = reachable(args.url6, args.probe_timeout)
+            after6 = reachable6(args.url6, args.probe_timeout)
         v6["after"] = dict(zip(("reachable", "detail"), after6))
         v6.setdefault("during", {"reachable": None, "detail": "cut raised before the probe"})
         v6["status"] = ipv6_status(v6)

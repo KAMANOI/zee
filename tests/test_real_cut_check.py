@@ -117,3 +117,27 @@ def test_required_ipv6_must_pass(status, expect):
 def test_linux_jobs_require_ipv6_and_link_the_same_backend_ip6tables():
     assert "--url6 'http://[2001:db8::1]:8081/' --require-ipv6" in WF
     assert 'src6="/usr/sbin/ip6tables-${src##*-}"' in WF
+
+
+def test_ipv6_probe_uses_an_ipv6_socket_only():
+    """Codex round 2: no proxy, no IPv4 fallback for the IPv6 probe."""
+    import http.server
+    import socket
+    import threading
+
+    class V6(http.server.HTTPServer):
+        address_family = socket.AF_INET6
+    try:
+        srv = V6(("::1", 0), http.server.BaseHTTPRequestHandler)
+    except OSError:
+        pytest.skip("no IPv6 loopback")
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        port = srv.server_address[1]
+        ok, detail = rcc.reachable6(f"http://[::1]:{port}/", 2)
+        assert ok and "via [::1]" in detail  # any HTTP answer (here 501) counts
+        assert rcc.reachable6(f"http://127.0.0.1:{port}/", 2)[0] is False
+    finally:
+        srv.shutdown()
+    assert rcc._OPENER.handlers and not any(
+        getattr(h, "proxies", None) for h in rcc._OPENER.handlers)
