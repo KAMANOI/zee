@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.13.1
+Early Public / Research Project — v0.14.0
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.13.1): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.14.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -119,7 +119,7 @@ zee gate audit
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.13.1"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.14.0"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git
@@ -276,7 +276,7 @@ Zee は誠実に範囲を区切ります。
 - **macOS / Windows の読み取り検知は `ZEE_CANARY_BASE_URL` が設定されているときだけ機能** — kqueue / ReadDirectoryChangesW は読み取り通知を出しません。`ZEE_CANARY_BASE_URL` を設定すると seeder が囮ファイルに canary URL を埋め込み、攻撃者がその URL を辿った瞬間に operator が指定した外部エンドポイントで発火します（Zee 本体には戻りません）。未設定では canary URL は埋め込まれず、macOS / Windows で「読むだけ」の攻撃は観測されません。Linux は inotify が読み取りを直接観察するので canary 不要です
 - **プロセス allowlist は現バックエンドでは効かない** — 誤検知制御は許可リストの照合ではなく、「囮を正規ソフトの走査対象外に置く配置ガイド」と「変更系トリガーへの限定」で行います。詳しくは上の「誤検知対策」節
 - **`zee restore` には `restore_token` が必要** — v0.3 から、`zee init-restore-token` で生成したトークンを `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できません。別シェルから誤って遮断を巻き戻す事故は防げますが、`~/.zee/restore_token` は同じユーザーなら読めるため、同じユーザー権限の攻撃者（root 相当でなくても）にはバイパスされます。マルチユーザー本番では `zee restore` を `sudo` で囲うか、専用ユーザーで運用してください
-- **権限分離は試作のみ（未リリース・既定オフ）** — 遮断部を root の常駐に分け、復旧・設定変更・停止に別端末の署名を求める構成を試作しました（[docs/design/privsep.md](./docs/design/privsep.md)）。`assets.toml` に `[privsep]` を書いた時だけ使われ、書かなければ従来どおり同じユーザーで動きます。作者の実機には適用しておらず、確認は GitHub Actions の使い捨てランナーでの実測だけです
+- **権限分離は試作** — 試作を v0.14.0 に同梱（既定オフ・[privsep] を書いた時だけ有効）。作者の実機には未適用、確認は GitHub Actions の使い捨てランナーのみ。遮断部を root の常駐に分け、復旧・設定変更・停止に別端末の署名を求める構成です（[docs/design/privsep.md](./docs/design/privsep.md)、導入手順は [docs/maintenance/privsep_install.md](./docs/maintenance/privsep_install.md)）。`[privsep]` を書かなければ従来どおり同じユーザーで動きます
 - **イベントログは `decoy_ref`（asset_id#index）で記録** — v0.3 から、events.jsonl には絶対パスではなく `decoy_ref` を書きます。ログを読めた攻撃者が囮の位置を一覧化することはできなくなりました（対応関係は `assets.toml` 経由）
 - **限界がある** — 機械の速度で完全自動完結する相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。Zee が時間を稼げる対象は「人間〜半自動の侵入後活動」（侵入が成功した後、攻撃者が偵察・横移動・データ持ち出しに進む段階）です
 - **検証の範囲** — 入口ゲートの判定ロジックは、合成検体による社内の再現試験とテストスイートで確認しています（自然文の言い換えによる指示すり込みは、未知の検体の盲検試験で検出できていません）。囮・封じ込めは、テストスイートと、隔離した macOS 環境での dry_run の実演（v0.10.1 付近の版で実施）で確認しています。専門家・第三者機関による独立評価は受けていません。実際の遮断（`dry_run: false`）の試験は、GitHub Actions の仮想ランナー（Linux はネットワーク名前空間の中、macOS、Windows は英語版のみ）と macOS 実機1台（MacBookPro17,1／macOS 26.6.2）で行い、いずれも通信が止まって復旧で戻ることを確認しました（2026-10-15）。**範囲：IPv4 は全経路で実測、IPv6 は Linux の名前空間で実測（v0.13.1。macOS・Windows のランナーは IPv6 の外向き経路が無く未測定）／新しい接続のみ（遮断前から開いていた接続は測っていません）／Windows は英語版の仮想ランナーのみで実機なし／Linux も仮想ランナーのみで実機なし／全面遮断（full）は Linux ランナーと macOS 実機1台のみ／macOS 実機では v0.13.0 の規則で、Zee 自身の復旧だけで pf の状態・ネットワークサービスが実行前と同一に戻ることも確認**。手順と結果は [docs/verification/real-cut.md](./docs/verification/real-cut.md)。結果と条件は [docs/verification/](./docs/verification/README.md) にあります。本番運用の前に、ご自身の環境でも確認してください

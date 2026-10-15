@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.13.1
+Early Public / Research Project — v0.14.0
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.13.1): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.14.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -118,7 +118,7 @@ The MVP lives under `src/zee/`. **It runs dry_run by default and does not actual
 
 ```bash
 # Install in one line, pinned to a tag (recommended — no external registry involved)
-uv tool install "git+https://github.com/KAMANOI/zee@v0.13.1"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.14.0"
 
 # Or, to develop locally
 git clone https://github.com/KAMANOI/zee.git
@@ -277,7 +277,7 @@ Zee draws its boundary honestly.
 - **Auto-cut fires only on change-class touches** — open / read / attribute-inspection touches never auto-cut. The notification carries an operator-facing hint, and the operator decides whether to invoke `zee cut <asset_id>` manually. Reason: with no process attribution from the current watchers, restricting auto-cut to operations that legitimate bulk readers (backup, AV, indexer) do not perform on decoys is the structurally safer rule
 - **On macOS / Windows, decoy reads fire only when `ZEE_CANARY_BASE_URL` is set** — kqueue and ReadDirectoryChangesW do not emit read notifications. When `ZEE_CANARY_BASE_URL` is configured, the seeder embeds a canary URL in the decoy and the operator's external endpoint fires on dereference (never re-entering Zee's local responder). When `ZEE_CANARY_BASE_URL` is unset, no canary URL is embedded and read-only touches are not observed. Linux observes reads directly via inotify and does not need a canary
 - **The process allowlist does not take effect on the current MVP** — false-positive control relies on placement (keep decoys outside what backup / AV / indexer software walks) and the change-class trigger limit, not on an allowlist match. See the "False-positive control" section above
-- **Privilege separation is a prototype only (unreleased, off by default)** — a root cut daemon with approver-device signatures for restore, configuration changes and stopping it ([docs/design/privsep.md](./docs/design/privsep.md)). It is used only when `assets.toml` has a `[privsep]` table; otherwise Zee runs as before, under one user. Not applied on the author's own machines; verified only on disposable GitHub Actions runners
+- **Privilege separation is a prototype** — Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied on the author's machines; verified only on disposable CI runners. A root cut daemon with approver-device signatures for restore, configuration changes and stopping it ([docs/design/privsep.md](./docs/design/privsep.md), install steps in [docs/maintenance/privsep_install.md](./docs/maintenance/privsep_install.md)). Without `[privsep]`, Zee runs as before, under one user
 - **`zee restore` requires a `restore_token`** — from v0.3, generate it once with `zee init-restore-token` and pass it via `--token` or `ZEE_RESTORE_TOKEN`. This stops accidental restores from another shell session; `~/.zee/restore_token` is readable by the same user, so an attacker with that user's shell (root not needed) still bypasses it. For multi-user production deployments, wrap `zee restore` in `sudo` or run Zee under a dedicated user
 - **Event log records `decoy_ref` (`asset_id#index`)** — from v0.3, events.jsonl no longer carries the absolute decoy path. An attacker reading the log cannot enumerate every decoy's filesystem location; correlation back to the full path goes through `assets.toml`
 - **It has limits** — against fully autonomous machine-speed adversaries, or against very small, very specific secrets (a single API key, etc.), Zee is outside its useful range. Zee buys time against human-paced or semi-automated post-intrusion activity — the phase after a breach succeeds, during which an attacker performs reconnaissance, lateral movement, and exfiltration

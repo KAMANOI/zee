@@ -1,6 +1,6 @@
 # 設計（確定版）：権限分離 — root の遮断部と、業務ユーザーの zee watch
 
-状態：**試作・既定オフ**（枝 `feat/privsep-stage2`、main v0.13.1 fb01f20 から分岐）。リリースには含めていない。
+状態：**試作を v0.14.0 に同梱（既定オフ・`[privsep]` を書いた時だけ有効）**。作者の実機には未適用、確認は GitHub Actions の使い捨てランナーのみ。
 **代表の開発機（macOS）には一切適用していない**（ユーザー作成・LaunchDaemon・pf・sudo のどれも実行していない）。OS に効く試験は GitHub Actions の使い捨てランナーだけで行った（§9）。
 作成：2026-10-16
 元：`docs/design/self-defense.md` §7（権限分離の手順案）と、その §7.4 への代表の承認（2026-10-15、推奨どおり）。
@@ -24,9 +24,10 @@
      │ 状態確認 {"op":"status"}（30秒ごと。遮断部にとっての心拍）
      │ 管理（復旧・設定変更・自動遮断の切替・自己防衛の切替・停止・鍵の追加削除）
      │   = {"op":"challenge"} で請求を受け取り → 別端末で署名 → {"op":"submit"}
-     ▼ Unix ドメインソケット（/var/run/zee/cutd.sock。root 所有・業務ユーザーのグループに 0660）
+     ▼ Unix ドメインソケット（/var/run/zee/cutd.sock。root 所有・業務ユーザーだけの専用グループに 0660。
+     │   親ディレクトリが root 所有・グループ／他から書けない時だけ起動する）
 遮断部（root の常駐。src/zee/privsep/daemon.py）
-  1. 相手の uid をカーネルから得る（§2）。cut／status は --allow-uid の uid（と root）だけ
+  1. 相手の uid をカーネルから得る（§2）。cut／status／challenge／submit は --allow-uid の uid（と root）だけ
   2. 要求の形を検査（1行 16KiB まで・JSON オブジェクト・項目と型を固定。余分な項目は拒否）
   3. 遮断の判断は自分の持ち物だけで：root 所有の assets.toml の写し・自動遮断の許可
      （responder/permission.py の decide）・遮断の境界（responder/blocker.py の refusal）
@@ -34,7 +35,7 @@
   5. 台帳（cut_state.jsonl）・管理の記録（admin.jsonl）は遮断部の状態ディレクトリにだけ書く
 ```
 
-受け付ける要求は **`cut`・`status`（署名なし）** と、**`challenge`・`submit`（署名の経路）**、**`bootstrap_key`（相手が root の時だけ）** の5つ。`restore`・`stop`・`auto_set` 等を署名なしで送っても `unknown_op`（テストと CI で確認）。
+受け付ける要求は **`cut`・`status`（署名なし）** と、**`challenge`・`submit`（署名の経路）**、**`bootstrap_key`（相手が root の時だけ）** の5つ。`challenge`・`submit` も許可された uid と root だけ（4ペルソナ・レビュー：誰でも請求を作れると、他人の承認待ちを追い出し、root の記録でディスクを埋められた）。請求は uid ごとに未処理4件まで（超えたらその uid 自身の古いものを捨てる）・1分に10件まで。`status` は全体のロックの外で答える（遅い遮断・復旧の間も watch の心拍が詰まらない）。返答の失敗には `code`（Z711〜Z718、`docs/maintenance/privsep_install.md` §7）を付ける。`restore`・`stop`・`auto_set` 等を署名なしで送っても `unknown_op`（テストと CI で確認）。
 
 業務側（`zee watch`）は、assets.toml に `[privsep] socket = "..."` がある時**だけ**遮断部へ要求を送る。無ければ従来どおり同じプロセスで遮断する（`Config.privsep_socket` が None。既定の動作は変えていない。`tests/test_privsep.py::test_handle_uses_privsep_only_when_given`）。遮断部に届かなければ通知の題名は「Zee cut FAILED」になり、「届かなかった・Zee は何も遮断していない」と本文に出す（成功とは言わない）。
 
@@ -52,14 +53,14 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 | 対象 | 置き場所（Linux／macOS） | 所有者・権限 | 業務ユーザーから |
 |---|---|---|---|
 | 遮断部のコード | `/opt/zee/src`／`/Library/Application Support/Zee/src` | root、ディレクトリ 755・ファイル 644 | 読めるが書けない |
-| Python 本体 | `/usr/bin/python3` 等 | **root 所有であること**（業務ユーザーが書ける Python を root で動かすと、その人に root を渡す） | 書けない |
+| Python 本体 | `/usr/bin/python3` 等 | **root 所有であること**（業務ユーザーが書ける Python を root で動かすと、その人に root を渡す）。**root で動かす時は必ず `-P -s`**（作業ディレクトリとユーザーの site-packages を import しない）で、`cd /` から、ファイルは絶対パスで。付けないと、業務ユーザーが書ける場所に置いた `zee/__main__.py` が root で動く（4ペルソナ・レビューで再現、CI で毎回確認）。常駐の定義（plist・unit）にも `-P -s` を入れた | 書けない |
 | 状態ディレクトリ | `/var/lib/zee-cutd`／`/Library/Application Support/Zee/cutd` | root、700 | 一覧も読めない |
 | 　承認済みの assets.toml | 同上 `assets.toml` | root、600 | 読めない・書けない |
 | 　自動遮断の許可 | 同上 `auto_containment.json`（permission.py の形式） | root、600 | 同上 |
 | 　承認端末の公開鍵登録簿・使用済み署名 | 同上 `admin_keys.json`（egress と同じ形式） | root、600 | 同上 |
 | 　遮断台帳・管理の記録 | 同上 `cut_state.jsonl`・`admin.jsonl` | root、600 | 同上 |
 | 　自己防衛の設定 | 同上 `tamper.json` | root、600 | 同上 |
-| ソケット | `/var/run/zee/cutd.sock`（ディレクトリ 755） | root:業務グループ、660 | 接続できるだけ |
+| ソケット | `/var/run/zee/cutd.sock`（ディレクトリ 755、root 所有） | root:専用グループ（業務ユーザーだけ。macOS の `staff` は全員なので使わない）、660 | 接続できるだけ |
 | 常駐の定義 | `/etc/systemd/system/zee-cutd.service`／`/Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist` | root、644 | 止められない |
 | 承認端末の秘密鍵 | 別端末（iPhone の Secure Enclave・FIDO キー等） | 端末の外 | 無い |
 
@@ -79,7 +80,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 1. 受け付ける操作（`OPS`）：`restore`（asset_id・scope=recorded/all）・`config_set`（path・sha256）・`auto_set`（on/off）・`tamper_set`（off/egress/full）・`stop`・`key_add`・`key_remove`。egress の `allow_*`・`protect_*`・`disable` は受け付けない。
 2. 請求の本文に `"aud": "zee-cutd-admin-v1"` と `"host"` を必ず入れる。承認端末の画面で持ち出し承認と取り違えないためと、署名対象を区別するため。
 3. 状態ファイル名（`admin_keys.json`・`admin.jsonl`）。
-4. 未処理の請求は 16 件まで（ソケットに接続できる誰でも請求を作れるため。古いものから捨てる）。
+4. 請求を出せるのは許可された uid と root だけで、uid ごとに未処理4件・1分に10件まで（§1）。他の uid の請求は捨てない。
 
 **取り違え・再送への答え**（どれも `Engine.submit` の既存の検査）：遮断部が自分で発行した請求（16バイト乱数の nonce・請求 ID）と**全項目が一致**しない応答は拒否（`payload_mismatch`／`unknown_request`）。請求は一度使うと消え、使用済みの署名ダイジェストは承認を実行する**前に**ディスクに保存する（`replay`）。期限切れは拒否。照合コード（2桁）は請求を出したホストの画面にだけ出し、承認端末で入力した値が署名対象に入る（`code_mismatch` は署名検証の後に見る）。持ち出し承認の請求に付いた署名をこちらに出しても、こちらが発行した請求ではないので `unknown_request`（テストで確認）。
 
@@ -91,7 +92,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 **一つの署名で一回だけ試す**：復旧が失敗（Z601）・未確認（Z606）でも署名は使用済みになる。やり直すには新しい請求に署名する。
 
-**最初の鍵**：`zee privsep bootstrap-key` を root で実行（相手の uid が 0 の時だけ受け付ける。登録簿が空の時だけ）。2台目以降は署名付き `key_add`。
+**最初の鍵**：`cd / && sudo env PYTHONPATH=<root 所有の src> <root 所有の python3> -P -s -m zee privsep bootstrap-key --public-key /絶対パス/pub.pem` で実行（相手の uid が 0 の時だけ受け付ける。登録簿が空の時だけ）。2台目以降は署名付き `key_add`。
 
 **全承認端末を失った時**：持ち出し承認の「72時間待ちの回復」（`recovery_start`）は署名なしで始められるので、**ソケットには出さない**（業務ユーザーが始めて72時間後に登録簿を空にし、誰も復旧できない状態を作れるため）。代わりに、正当な所有者が root でコンソールから：①遮断部を止める（`launchctl bootout`／`systemctl stop`）②`admin_keys.json` を `mv` で退避 ③起動して `bootstrap-key` で登録し直す。root を持つ人は元から全部できるので、新しい権限は生まない。
 
@@ -108,6 +109,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 | `watch_silent` | 一度でも心拍（watch の uid からの `status`）を受けた後、`--tamper-grace`（既定 300 秒）を超えて来ない。起動直後で一度も来ていない間は所見にしない |
 
 - 所見は**常に**状態（`zee privsep status` の `findings`）と管理の記録に出す。防御が失われたのに正常に見せない。
+- **ON にした時の注意**：業務ユーザーの assets.toml を書き換えてから `config_set` が承認されるまでの間と、`zee watch` を `--tamper-grace`（300 秒）より長く止めた時（更新・再起動を含む）は、正当な操作でも遮断しうる。設定変更や watch の停止の前に `tamper_set action=off` を承認する（手順書 §4）。導入時も、業務側の `[privsep]` を先に足してから写しを作る（手順書 §1）。
 - **自動対応は既定 OFF**（`tamper.json` が無い・読めない＝off）。署名付きの `tamper_set egress|full` で ON。ON の時は、**2回続けて**所見があった時に1回だけ遮断する（self-defense.md §4.2：単発の欠落では遮断しない）。所見が消えたら次の事件として数え直す。遮断は台帳に固定の資産名 `zee-tamper` で記録し、署名付きの `restore asset_id=zee-tamper` で戻す。
 - 承認済みの設定が `dry_run = true` なら、自動対応も「would cut」と記録するだけで遮断しない（dry_run の既定は変えない）。
 - 既存の「囮への変更系接触」による自動遮断とは別の条件で、既存の設定の意味は変えていない。
@@ -124,17 +126,17 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 1. 隔離した試験環境（使い捨ての VM・CI）で §9 と同じ確認を通す（済：CI）。
 2. 実機に入れる前に：承認端末の鍵を用意する（試作は openssl の P-256 鍵で検証。iPhone の WebAuthn アダプタは未実装＝egress-approval.md §11 と同じ）。
-3. root で：コードと Python を root 所有の場所へ／状態ディレクトリ（700）と承認済みの assets.toml（600）を作る／常駐の定義を置いて起動／`bootstrap-key`。
-4. 業務ユーザーの assets.toml に `[privsep] socket = ...` を足し、承認済みの写しと同じバイト列にする（違えば `watch_config_unapproved`）。`zee watch` を起動し直す。
+3. 業務ユーザーの assets.toml に `[privsep] socket = ...` を**先に**足して完成させる（承認済みの写しは同じバイト列でなければ `watch_config_unapproved`）。
+4. root で（`cd /`・`python3 -P -s`）：コードと Python を root 所有の場所へ／状態ディレクトリ（700）と承認済みの assets.toml（600）を作る／常駐の定義を置いて起動／`bootstrap-key`。`zee watch` を起動し直す。
 5. 署名付き `auto_set on`（自動遮断を使う場合）。
 
 **戻し方**（順序が大事）：①遮断中なら署名付きの `restore`、OS の状態が戻ったことを確認 ②署名付き `stop`（または root で `launchctl bootout`／`systemctl disable --now`）③業務側の `[privsep]` を外して `zee watch` を起動し直す（従来の同一プロセスの遮断に戻る）④常駐の定義・状態ディレクトリ・コードを `mv` で退避（削除しない）。遮断部が起動できない時の救済は self-defense.md §7.2 の 7 と同じ（root で直接 `pfctl -a com.apple/zee-egress-cut -F all` 等）。
 
 ## 9. 実測（GitHub Actions の使い捨てランナー）
 
-`.github/workflows/privsep.yml`＋`scripts/privsep_ci.sh`。この枝への push で走る（PR では走らない）。結果は §11 に run 番号つきで書く。
+`.github/workflows/privsep.yml`＋`scripts/privsep_ci.sh`。main への push（遮断部・CI の関連ファイルが変わった時）と手動実行で走る。PR では走らない（フォークの PR にランナーの root を触らせない）。結果は §11 に run 番号つきで書く。
 
-- **Linux（ubuntu-24.04）**：`examples/privsep/zee-cutd.service` をそのまま systemd に入れ、ネットワーク名前空間の中で root の遮断部を動かす（`NetworkNamespacePath`。ランナー自身の通信は切らない）。業務ユーザー `zeework` が `zee watch` を動かし、囮に書き込む → 遮断部が egress 遮断 → 名前空間から試験サーバーへ届かない → 署名なしの復旧は拒否・まだ届かない → 署名付き復旧 → 届く。ほかに：業務ユーザーから状態ディレクトリの一覧・台帳と承認済み設定への書き込み・承認鍵の読み取り・コードへの書き込みができない／`kill` と `systemctl stop` が通らず遮断部が動き続ける／ソケットを開けるが許可されていない uid が拒否される／自動遮断の許可前の遮断要求が拒否される／同じ署名の再送が拒否される／署名付き停止で止まり再起動されない。
+- **Linux（ubuntu-24.04）**：`examples/privsep/zee-cutd.service` をそのまま systemd に入れ、ネットワーク名前空間の中で root の遮断部を動かす（`NetworkNamespacePath`。ランナー自身の通信は切らない）。業務ユーザー `zeework` が `zee watch` を動かし、囮に書き込む → 遮断部が egress 遮断 → 名前空間から試験サーバーへ届かない → 遮断中に業務ユーザーが ①署名なしの復旧要求 ②自分の `zee restore --all-interfaces`（遮断した名前空間の中で）③`nft delete table inet zee_egress` を試し、どれも拒否されて届かないままであることを1つずつ確かめる → 署名付き復旧 → 届く。root で動かすコマンドは、作業ディレクトリに偽の `zee` を置いても読まれないこと（`-P -s` なしでは読まれることも対照として）を確かめる。ほかに：業務ユーザーから状態ディレクトリの一覧・台帳と承認済み設定への書き込み・承認鍵の読み取り・コードへの書き込みができない／`kill` と `systemctl stop` が通らず遮断部が動き続ける／ソケットを開けるが許可されていない uid が拒否される／自動遮断の許可前の遮断要求が拒否される／同じ署名の再送が拒否される／署名付き停止で止まり再起動されない。
 - **macOS（macos-latest）**：`examples/privsep/io.github.kamanoi.zee-cutd.plist` を LaunchDaemon として `launchctl bootstrap system` で読み込み、`dscl` で作った業務ユーザーとランナーのユーザー（ソケットは開けるが uid が許可されていない）で、LOCAL_PEERCRED による相手の確認・権限・停止・署名の経路を確かめる。**実遮断はしない**（macOS の遮断の実測は real-cut.yml の範囲）。
 
 ## 10. 限界（言い切り）
@@ -143,6 +145,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 - root を取られたら守れない（self-defense.md §2 の段階 B。端末外の遮断は第三段）。
 - 承認の画面は未実装（WebAuthn アダプタ・承認ページ＝egress-approval.md §11 と同じ）。試作の署名は openssl の鍵で行う。承認端末の画面を乗っ取られた場合の限界も egress-approval.md §3(5) と同じ。
 - 業務ユーザーは嘘の遮断要求で遮断を起こせる（§4）。同時接続は「許可された uid（watch・root）」と「それ以外」で別々に 16 本までで、上限を超えた接続はスレッドを作らずに閉じ、要求1行は全体で 5 秒以内に読めなければ切る（Codex 3回目の指摘）。ほかの利用者が watch の遮断要求を締め出すことはできないが、**業務ユーザー自身**は自分の枠を埋めて署名付きの復旧を遅らせられる（その間は root のコンソールで止める・戻す）。遮断と管理の処理は1つのロックで順に行う。
+- root で動く遮断部が出す macOS の通知（osascript）は、ログイン中の利用者の画面には**届かない前提**で設計している（未検証。遮断・復旧の結果は返答・台帳・管理の記録で確かめる）。業務側の `zee watch` は、遮断部に接続できなくなった時と戻った時に1回ずつ、利用者の通知と webhook で知らせる。
 - `watch_silent` は「status が来ない」ことしか見ない。watch が心拍だけ送り続けて囮の監視を止める改ざんは検出しない（プロセスの存在と防御の動作は別、の残り）。試験用の遮断要求（self-defense.md §4.2）は未実装。
 - 遮断部の状態は起動時に一度読む（egress の Engine と同じ単一プロセス前提）。root が稼働中に状態ファイルを直接書き換えた場合の整合は扱わない。
 - Linux の full 遮断は NetworkManager を使う。業務ユーザーが polkit の許可で `nmcli networking on` を実行できる環境では、遮断部と無関係に戻せる（self-defense.md §7.2 の注意と同じ）。CI の実測は egress（nft）だけ。
@@ -150,11 +153,6 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 ## 11. 実測の記録
 
-**run 38770329531（commit 8ae9b5c、2026-10-16）：両ジョブ合格。**
+（4ペルソナ・レビュー後の再測定を下に追記する。それより前の run 38770329531 の記録は、遮断中の署名なし復旧を実際には試していなかった＝「拒否された署名なし復旧の後もまだ届かない」の項目は常に PASS する形だったため、取り下げた。）
 
-- Linux（job 116544141798、ubuntu-24.04・`/usr/bin/python3` 3.12.3・配布の systemd unit をそのまま使用）：29項目すべて PASS。業務ユーザー `zeework` の `zee watch` が囮への書き込みを検知 → root の遮断部が nft の egress 遮断 → 名前空間から試験サーバー（198.51.100.1）へ届かない → 署名なしの `restore`・偽の署名は拒否されたまま届かない → 署名付き復旧で届く・台帳が解決済みになる。拒否はどれも「終了コードが0でない」かつ「OS の権限エラーの文言」（`Permission denied`・`Operation not permitted`・`Interactive authentication required`）で判定した。
-- macOS（job 116544142097、macos-latest・`/opt/homebrew/bin/python3`）：20項目すべて PASS。配布の plist を LaunchDaemon として読み込めた（`state = running`）。`dscl` で作った業務ユーザー（uid 550）から LOCAL_PEERCRED 経由で status が通り、ソケットを開けるランナーのユーザー（uid が許可されていない）は `peer_not_allowed`。`kill`・`launchctl bootout` は Operation not permitted で通らず、署名付き停止の後は `state = not running` で再起動されない。**実遮断はしていない。**
-- 途中の run で見つかったこと：①配布の unit は `ProtectSystem=strict` だけだと一時ディレクトリが書けず、署名検証（openssl）が失敗した（run 38767533415。Codex 1回目の指摘と同じ。`PrivateTmp=yes` で解消）②CI の判定に「シェル関数を `bash -c` から呼んで常に PASS になる」誤りがあった（同 run。否定の確認は終了コードと権限エラーの文言の両方を要求する形に直した）。
-- **未検証**：代表の Mac を含む実機・Linux 実機・NetworkManager のある環境・スリープ／OS 更新後の復帰・macOS での遮断部経由の実遮断・遮断部経由の full 遮断。
-
-外部レビュー（Codex、`~/claude-bridge/outbox/20261016-zee-privsep/`）：1回目 高4・中1 → 2回目 高1・中2 → 3回目 中1 → 4回目 指摘なし。
+外部レビュー（Codex、`~/claude-bridge/outbox/20261016-zee-privsep/`）：1回目 高4・中1 → 2回目 高1・中2 → 3回目 中1 → 4回目 指摘なし（ここまで 4ペルソナ・レビュー前）。

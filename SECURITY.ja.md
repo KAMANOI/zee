@@ -113,12 +113,10 @@ v0.3 で解消済みです。以下は、現時点の Zee が「できること�
   そのユーザーのシェルを持つ攻撃者は、監視を止める・設定を書き換える・記録を消すことができます。
   記録を消すだけでは通信は広く戻りません：`zee restore` は形の正しい遮断の記録が無いと拒否し（Z605）、
   全面復旧には `--all-interfaces` の指定が要ります。ただし同じ攻撃者は復旧トークンも読めるため、
-  どちらの復旧も自分で実行できます。遮断部を別ユーザーに分ける構成は
-  設計済み（[docs/design/self-defense.md](./docs/design/self-defense.md)）ですが、まだ適用していません。
-  **権限分離の試作（未リリース・既定オフ）**：遮断部を root の常駐（macOS LaunchDaemon／Linux systemd）にし、
-  業務ユーザーからは「遮断」「状態」の要求しか送れず、復旧・設定変更・停止は別端末の署名が要る構成を
-  [docs/design/privsep.md](./docs/design/privsep.md) に試作しました。assets.toml に `[privsep]` を書いた時だけ使われ、
-  書かなければ従来どおりです。**作者の実機には適用しておらず**、確認は GitHub Actions の使い捨てランナーでの実測だけです。
+  どちらの復旧も自分で実行できます。
+  **権限分離：試作を v0.14.0 に同梱（既定オフ・[privsep] を書いた時だけ有効）。作者の実機には未適用、確認は GitHub Actions の使い捨てランナーのみ。** 遮断部を root の常駐（macOS LaunchDaemon／Linux systemd）にし、
+  業務ユーザーからは「遮断」「状態」の要求しか送れず、復旧・設定変更・停止は別端末の署名が要る構成です
+  （[docs/design/privsep.md](./docs/design/privsep.md)）。`[privsep]` を書かなければ、上の攻撃者は今も同じことができます。
   承認端末の画面（WebAuthn）は未実装で、署名は openssl の鍵で行います。
 - **Windows では POSIX の権限チェックを行いません。** NTFS（Windows のファイルシステム）は
   POSIX のパーミッションビットではなく ACL（アクセス制御リスト）を使うため、

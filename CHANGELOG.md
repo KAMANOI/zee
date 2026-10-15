@@ -5,9 +5,11 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
-## [Unreleased]
+## [0.14.0] — 2026-10-16
 
-### Added (prototype, off by default — not applied on any real machine)
+Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied on the author's machines; verified only on disposable CI runners.
+
+### Added (prototype, off by default)
 
 - **Privilege separation: `zee privsep`** (docs/design/privsep.md). A root
   cut daemon (`zee privsep daemon`, examples for systemd and launchd in
@@ -21,8 +23,18 @@ releases.
   approval engine (same ES256 check, key registry, single-use requests,
   number matching and replay ledger; requests carry `aud`, and `auto_set` /
   `restore` are bound to the approved config / cut ledger at issue time).
+  Signed requests (`challenge` / `submit`) are also limited to those uids
+  and root, at most 4 pending and 10 per minute per uid. Every admin
+  request is bound to an applied-operation generation, so a newer approval
+  voids older unused ones. Replies carry codes Z710–Z719
+  (docs/maintenance/privsep_install.md §7); `zee privsep digest` shows what
+  is being approved and asks for "yes". Root commands and the shipped
+  launchd / systemd definitions run Python with `-P -s` (never import from
+  the working directory or the user site). The daemon refuses to start if
+  its socket directory is not root-owned or is group/other-writable.
   `zee watch` uses it only when `assets.toml` has `[privsep] socket = ...`;
-  without it the in-process cut is unchanged.
+  without it the in-process cut is unchanged. With it, losing the daemon is
+  announced once (local notification + webhook), and once when it is back.
 - **Condition (2), off by default**: the daemon reports an unapproved change
   of the watch user's `assets.toml` (byte hash) and a silent watch; only a
   signed `tamper_set egress|full` makes it cut (after two checks in a row,
