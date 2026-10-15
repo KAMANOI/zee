@@ -25,7 +25,7 @@ def test_old_code_runs_injected_command(kind, tmp_path):
     m = tmp_path / "pwn"
     title = {
         "subexpr": f"$(New-Item -ItemType File '{m}')",
-        "quote": f'x"); New-Item -ItemType File \'{m}\'; ("',
+        "quote": f'x"); New-Item -ItemType File \'{m}\'; #',
     }[kind]
     r = subprocess.run(["powershell", "-NoProfile", "-Command", _old_ps(title, "b")],
                        capture_output=True, text=True, timeout=30)
