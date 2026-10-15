@@ -1,4 +1,5 @@
 """The Windows notifier passes title/body through the environment, never as script text."""
+import base64
 import os
 import shutil
 import subprocess
@@ -28,20 +29,21 @@ def test_nul_in_value_does_not_raise():
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not shutil.which("powershell"), reason="Windows only")
-@pytest.mark.parametrize("value", EVIL)
-def test_powershell_reads_env_verbatim(value, tmp_path):
-    """Round trip through the real PowerShell without showing a notification.
-
-    Same $env:ZEE_TITLE read as _WIN_SCRIPT; the value comes back as text and
-    a $(...) in it does not run (no marker file appears).
-    """
+@pytest.mark.parametrize("value", EVIL + ["\u65e5\u672c\u8a9e", "a\r\nb\rc"])
+def test_real_win_script_keeps_values_as_text(value, tmp_path):
+    """Run the production _WIN_SCRIPT on real PowerShell, then read back what
+    ShowBalloonTip stored (Base64, so CR/LF and non-ASCII compare exactly).
+    A $(...) in the value must not run (no marker file appears)."""
     marker = tmp_path / "pwn"
     value = value.replace("Write-Output PWNED", f"New-Item -ItemType File '{marker}'")
-    script = "[Console]::Out.Write($env:ZEE_TITLE)"
-    out = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-        env={**os.environ, "ZEE_TITLE": value},
+    readback = (
+        "[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("
+        "$n.BalloonTipTitle+[char]0+$n.BalloonTipText)));$n.Dispose()"
+    )
+    r = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", local._WIN_SCRIPT + readback],
+        env={**os.environ, "ZEE_TITLE": value, "ZEE_BODY": value + "!"},
         capture_output=True, text=True, timeout=30,
-    ).stdout
-    assert out == value
+    )
+    assert base64.b64decode(r.stdout).decode() == value + "\x00" + value + "!", r.stderr
     assert not marker.exists()
