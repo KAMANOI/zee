@@ -26,12 +26,14 @@ Not in any tagged release yet.
   independently (Linux no longer stops after `nmcli`; macOS now
   re-enables services the cut disabled), treats a Zee rule the tool
   itself reports as absent as removed, counts the interface step even
-  when nothing could be enumerated, treats a missing removal tool (nft,
-  iptables, pfctl, netsh) as a failed step rather than "no rule", keeps
-  a failed `nmcli networking on` unless NetworkManager then reports
-  networking enabled, and fails (Z601) unless every step succeeded. On
-  Linux hosts with only one of nft / iptables it therefore always
-  reports failure; read the per-step detail. **Behaviour
+  when nothing could be enumerated, judges Zee's firewall rule only on the
+  backend the cut recorded (nft / iptables / pfctl / netsh rule names;
+  a recorded backend whose tool is missing fails). Only without a usable
+  record does it try every installed tool, marking a missing tool
+  `not-checked` (neither success nor failure) and failing if no tool
+  could check. It keeps a failed `nmcli networking on` unless
+  NetworkManager then reports networking enabled, and fails (Z601)
+  unless every judged step succeeded. **Behaviour
   change:** deployments whose cuts predate the cut record, or whose
   record was cleared, need `--all-interfaces` once.
 - **A failed or empty cut is no longer reported as success.** The cut

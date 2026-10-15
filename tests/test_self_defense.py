@@ -63,7 +63,7 @@ def quiet(monkeypatch):
 
 
 def _no_compat(monkeypatch):
-    def boom():
+    def boom(*_a, **_k):
         raise AssertionError("broad compat restore must not run")
     monkeypatch.setattr(restore_mod, "_restore_compat", boom)
 
@@ -205,7 +205,7 @@ def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
 def test_emergency_restore_works_with_any_ledger_damage(tmp_path, monkeypatch, quiet, content):
     p = tmp_path / "cut_state.jsonl"
     (p.write_bytes if isinstance(content, bytes) else p.write_text)(content)
-    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on"))
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda *_a, **_k: (True, "all on"))
     assert restore_mod.restore("t-host", cut_state=CutStateLog(p), all_interfaces=True)[0] is True
 
 
@@ -409,13 +409,13 @@ def test_cuts_from_different_platforms_are_not_merged(tmp_path):
 # ── coordinator external review (Codex), 2026-10-15 ───────────────────
 
 
-@pytest.mark.parametrize("present", [{"ip"}, {"ip", "nft"}, {"ip", "iptables"}])
-def test_linux_missing_firewall_tool_is_not_rule_absent(monkeypatch, present):
-    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"/x/{n}" if n in present else None)
+def test_linux_no_firewall_tool_at_all_is_a_failure(monkeypatch):
+    """No record and no tool that could confirm the rule is gone."""
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: "/x/ip" if n == "ip" else None)
     monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
     ok, detail = restore_mod._restore_linux_compat()
-    assert ok is False and "not-found" in detail
+    assert ok is False and "not-checked" in detail
 
 
 def test_macos_missing_pfctl_is_not_rule_absent(monkeypatch):
@@ -467,3 +467,96 @@ def test_handle_shows_ledger_failure_and_remedy(tmp_path, monkeypatch):
                cut_state=_BrokenLedger(tmp_path / "c.jsonl"))
     title, body = bodies[-1]
     assert "FAILED" in title and "ledger=FAILED" in body and "--all-interfaces" in body
+
+
+# ── coordinator follow-up: judge only the recorded backend, 2026-10-15 ──
+
+NFT = full_mod.SENTINEL_LINUX_NFT_EGRESS
+IPT = full_mod.SENTINEL_LINUX_IPTABLES_EGRESS
+
+
+@pytest.mark.parametrize("tool, other", [("nft", "iptables"), ("iptables", "nft")])
+def test_one_firewall_tool_host_succeeds_without_record(monkeypatch, tool, other):
+    """A normal Linux host has only one of nft / iptables: not a failure."""
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"/x/{n}" if n in ("ip", tool) else None)
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    ok, detail = restore_mod._restore_linux_compat()
+    assert ok is True
+    assert f"{other}:not-checked" in detail
+
+
+@pytest.mark.parametrize("recorded, present", [((NFT,), ("ip", "iptables")), ((IPT,), ("ip", "nft"))])
+def test_recorded_backend_tool_missing_is_a_failure(monkeypatch, recorded, present):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"/x/{n}" if n in present else None)
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    ok, detail = restore_mod._restore_linux_compat(recorded)
+    assert ok is False and "not-found" in detail
+
+
+def test_recorded_backend_only_is_judged(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"/x/{n}" if n in ("ip", "nft") else None)
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    ok, detail = restore_mod._restore_linux_compat((NFT, "eth0"))
+    assert ok is True and "iptables" not in detail
+    assert ["nft", "delete", "table", "inet", "zee_egress"] in calls
+
+
+def test_emergency_restore_passes_the_recorded_targets(tmp_path, monkeypatch, quiet):
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="t-host", method="egress", platform="linux", modified=[NFT])
+    seen: list = []
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda recorded=None: seen.append(recorded) or (True, ""))
+    restore_mod.restore("t-host", cut_state=log, all_interfaces=True)
+    assert seen == [(NFT,)]
+
+
+def test_emergency_restore_with_damaged_ledger_falls_back(tmp_path, monkeypatch, quiet):
+    p = tmp_path / "cut_state.jsonl"
+    p.write_text("{garbage\n")
+    seen: list = []
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda recorded=None: seen.append(recorded) or (True, ""))
+    restore_mod.restore("t-host", cut_state=CutStateLog(p), all_interfaces=True)
+    assert seen == [None]
+
+
+def test_record_with_only_interfaces_does_not_judge_firewall(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: "/x/ip" if n == "ip" else None)
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    assert restore_mod._restore_linux_compat(("eth0",))[0] is True
+
+
+def test_ledger_exception_does_not_block_emergency_restore(tmp_path, monkeypatch, quiet):
+    class Exploding(CutStateLog):
+        def unresolved_for(self, asset_id):
+            raise RuntimeError("boom")
+    seen: list = []
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda recorded=None: seen.append(recorded) or (True, ""))
+    restore_mod.restore("t-host", cut_state=Exploding(tmp_path / "c.jsonl"), all_interfaces=True)
+    assert seen == [None]
+
+
+@pytest.mark.parametrize("recorded, tool_present, expect", [
+    ((full_mod.SENTINEL_MACOS_PFCTL_EGRESS,), False, False),
+    (("Wi-Fi",), False, True),
+])
+def test_macos_recorded_backend(monkeypatch, recorded, tool_present, expect):
+    monkeypatch.setattr(restore_mod.shutil, "which",
+                        lambda n: f"/x/{n}" if n == "networksetup" or (tool_present and n == "pfctl") else None)
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    assert restore_mod._restore_macos_compat(recorded)[0] is expect
+
+
+def test_windows_recorded_rules_only(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"C:/{n}")
+    monkeypatch.setattr(restore_mod, "list_windows_interfaces", lambda **k: ["Ethernet"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    ok, _ = restore_mod._restore_windows_compat(("zee-egress-cut-block",))
+    deleted = [c[-1] for c in calls if "delete" in c]
+    assert ok is True and deleted == ["name=zee-egress-cut-block"]

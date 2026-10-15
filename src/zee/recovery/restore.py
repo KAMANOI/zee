@@ -21,7 +21,7 @@ import logging
 import shutil
 import subprocess
 import sys
-from typing import Optional
+from typing import Callable, Optional
 
 from ..errors import ZeeError, Z601_RESTORE_FAILED, Z605_RESTORE_NO_CUT_RECORD
 from ..notifier.local import notify_local
@@ -56,14 +56,14 @@ def restore(
     cut_state = cut_state or CutStateLog()
 
     if all_interfaces:
-        # Never read the ledger first: a damaged ledger must not block the
-        # emergency path.
+        # The ledger only narrows which firewall backend is judged; reading
+        # it can never fail or block the emergency path.
         logger.warning(
             "emergency restore for asset %s: enabling every interface / "
             "service (may re-enable interfaces disabled by other tools)",
             asset_id,
         )
-        ok, detail = _restore_compat()
+        ok, detail = _restore_compat(_recorded_targets(cut_state, asset_id))
     else:
         latest, damaged = cut_state.unresolved_for(asset_id)
         if latest is None or damaged:
@@ -185,17 +185,28 @@ def _restore_targeted_windows(modified: list[str]) -> tuple[bool, str]:
 # ── emergency: v0.2 "enable everything" (explicit opt-in only) ────────
 
 
-def _restore_compat() -> tuple[bool, str]:
+def _recorded_targets(cut_state: CutStateLog, asset_id: str) -> Optional[tuple[str, ...]]:
+    """What the unresolved cut recorded, or None (no / damaged / unreadable
+    ledger). Never raises: the emergency path must not depend on the ledger."""
+    try:
+        rec, damaged = cut_state.unresolved_for(asset_id)
+    except Exception as e:  # noqa: BLE001 - any ledger problem = no record
+        logger.warning("cut_state unusable for emergency restore: %s", e)
+        return None
+    return None if rec is None or damaged else rec.modified
+
+
+def _restore_compat(recorded: Optional[tuple[str, ...]] = None) -> tuple[bool, str]:
     if sys.platform.startswith("linux"):
-        return _restore_linux_compat()
+        return _restore_linux_compat(recorded)
     if sys.platform == "darwin":
-        return _restore_macos_compat()
+        return _restore_macos_compat(recorded)
     if sys.platform == "win32":
-        return _restore_windows_compat()
+        return _restore_windows_compat(recorded)
     return False, f"unsupported platform: {sys.platform}"
 
 
-def _restore_linux_compat() -> tuple[bool, str]:
+def _restore_linux_compat(recorded: Optional[tuple[str, ...]] = None) -> tuple[bool, str]:
     # Interfaces and the egress rule are restored independently: a cut may
     # have done either (full = nmcli / ip link, egress = nft / iptables).
     # An interface step is always counted: no tool / nothing enumerated is a
@@ -217,14 +228,15 @@ def _restore_linux_compat() -> tuple[bool, str]:
                         for i in list_linux_interfaces()] or [("interfaces:none-found", False)]
         else:
             results.append(("ip:not-found", False))
-    results.append(("nft", _run_removal(["nft", "delete", "table", "inet", "zee_egress"])[0])
-                   if shutil.which("nft") else ("nft:not-found", False))
-    results.append(("iptables", _remove_iptables_chain())
-                   if shutil.which("iptables") else ("iptables:not-found", False))
+    results += _firewall_steps(recorded, [
+        (SENTINEL_LINUX_NFT_EGRESS, "nft",
+         lambda: _run_removal(["nft", "delete", "table", "inet", "zee_egress"])[0]),
+        (SENTINEL_LINUX_IPTABLES_EGRESS, "iptables", _remove_iptables_chain),
+    ])
     return _summary("linux all-interfaces restore", results)
 
 
-def _restore_macos_compat() -> tuple[bool, str]:
+def _restore_macos_compat(recorded: Optional[tuple[str, ...]] = None) -> tuple[bool, str]:
     results: list[tuple[str, bool]] = []
     if shutil.which("networksetup"):
         # include_disabled: a full cut leaves the services disabled ('*').
@@ -233,18 +245,21 @@ def _restore_macos_compat() -> tuple[bool, str]:
             or [("services:none-found", False)]
     else:
         results.append(("services:no-networksetup", False))
-    results.append(("pfctl", _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])[0])
-                   if shutil.which("pfctl") else ("pfctl:not-found", False))
+    results += _firewall_steps(recorded, [
+        (SENTINEL_MACOS_PFCTL_EGRESS, "pfctl",
+         lambda: _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])[0]),
+    ])
     return _summary("macos all-interfaces restore", results)
 
 
-def _restore_windows_compat() -> tuple[bool, str]:
+def _restore_windows_compat(recorded: Optional[tuple[str, ...]] = None) -> tuple[bool, str]:
     results: list[tuple[str, bool]] = []
     if shutil.which("netsh"):
         results += [(i, _run(["netsh", "interface", "set", "interface", i, "admin=enable"])[0])
                     for i in list_windows_interfaces(only_enabled=False)] \
             or [("interfaces:none-found", False)]
-        for rule in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local"):
+        rules = (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local")
+        for rule in rules if recorded is None else [r for r in rules if r in recorded]:
             ok, _ = _run_removal(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule}"])
             results.append((f"rule({rule})", ok))
     else:
@@ -284,15 +299,42 @@ def _remove_iptables_chain() -> bool:
     return ok1 and ok2 and ok3
 
 
-def _summary(label: str, results: list[tuple[str, bool]]) -> tuple[bool, str]:
+def _firewall_steps(
+    recorded: Optional[tuple[str, ...]],
+    backends: list[tuple[str, str, Callable[[], bool]]],
+) -> list[tuple[str, Optional[bool]]]:
+    """Judge Zee's firewall rule by the backend the cut actually used.
+
+    With a record: only recorded backends are judged; a recorded backend
+    whose tool is missing fails. Without one (no / damaged ledger, pre-record
+    cut): every present tool is tried, a missing tool is ``not-checked``
+    (neither success nor failure), and if no tool could check at all the
+    step fails.
+    """
+    out: list[tuple[str, Optional[bool]]] = []
+    for sentinel, tool, remove in backends:
+        if recorded is not None:
+            if sentinel in recorded:
+                out.append((tool, remove()) if shutil.which(tool) else (f"{tool}:not-found", False))
+        elif shutil.which(tool):
+            out.append((tool, remove()))
+        else:
+            out.append((f"{tool}:not-checked", None))
+    if recorded is None and all(ok is None for _, ok in out):
+        out.append(("firewall:no-tool-could-check", False))
+    return out
+
+
+def _summary(label: str, results: list[tuple[str, Optional[bool]]]) -> tuple[bool, str]:
     """Success only if something ran and every step succeeded.
 
     An already-absent Zee rule counts as removed (see ``_run_removal``).
     """
     if not results:
         return False, f"{label}: no supported tool found"
-    detail = ", ".join(f"{name}:{'ok' if ok else 'fail'}" for name, ok in results)
-    return all(ok for _, ok in results), f"{label}: {detail}"
+    detail = ", ".join(name if ok is None else f"{name}:{'ok' if ok else 'fail'}"
+                       for name, ok in results)
+    return all(ok is not False for _, ok in results), f"{label}: {detail}"
 
 
 def _run(cmd: list[str]) -> tuple[bool, str]:
