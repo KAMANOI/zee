@@ -62,6 +62,7 @@ SH_PATH = Path(__file__).resolve().parent.parent / "scripts" / "verify-real-maco
 SH = SH_PATH.read_text()
 
 
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="bash on Windows runners may be the WSL stub")
 def test_mac_script_parses():
     import subprocess
     assert subprocess.run(["bash", "-n", str(SH_PATH)]).returncode == 0

@@ -629,8 +629,10 @@ def test_tools_resolved_with_sbin_and_run_with_absolute_path(monkeypatch):
     monkeypatch.setattr(restore_mod.subprocess, "run",
                         lambda argv, **k: seen.setdefault("argv", argv) and subprocess.CompletedProcess(argv, 0, "", ""))
     restore_mod._run(["pfctl", "-s", "info"])
-    assert "/usr/sbin" in seen["path"].split(":") and "/sbin" in seen["path"].split(":")
-    assert seen["argv"][0] == "/usr/sbin/pfctl"
+    import os
+    parts = seen["path"].split(os.pathsep)  # ";" on Windows
+    assert "/usr/sbin" in parts and "/sbin" in parts
+    assert seen["argv"][0] == os.path.abspath("/usr/sbin/pfctl")
 
 
 def test_readback_fails_when_recorded_interface_still_disabled(tmp_path, monkeypatch, quiet):
