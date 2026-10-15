@@ -138,13 +138,13 @@ responder の `cut_full` / `cut_egress` と recovery（`zee restore`）は OS �
 ### v0.3 で対応済み
 
 - **`zee restore` 認証**：v0.3 から `zee init-restore-token` で生成したローカル restore_token を `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できなくなりました（hmac.compare_digest で定数時間比較・標準ライブラリのみ）。同一ユーザーで動作するシェルからの誤・意図的な巻き戻しは塞げます。`~/.zee/restore_token`（0600）を読める root 相当攻撃者にはバイパスされるため、マルチユーザー本番では `sudo` で囲うか専用ユーザー運用を推奨します。
-- **cut state 永続化**：v0.3 から cut で変更したインターフェース / サービス / ルール名を `~/.local/state/zee/cut_state.jsonl`（0600）に記録し、restore はそれを読んで Zee が変更したものだけ戻します。Zee 以外で disable されていた IF を意図せず enable してしまう v0.2 までの副作用を解消しました。
+- **cut state 永続化**：v0.3 から cut で変更したインターフェース / サービス / ルール名を `~/.local/state/zee/cut_state.jsonl`（0600）に記録し、restore はそれを読んで Zee が変更したものだけ戻します。Zee 以外で disable されていた IF を意図せず enable してしまう v0.2 までの副作用を解消しました。記録が無い・壊れている時、restore は何も戻さず拒否します（Z605。以前は全面復旧に戻っていた）。全面復旧は `--all-interfaces` を付けた時だけで、各コマンドの成否を表示します。
 - **Windows interface 列挙のロケール対応**：v0.3 から PowerShell `Get-NetAdapter`（構造化 JSON 出力・ロケール非依存）を主経路に。`netsh interface show interface` のパースはフォールバックとして保持。
 - **events.jsonl の decoy_path 平文記録**：v0.3 から `decoy_ref`（`<asset_id>#<index>`）を記録します。ログを読まれても囮位置を一括列挙できません（対応関係は `assets.toml` 経由でのみ復元可能）。
 
 ### 設計意図として将来フェーズに引き継ぐもの
 
-- **権限分離**：watcher / policy / responder を別プロセス（または別ユーザー）に分け、最小権限で動かす。watcher は遮断権限を持たず、responder は囮イベントだけを契機に動く。
+- **権限分離**：watcher / policy / responder を別プロセス（または別ユーザー）に分け、最小権限で動かす。watcher は遮断権限を持たず、responder は囮イベントだけを契機に動く。設計と段階は [docs/design/self-defense.md](./docs/design/self-defense.md)。現時点で入っているのは第一段（遮断要求の形を3項目に固定して検証する `responder/blocker.py`。同じプロセス・同じユーザーで動くため、まだ権限分離にはなっていません）。
 - **ログ改竄検知**：イベントログを追記専用ファイルシステム機能（macOS の SIP / Linux の append-only attribute）で守るか、定期的にハッシュチェーンを取って改ざんを検知できる構造にする。
 - **PAM / FIDO2 認証**：マルチユーザー / エンタープライズ用途では restore_token に加えて PAM や公開鍵 / FIDO2 を経由した強い認証層を入れる。MVP のスコープには含めず、operator が `sudo` で `zee restore` を囲う運用で代替できます。
 

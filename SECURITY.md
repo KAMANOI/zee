@@ -120,6 +120,15 @@ honestly-published boundaries of what Zee is and is not:
   deployments, wrap `zee restore` in `sudo` or run Zee under a
   dedicated user — `restore_token` is a complement, not a
   replacement, for OS-level access control.
+- **A same-user attacker can still stop Zee.** `zee watch`, the cut
+  path, `assets.toml` and the cut ledger all run / live under the
+  operator's user. An attacker with that user's shell can stop the
+  watcher, edit the policy or delete the ledger. Deleting the ledger no
+  longer re-enables the network: `zee restore` refuses without a cut
+  record (Z605) and the broad restore needs `--all-interfaces`.
+  Separating the cut path into its own user is designed
+  ([docs/design/self-defense.md](./docs/design/self-defense.md)) but not
+  applied.
 - **On Windows the POSIX permission check is skipped.** NTFS uses
   ACLs rather than POSIX bits and `os.stat().st_mode` reports `0666`
   regardless of the real ACL. Zee therefore does not enforce the

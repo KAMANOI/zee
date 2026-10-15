@@ -35,7 +35,8 @@ def cut_egress(
     cut_state: Optional[CutStateLog] = None,
 ) -> tuple[bool, str]:
     ok, detail, modified = _cut_egress_dispatch()
-    if ok and asset_id and cut_state is not None and modified:
+    # Same as cut_full: record partial changes too (restore needs the record).
+    if asset_id and cut_state is not None and modified:
         cut_state.record_cut(
             asset_id=asset_id,
             method="egress",
@@ -145,11 +146,14 @@ def _cut_egress_windows() -> tuple[bool, str, list[str]]:
             "remoteip=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8",
         ],
     ]
+    added: list[str] = []
     for cmd in commands:
         ok, msg = _run(cmd)
         if not ok:
-            return False, f"{cmd[3:6]}: {msg}", []
-    return True, "netsh advfirewall rules installed", [f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local"]
+            # The block rule may already be in place: report it so it is recorded.
+            return False, f"{cmd[3:6]}: {msg}", added
+        added.append(cmd[5].removeprefix("name="))
+    return True, "netsh advfirewall rules installed", added
 
 
 def _run(cmd: list[str]) -> tuple[bool, str]:

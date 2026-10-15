@@ -40,11 +40,14 @@ def cut_full(
     ``asset_id`` and ``cut_state`` are optional only for test stubs.
     Production callers (responder/sequence.handle, ``zee cut``) MUST
     supply both: without them, no cut-state record is written and the
-    subsequent ``zee restore`` falls back to the v0.2 "enable
-    everything" behaviour with a stderr warning.
+    subsequent ``zee restore`` refuses (Z605) and only the explicit
+    ``--all-interfaces`` emergency restore can undo it.
     """
     ok, detail, modified = _cut_full_dispatch()
-    if ok and asset_id and cut_state is not None and modified:
+    # Record whatever actually changed, even on a partial failure: restore
+    # refuses without a record, so an unrecorded partial cut could only be
+    # undone by the broad emergency restore.
+    if asset_id and cut_state is not None and modified:
         cut_state.record_cut(
             asset_id=asset_id,
             method="full",
@@ -74,6 +77,8 @@ def _cut_full_linux() -> tuple[bool, str, list[str]]:
     # Fallback: bring all non-loopback interfaces down.
     if shutil.which("ip"):
         ifaces = list_linux_interfaces()
+        if not ifaces:
+            return False, "no non-loopback interfaces found via ip", []
         all_ok = True
         details: list[str] = []
         modified: list[str] = []
@@ -109,6 +114,8 @@ def _cut_full_macos() -> tuple[bool, str, list[str]]:
     if not shutil.which("networksetup"):
         return False, "networksetup not available", []
     services = list_macos_services()
+    if not services:
+        return False, "no enabled network services found via networksetup", []
     all_ok = True
     details: list[str] = []
     modified: list[str] = []

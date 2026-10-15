@@ -190,7 +190,7 @@ def _cmd_restore(args: argparse.Namespace) -> int:
             )
         raise ZeeError(Z604_RESTORE_TOKEN_INVALID, "supplied token does not match")
 
-    ok, detail = restore(args.asset_id)
+    ok, detail = restore(args.asset_id, all_interfaces=args.all_interfaces)
     print(detail, file=sys.stderr)
     return 0 if ok else 1
 
@@ -646,6 +646,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="restore_token (alternatively set ZEE_RESTORE_TOKEN). "
              "Generate one with `zee init-restore-token`.",
+    )
+    p_restore.add_argument(
+        "--all-interfaces",
+        action="store_true",
+        help="emergency only: re-enable every interface/service and remove Zee's "
+             "egress rules even without a cut record (may re-enable interfaces "
+             "disabled by other tools). Without it, restore refuses when no cut "
+             "record exists for the asset (Z605).",
     )
     p_restore.set_defaults(func=_cmd_restore)
 

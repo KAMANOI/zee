@@ -211,7 +211,10 @@ can make Zee miss real attacks or roll back containment.
   rule names Zee modified at cut time are recorded in
   `~/.local/state/zee/cut_state.jsonl` (0600). Restore reads that
   record and undoes only Zee's changes — the v0.2 side effect of
-  re-enabling interfaces other tools had disabled is gone.
+  re-enabling interfaces other tools had disabled is gone. When the record
+  is missing or damaged, restore now refuses and re-enables nothing (Z605;
+  it used to fall back to enabling everything). The broad restore runs
+  only with `--all-interfaces` and reports each command's outcome.
 - **Locale-independent Windows enumeration** — from v0.3, the primary
   path is PowerShell `Get-NetAdapter` (structured JSON, locale-
   independent). The `netsh interface show interface` parser is kept
@@ -226,7 +229,10 @@ can make Zee miss real attacks or roll back containment.
 - **Privilege separation** — split watcher / policy / responder into
   separate processes (or users) under least privilege. The watcher
   should not hold cut privilege; the responder reacts only to decoy
-  events.
+  events. Design and stages: [docs/design/self-defense.md](./docs/design/self-defense.md)
+  (Japanese). Only stage one is in place: `responder/blocker.py` fixes the
+  cut request to three fields and re-validates it. It still runs in the
+  same process as the same user, so it is not privilege separation yet.
 - **Tamper-evident logs** — protect the event log with an append-only
   filesystem feature (Linux append-only attribute, macOS SIP) or take
   periodic hash chains so post-hoc tampering can be detected.

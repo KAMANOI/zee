@@ -4,10 +4,15 @@ Recovery is always manual. There is no timer-based auto-reconnect.
 
 v0.3 reads ``cut_state.jsonl`` (telemetry/cut_state.py) to undo only
 what Zee changed: the specific interface / service / firewall-rule
-names recorded at cut time. When no cut record exists for the asset
-(pre-v0.3 deployments, or operator manually cleared the state),
-restore falls back to the v0.2 "enable everything" behaviour with a
-stderr warning so the situation stays visible.
+names recorded at cut time.
+
+Fail-closed (docs/design/self-defense.md): when no unresolved cut record
+exists for the asset (ledger missing, damaged, or cleared — the ledger is
+writable by the same user Zee runs as), the normal restore REFUSES (Z605)
+instead of re-enabling everything. The broad v0.2 "enable everything"
+restore remains as an explicit emergency path (``all_interfaces=True`` /
+``zee restore --all-interfaces``), still behind the restore token, and it
+reports the real outcome of every OS command it runs.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from ..errors import ZeeError, Z601_RESTORE_FAILED
+from ..errors import ZeeError, Z601_RESTORE_FAILED, Z605_RESTORE_NO_CUT_RECORD
 from ..notifier.local import notify_local
 from ..responder.cut_egress import ZEE_RULE_TAG
 from ..responder.cut_full import (
@@ -26,6 +31,7 @@ from ..responder.cut_full import (
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_LINUX_NMCLI,
     SENTINEL_MACOS_PFCTL_EGRESS,
+    list_linux_interfaces,
     list_macos_services,
     list_windows_interfaces,
 )
@@ -38,29 +44,39 @@ def restore(
     asset_id: str,
     *,
     cut_state: Optional[CutStateLog] = None,
+    all_interfaces: bool = False,
 ) -> tuple[bool, str]:
     """Re-enable network for ``asset_id``.
 
-    v0.3: prefers the precise cut-state record. Falls back to the
-    v0.2 "enable everything" behaviour with a warning if no record
-    is available for this asset.
+    Undoes exactly the unresolved cut record for this asset. Without such
+    a record it refuses (Z605) unless ``all_interfaces`` is set, which runs
+    the broad emergency restore (may re-enable interfaces disabled by other
+    tools).
     """
     cut_state = cut_state or CutStateLog()
     latest = cut_state.latest_unresolved_for(asset_id)
 
-    if latest is None:
+    if all_interfaces:
         logger.warning(
-            "no cut_state record for asset %s; restoring with v0.2 "
-            "'enable everything' behaviour (may re-enable interfaces "
-            "disabled by other tools)",
+            "emergency restore for asset %s: enabling every interface / "
+            "service (may re-enable interfaces disabled by other tools)",
             asset_id,
         )
         ok, detail = _restore_compat()
+    elif latest is None:
+        notify_local(
+            f"Zee restore REFUSED: {asset_id}",
+            "no cut record for this asset (ledger missing, damaged or "
+            "cleared). Nothing was re-enabled. Check the host state; "
+            "`zee restore <asset_id> --all-interfaces` re-enables everything.",
+        )
+        raise ZeeError(Z605_RESTORE_NO_CUT_RECORD, f"asset={asset_id}")
     else:
         ok, detail = _restore_targeted(latest)
 
     if ok:
-        cut_state.mark_resolved(asset_id)
+        if latest is not None:
+            cut_state.mark_resolved(asset_id)
         notify_local(
             f"Zee restored: {asset_id}",
             f"network re-enabled — {detail}",
@@ -165,7 +181,7 @@ def _restore_targeted_windows(modified: list[str]) -> tuple[bool, str]:
     return all_ok, "windows restore: " + ", ".join(details)
 
 
-# ── v0.2 compat ("enable everything") ─────────────────────────────────
+# ── emergency: v0.2 "enable everything" (explicit opt-in only) ────────
 
 
 def _restore_compat() -> tuple[bool, str]:
@@ -182,34 +198,61 @@ def _restore_linux_compat() -> tuple[bool, str]:
     if shutil.which("nmcli"):
         ok, _ = _run(["nmcli", "networking", "on"])
         if ok:
-            return True, "nmcli networking on (compat)"
+            return True, "nmcli networking on (all-interfaces)"
+    results: list[tuple[str, bool]] = []
+    if shutil.which("ip"):
+        for ifname in list_linux_interfaces():
+            ok, _ = _run(["ip", "link", "set", ifname, "up"])
+            results.append((ifname, ok))
+    # nft and iptables are alternatives: Zee installs its egress rule in one.
+    fw: list[bool] = []
     if shutil.which("nft"):
-        _run(["nft", "delete", "table", "inet", "zee_egress"])
+        fw.append(_run(["nft", "delete", "table", "inet", "zee_egress"])[0])
     if shutil.which("iptables"):
-        _run(["iptables", "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
-        _run(["iptables", "-F", "ZEE_EGRESS"])
-        _run(["iptables", "-X", "ZEE_EGRESS"])
-    return True, "nft/iptables ZEE_EGRESS removed (compat, best-effort)"
+        ok1, _ = _run(["iptables", "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
+        ok2, _ = _run(["iptables", "-F", "ZEE_EGRESS"])
+        ok3, _ = _run(["iptables", "-X", "ZEE_EGRESS"])
+        fw.append(ok1 and ok2 and ok3)
+    if fw:
+        results.append(("zee_egress rule", any(fw)))
+    return _summary("linux all-interfaces restore", results)
 
 
 def _restore_macos_compat() -> tuple[bool, str]:
+    results: list[tuple[str, bool]] = []
     if shutil.which("networksetup"):
         for svc in list_macos_services():
-            _run(["networksetup", "-setnetworkserviceenabled", svc, "on"])
+            ok, _ = _run(["networksetup", "-setnetworkserviceenabled", svc, "on"])
+            results.append((svc, ok))
     if shutil.which("pfctl"):
-        _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])
-    return True, "networksetup on + pfctl anchor flushed (compat, best-effort)"
+        ok, _ = _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])
+        results.append(("pfctl", ok))
+    return _summary("macos all-interfaces restore", results)
 
 
 def _restore_windows_compat() -> tuple[bool, str]:
+    results: list[tuple[str, bool]] = []
     if shutil.which("netsh"):
         for ifname in list_windows_interfaces(only_enabled=False):
-            _run(["netsh", "interface", "set", "interface", ifname, "admin=enable"])
-        _run(["netsh", "advfirewall", "firewall", "delete", "rule",
-              f"name={ZEE_RULE_TAG}-block"])
-        _run(["netsh", "advfirewall", "firewall", "delete", "rule",
-              f"name={ZEE_RULE_TAG}-allow-local"])
-    return True, "netsh interfaces re-enabled + rules deleted (compat, best-effort)"
+            ok, _ = _run(["netsh", "interface", "set", "interface", ifname, "admin=enable"])
+            results.append((ifname, ok))
+        for rule in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local"):
+            ok, _ = _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule}"])
+            results.append((f"rule({rule})", ok))
+    return _summary("windows all-interfaces restore", results)
+
+
+def _summary(label: str, results: list[tuple[str, bool]]) -> tuple[bool, str]:
+    """Success only if something ran and every step succeeded.
+
+    ponytail: a Zee rule that was already absent (e.g. after a full cut by
+    `ip link`) shows as a failed step; the per-step detail tells the operator
+    which. Upgrade path: probe each rule before removing it.
+    """
+    if not results:
+        return False, f"{label}: no supported tool found"
+    detail = ", ".join(f"{name}:{'ok' if ok else 'fail'}" for name, ok in results)
+    return all(ok for _, ok in results), f"{label}: {detail}"
 
 
 def _run(cmd: list[str]) -> tuple[bool, str]:

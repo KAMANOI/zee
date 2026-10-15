@@ -163,6 +163,10 @@ echo "tampered $(date)" >> ~/.local/share/zee-decoys/.env
 zee restore <asset_id> --token <TOKEN>
 # Or via env var:
 ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>
+# If the cut record (cut_state.jsonl) is missing or damaged, restore refuses
+# and re-enables nothing (Z605). After checking the host, the emergency path
+# that re-enables every interface is:
+# zee restore <asset_id> --token <TOKEN> --all-interfaces
 ```
 
 ### What this MVP does / does not do

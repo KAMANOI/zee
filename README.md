@@ -162,6 +162,9 @@ echo "tampered $(date)" >> ~/.local/share/zee-decoys/.env
 zee restore <asset_id> --token <TOKEN>
 # または環境変数経由：
 ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>
+# 遮断の記録（cut_state.jsonl）が無い・壊れている時は、何も戻さず拒否します（Z605）。
+# 状態を確認したうえで、全インターフェースを戻す緊急用：
+# zee restore <asset_id> --token <TOKEN> --all-interfaces
 ```
 
 ### このフェーズの Zee がすること／しないこと

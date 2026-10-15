@@ -7,11 +7,35 @@ releases.
 
 ## [Unreleased]
 
-Nothing here changes what `zee watch`, `cut`, `restore` or any other
-command does. The two modules below are library code that no command
-calls yet. They ship in the source tree but are not in any tagged release yet.
+Not in any tagged release yet.
+
+### Security
+
+- **`zee restore` no longer re-enables everything when the cut record is
+  missing.** Before, a missing, damaged or deleted `cut_state.jsonl`
+  entry (the file is writable by the user Zee runs as) made restore fall
+  back to enabling every interface / service and report success without
+  checking the OS commands. Now restore refuses and re-enables nothing
+  (Z605). The broad restore is an explicit emergency path,
+  `zee restore <asset_id> --all-interfaces` (token still required), and
+  it fails (Z601) unless every step it ran succeeded. **Behaviour
+  change:** deployments whose cuts predate the cut record, or whose
+  record was cleared, need `--all-interfaces` once.
+- **A failed or empty cut is no longer reported as success.** The cut
+  notification title says `Zee cut FAILED` when the cut failed (it said
+  `applied`). `full` cut with no interface / service to disable returns
+  failure. A partial cut records the interfaces / rules it did change,
+  so restore can undo them.
+- **Cut boundary (`zee.responder.blocker`).** Every automatic cut is
+  re-validated against a fixed three-field request (asset, op_class,
+  confidence) right before the cut runs. Same rules as before; it does
+  not relax the gate, and it does not yet separate privileges (same
+  process, same user). Design: `docs/design/self-defense.md`.
 
 ### Added
+
+The two modules below are library code that no command calls yet.
+
 
 - **Egress approval prototype (`zee.egress`, macOS-first, not wired).**
   A control core for holding outbound sends that look like data leaving

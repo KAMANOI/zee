@@ -39,6 +39,7 @@ from ..notifier.tier import reason_line, safe_classify
 from ..policy.asset_profile import resolve
 from ..telemetry.cut_state import CutStateLog
 from ..telemetry.events_log import EventLog
+from . import blocker
 from .cut_egress import cut_egress
 from .cut_full import cut_full
 
@@ -181,6 +182,14 @@ def handle(
                         f"{reason_line(tier, action='dry_run')}"
                     ),
                 )
+            elif (refused := blocker.refusal(
+                blocker.CutRequest(event.asset_id, event.op_class, event.confidence),
+                asset, dry_run=dry_run,
+            )) is not None:
+                # Defence in depth: the cut boundary re-validates (stage 1 of
+                # docs/design/self-defense.md). Refusal is logged, never cut.
+                cut_skipped_reason = f"boundary:{refused}"
+                logger.error("cut boundary refused %s: %s", event.asset_id, refused)
             else:
                 ok, detail = cut_fn(
                     asset_id=event.asset_id,
@@ -191,8 +200,9 @@ def handle(
                 cut_detail = detail
                 # Post-cut notification (network may be down for remote channels).
                 # decoy_ref keeps the path off the OS notification history.
+                # The title never says "applied" for a failed cut.
                 notify_local(
-                    f"Zee cut applied [{tier.label}]: {event.asset_id}",
+                    f"Zee cut {'applied' if ok else 'FAILED'} [{tier.label}]: {event.asset_id}",
                     (
                         f"reason: {event.detail}\n"
                         f"decoy_ref: {event.decoy_ref or '-'}\n"
