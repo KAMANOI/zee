@@ -366,6 +366,8 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
         absent = "No rules match the specified criteria" in msg
     else:
         absent = False
+    if not absent:  # say what the tool answered, so the operator can judge
+        logger.warning("%s: absence not confirmed; the tool answered: %s", " ".join(show), msg[:300])
     return True if absent else None
 
 
