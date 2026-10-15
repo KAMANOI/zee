@@ -5,6 +5,34 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+### Added (prototype, off by default — not applied on any real machine)
+
+- **Privilege separation: `zee privsep`** (docs/design/privsep.md). A root
+  cut daemon (`zee privsep daemon`, examples for systemd and launchd in
+  `examples/privsep/`) that accepts only `cut` and `status` without a
+  signature, and only from uids given with `--allow-uid` (the peer uid
+  comes from the kernel: `SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on
+  macOS). It decides the cut itself from its own root-owned copy of
+  `assets.toml`, the auto-containment permission and the cut boundary.
+  Restore, configuration replacement, the auto-cut switch, the tamper
+  response and stopping it need an approver signature checked by the egress
+  approval engine (same ES256 check, key registry, single-use requests,
+  number matching and replay ledger; requests carry `aud`, and `auto_set` /
+  `restore` are bound to the approved config / cut ledger at issue time).
+  `zee watch` uses it only when `assets.toml` has `[privsep] socket = ...`;
+  without it the in-process cut is unchanged.
+- **Condition (2), off by default**: the daemon reports an unapproved change
+  of the watch user's `assets.toml` (byte hash) and a silent watch; only a
+  signed `tamper_set egress|full` makes it cut (after two checks in a row,
+  once per incident; never under `dry_run`).
+
+### Verification
+
+- `.github/workflows/privsep.yml` + `scripts/privsep_ci.sh` on disposable
+  runners only (results in docs/design/privsep.md §11).
+
 ## [0.13.1] — 2026-10-16
 
 **If you use `cut_method: egress` on Linux without nft, or on Windows,

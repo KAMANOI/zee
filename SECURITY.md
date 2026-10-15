@@ -130,7 +130,15 @@ honestly-published boundaries of what Zee is and is not:
   restore token and run either restore themselves.
   Separating the cut path into its own user is designed
   ([docs/design/self-defense.md](./docs/design/self-defense.md)) but not
-  applied.
+  applied. **Privilege-separation prototype (unreleased, off by default):**
+  a root cut daemon (macOS LaunchDaemon / Linux systemd) that accepts only
+  "cut" and "status" from the business user, and needs an approver-device
+  signature for restore, configuration changes and stopping it
+  ([docs/design/privsep.md](./docs/design/privsep.md)). It is used only
+  when `assets.toml` has a `[privsep]` table; without it nothing changes.
+  **Not applied on the author's own machines** — verified only on
+  disposable GitHub Actions runners. The approver UI (WebAuthn) is not
+  built; signatures are made with an openssl key.
 - **On Windows the POSIX permission check is skipped.** NTFS uses
   ACLs rather than POSIX bits and `os.stat().st_mode` reports `0666`
   regardless of the real ACL. Zee therefore does not enforce the
