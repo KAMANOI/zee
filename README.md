@@ -20,12 +20,6 @@ Implemented (v0.12.0): entry gate (zee gate), decoy tripwires with opt-in contai
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
-> ⚠️ **既知の不具合（2026-10-15 公表）— macOS の外向き通信の遮断（`cut_method: egress`）は、現在の版では通信を止めません。**
-> Zee は遮断用の規則を pf の独自アンカーに読み込んでいますが、macOS 標準の `/etc/pf.conf` は `anchor "com.apple/*"` 配下しか評価しないため、規則が使われません（pf.conf(5) の ANCHORS 節）。それでも Zee は「遮断した」と通知していました。2026-05-30 の実装以来の不具合で、当方が 2026-10-15 に確認しました。
-> - macOS で `cut_method: egress` を使っている場合、**遮断されていない前提で運用してください。**
-> - 既定の `cut_method: full`（ネットワーク全体の遮断）を含め、**自動遮断が実機で通信を止めることは、どの OS でもまだ確認できていません**（これまでの確認はテストと dry_run の実演のみ）。
-> - 修正版（遮断・復旧の後に OS の状態を読み直し、確認できた時だけ「成功」と報告する）は枝 `feat/self-defense-20261015` で作業中です。実機での確認が済んだ版だけを main に入れ、結果をここに書きます。
-
 ---
 
 ## なぜ Zee があるのか
@@ -116,6 +110,8 @@ zee gate audit
 ## MVP — 動く囮トリップワイヤ
 
 `src/zee/` に MVP の実装があります。**既定では dry_run で動き、実際の遮断は行いません。** 資産プロファイルで `response_mode: auto` を明示し `dry_run: false` にしたときだけ、自動遮断（contain）が走ります。
+
+> **macOS で `cut_method: egress` をお使いの方へ（2026-10-15）** — v0.12.0 までの macOS の外向き遮断は、規則を読み込むアンカーが macOS 標準の `/etc/pf.conf`（`anchor "com.apple/*"` のみ評価）から参照されないため、通信を止めません。遮断の通知が出ても、外向き通信は流れています。修正版では `com.apple/` 配下のアンカーを使い、遮断の後に規則が評価されていることを読み直して確認します。修正版の公開までは、macOS の外向き遮断を前提にしない運用をお願いします。
 
 ### インストール
 
