@@ -46,6 +46,7 @@ Z601_RESTORE_FAILED = ("Z601", "復旧コマンドの実行に失敗しました
 Z602_RESTORE_TOKEN_REQUIRED = ("Z602", "復旧トークンが必要です。--token または ZEE_RESTORE_TOKEN を指定してください")
 Z603_RESTORE_TOKEN_NOT_INITIALIZED = ("Z603", "復旧トークンが未初期化です。`zee init-restore-token` を最初に実行してください")
 Z604_RESTORE_TOKEN_INVALID = ("Z604", "復旧トークンが一致しません")
+Z606_RESTORE_UNVERIFIED = ("Z606", "復旧後の状態を確認できませんでした（確認に必要なツールが無い等）。遮断が残っている可能性があるため未解決のままにします")
 Z605_RESTORE_NO_CUT_RECORD = ("Z605", "遮断記録が無いため通常の復旧を拒否しました。状態を確認のうえ、必要なら --all-interfaces で全面復旧してください")
 
 # Z7xx

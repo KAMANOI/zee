@@ -21,21 +21,27 @@ Not in any tagged release yet.
   asset recorded on different platforms. Cuts since the last restore are merged, so a
   second cut no longer hides what the first one disabled. The broad
   restore is an explicit emergency path,
-  `zee restore <asset_id> --all-interfaces` (token still required); it
-  does not read the ledger, restores interfaces and Zee's firewall rules
-  independently (Linux no longer stops after `nmcli`; macOS now
-  re-enables services the cut disabled), treats a Zee rule the tool
-  itself reports as absent as removed, counts the interface step even
-  when nothing could be enumerated, judges Zee's firewall rule only on the
-  backend the cut recorded (nft / iptables / pfctl / netsh rule names;
-  a recorded backend whose tool is missing fails). Only without a usable
-  record does it try every installed tool, marking a missing tool
-  `not-checked` (neither success nor failure) and failing if no tool
-  could check. It keeps a failed `nmcli networking on` unless
-  NetworkManager then reports networking enabled, and fails (Z601)
-  unless every judged step succeeded. **Behaviour
-  change:** deployments whose cuts predate the cut record, or whose
-  record was cleared, need `--all-interfaces` once.
+  `zee restore <asset_id> --all-interfaces` (token still required); a
+  damaged or unreadable ledger never blocks it. **Behaviour change:**
+  deployments whose cuts predate the cut record, or whose record was
+  cleared, need `--all-interfaces` once.
+- **`zee restore` reports success only after re-reading the OS.** On both
+  paths, Zee's own fixed-name firewall rules (nft `inet zee_egress`,
+  iptables `ZEE_EGRESS`, pfctl anchor `zee-egress-cut`, netsh
+  `zee-egress-cut-block` / `-allow-local`; host-wide, not per asset) are
+  removed on every backend of the OS regardless of the ledger, then
+  listed again: still present or unreadable fails (Z601). A backend whose
+  tool is not installed cannot be checked: restore exits 1 with the new
+  **Z606 (unverified)** and the cut stays unresolved — on a Linux host
+  with only one of nft / iptables this is expected; read the per-step
+  detail. Recorded interfaces / services are re-read afterwards and must
+  be enabled; disabled ones outside the record are shown as a warning.
+  Tools are looked up on PATH plus `/usr/sbin:/sbin` and run by absolute
+  path. The emergency restore also no longer stops after `nmcli`
+  (keeping a failed `nmcli networking on` unless NetworkManager reports
+  networking enabled) and re-enables macOS services the cut disabled.
+  Restore notifications state that the cut ledger is writable by the
+  same user Zee runs as.
 - **A failed or empty cut is no longer reported as success.** The cut
   notification title says `Zee cut FAILED` when the cut failed (it said
   `applied`). `full` cut with no interface / service to disable returns

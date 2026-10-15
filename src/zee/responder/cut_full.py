@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,18 @@ SENTINEL_LINUX_NMCLI = "__zee_nmcli_networking__"
 SENTINEL_LINUX_NFT_EGRESS = "__zee_nft_egress_table__"
 SENTINEL_LINUX_IPTABLES_EGRESS = "__zee_iptables_egress_chain__"
 SENTINEL_MACOS_PFCTL_EGRESS = "__zee_pfctl_egress_anchor__"
+
+# Admin tools often live in /usr/sbin or /sbin, which a service / sudo PATH
+# may lack. Lookups add them, and commands then run by absolute path.
+SBIN_PATH = os.pathsep.join(filter(None, [os.environ.get("PATH", ""), "/usr/sbin", "/sbin"]))
+
+
+def sbin_which(name: str) -> Optional[str]:
+    return shutil.which(name, path=SBIN_PATH)
+
+
+def _abs(cmd: list[str]) -> list[str]:
+    return [sbin_which(cmd[0]) or cmd[0], *cmd[1:]]
 
 
 def cut_full(
@@ -114,7 +127,7 @@ def list_linux_interfaces() -> list[str]:
     """Enumerate non-loopback Linux interfaces. Used by both cut and restore."""
     try:
         out = subprocess.check_output(
-            ["ip", "-o", "link", "show"], text=True, timeout=3
+            _abs(["ip", "-o", "link", "show"]), text=True, timeout=3
         )
     except (subprocess.SubprocessError, OSError):
         return []
@@ -155,7 +168,7 @@ def list_macos_services(*, include_disabled: bool = False) -> list[str]:
     """
     try:
         out = subprocess.check_output(
-            ["networksetup", "-listallnetworkservices"], text=True, timeout=3
+            _abs(["networksetup", "-listallnetworkservices"]), text=True, timeout=3
         )
     except (subprocess.SubprocessError, OSError):
         return []
@@ -302,3 +315,52 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
     if cp.returncode != 0:
         return False, (cp.stderr or cp.stdout or "").strip()
     return True, (cp.stdout or "").strip()
+
+
+def disabled_now() -> Optional[set[str]]:
+    """Read back which interfaces / services are disabled right now.
+
+    Names use the same spelling the cut records (interface / service names;
+    ``SENTINEL_LINUX_NMCLI`` when NetworkManager networking is off). Returns
+    None when the state cannot be read — callers must treat that as
+    "unverified", never as "nothing disabled".
+    """
+    try:
+        if sys.platform.startswith("linux"):
+            out = subprocess.check_output(_abs(["ip", "-o", "link", "show"]), text=True, timeout=5)
+            disabled: set[str] = set()
+            for line in out.splitlines():
+                parts = line.split(":", 2)
+                if len(parts) < 3:
+                    continue
+                name = parts[1].strip().split("@")[0]
+                flags = parts[2].split(">", 1)[0].lstrip(" <").split(",")
+                if name and name != "lo" and "UP" not in flags:
+                    disabled.add(name)
+            if sbin_which("nmcli"):
+                # Separate try: NetworkManager not running must not discard
+                # the interface read-back (the nmcli sentinel is just skipped).
+                try:
+                    state = subprocess.check_output(_abs(["nmcli", "networking"]), text=True, timeout=5).strip()
+                except (subprocess.SubprocessError, OSError):
+                    state = ""
+                if state == "disabled":
+                    disabled.add(SENTINEL_LINUX_NMCLI)
+            return disabled
+        if sys.platform == "darwin":
+            out = subprocess.check_output(_abs(["networksetup", "-listallnetworkservices"]), text=True, timeout=5)
+            return {l.strip()[1:].strip() for l in out.splitlines()[1:] if l.strip().startswith("*")}
+        if sys.platform == "win32":
+            cmd = sbin_which("powershell") or sbin_which("pwsh")
+            if not cmd:
+                return None
+            out = subprocess.check_output(
+                [cmd, "-NoProfile", "-Command",
+                 "Get-NetAdapter | Select-Object Name,Status | ConvertTo-Json -Compress"],
+                text=True, timeout=10).strip()
+            data = json.loads(out) if out else []
+            data = [data] if isinstance(data, dict) else data
+            return {d["Name"] for d in data if isinstance(d, dict) and d.get("Status") == "Disabled"}
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
+        return None
+    return None
