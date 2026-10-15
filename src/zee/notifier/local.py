@@ -72,8 +72,10 @@ _WIN_SCRIPT = (
     '$n=New-Object System.Windows.Forms.NotifyIcon;'
     '$n.Icon=[System.Drawing.SystemIcons]::Information;'
     '$n.Visible=$true;'
-    '$n.ShowBalloonTip(5000,$env:ZEE_TITLE,$env:ZEE_BODY,'
-    '[System.Windows.Forms.ToolTipIcon]::Info);'
+    '$n.BalloonTipIcon=[System.Windows.Forms.ToolTipIcon]::Info;'
+    '$n.BalloonTipTitle=$env:ZEE_TITLE;'
+    '$n.BalloonTipText=$env:ZEE_BODY;'
+    '$n.ShowBalloonTip(5000);'
 )
 
 
