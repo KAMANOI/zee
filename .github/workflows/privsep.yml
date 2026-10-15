@@ -88,6 +88,9 @@ jobs:
           for _ in $(seq 20); do test -S /run/zee/cutd.sock && break; sleep 0.5; done
           sudo systemctl status zee-cutd --no-pager
           ls -l /run/zee/cutd.sock
+          # bound inside the checked directory; mode from the umask (no chmod by path)
+          test "$(stat -c %a /run/zee/cutd.sock)" = 660 && test "$(stat -c %G /run/zee/cutd.sock)" = zeework
+          /usr/bin/python3 -c 'import os; print("dir_fd:", sorted(f.__name__ for f in os.supports_dir_fd), "nofollow:", sorted(f.__name__ for f in os.supports_follow_symlinks))'
       - name: Runbook pre-enable check (no Python)
         run: |
           set -eux
@@ -191,6 +194,10 @@ jobs:
           for _ in $(seq 20); do test -S /private/var/db/zee/cutd.sock && break; sleep 0.5; done
           sudo launchctl print system/io.github.kamanoi.zee-cutd | head -30
           ls -l /private/var/db/zee/cutd.sock
+          # created by the daemon (mkdirat + fchmod 0755); socket mode from the umask
+          test "$(stat -f %Lp /private/var/db/zee)" = 755 && test "$(stat -f %Su /private/var/db/zee)" = root
+          test "$(stat -f %Lp /private/var/db/zee/cutd.sock)" = 660 && test "$(stat -f %g /private/var/db/zee/cutd.sock)" = 20
+          "$PY" -c 'import os; print("dir_fd:", sorted(f.__name__ for f in os.supports_dir_fd), "nofollow:", sorted(f.__name__ for f in os.supports_follow_symlinks))'
       - name: Runbook pre-enable check (no Python) and the python.org framework's links
         run: |
           set -eux

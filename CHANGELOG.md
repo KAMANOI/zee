@@ -39,7 +39,12 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   symlink anywhere (each is its own realpath), every directory above them is
   root-owned and writable by no one else (sticky ones excepted), the zee
   tree holds no symlink, and everything in the zee tree and the state
-  directory (0700) is root-owned and writable by no one else. The Python
+  directory (0700) is root-owned and writable by no one else. The check works
+  on file descriptors from `/` down (each directory opened with
+  `O_DIRECTORY|O_NOFOLLOW` relative to the checked one above it), creates
+  directories only inside a checked parent (`mkdirat` + `fchmod` on the new
+  descriptor), takes the zee code location as imported (never resolved first)
+  and binds the socket relative to the checked directory's descriptor. The Python
   installation's own library is trusted, as for any root service; the
   runbook checks it with `find` before enabling. The macOS socket is
   `/private/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775, `/var` is

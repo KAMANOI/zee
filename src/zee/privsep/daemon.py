@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import hashlib
 import json
 import logging
@@ -519,71 +520,188 @@ def _replaceable_by_others(st: os.stat_result, *, sticky_ok: bool) -> bool:
     return w and not (sticky_ok and st.st_mode & stat.S_ISVTX)
 
 
-def plain_path(p: Path, what: str) -> Path:
-    """The one placement rule for every path the daemon trusts.
+_DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 
-    The path must be absolute, contain no "..", and be its own realpath (no symlink
-    anywhere on it). Every directory above it must be owned by root (or us), and writable
-    by no one else; a sticky one (like /tmp) is the only exception. With no symlinks and no
-    replaceable directory on the way, nobody else can redirect the path after this check."""
+
+def fd_ops_ok() -> bool:
+    """Everything the placement check needs, or the daemon refuses to start (Z721)."""
+    return (all(hasattr(os, n) for n in ("O_NOFOLLOW", "O_DIRECTORY", "fwalk", "fchdir", "fchmod"))
+            and {os.open, os.mkdir, os.unlink, os.chown, os.stat} <= os.supports_dir_fd
+            and {os.stat, os.chown} <= os.supports_follow_symlinks)
+
+
+def _open_at(name: str, flags: int, parent: Optional[int], what: str, shown: str) -> int:
+    try:
+        return os.open(name, flags, dir_fd=parent)
+    except OSError as e:
+        if isinstance(e, FileNotFoundError):
+            raise
+        try:  # O_DIRECTORY|O_NOFOLLOW on a link: ELOOP on Linux, ENOTDIR on macOS
+            link = stat.S_ISLNK(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode)
+        except OSError:
+            link = e.errno == errno.ELOOP
+        if link:
+            raise ValueError(f"{what} must be an absolute path with no symlink and no '..': "
+                             f"{shown} is a symlink") from None
+        raise ValueError(f"{what}: {shown} must be a directory owned by root that no one else "
+                         f"can write ({e.strerror})") from None
+
+
+def _walk_parent(p, what: str) -> tuple[int, str]:
+    """The one placement rule for every path the daemon trusts, checked from "/" down.
+
+    Each directory is opened relative to the one above it with O_DIRECTORY|O_NOFOLLOW (a
+    symlink anywhere fails the open) and checked on its descriptor: owned by root (or us),
+    writable by no one else, a sticky one (like /tmp) the only exception. A directory is
+    checked before anything below it is opened, so once checked nothing under it can be
+    swapped by anyone but root. Returns the checked parent's descriptor (caller closes) and
+    the last name."""
+    if not fd_ops_ok():
+        raise ValueError(f"{what}: this Python lacks openat/O_NOFOLLOW/O_DIRECTORY; refusing to start")
     s = os.fspath(p)
-    if not os.path.isabs(s) or ".." in s.split(os.sep) or os.path.realpath(s) != s:
-        raise ValueError(f"{what} must be an absolute path with no symlink and no '..' "
-                         f"(write it as {os.path.realpath(s)}): {s}")
-    me = os.geteuid()
-    for a in Path(s).parents:
-        st = os.lstat(a)
-        if not stat.S_ISDIR(st.st_mode) or st.st_uid not in (0, me) \
-                or _replaceable_by_others(st, sticky_ok=True):
-            raise ValueError(f"{what}: {a} must be a directory owned by root that no one else can write")
-    return Path(s)
+    parts = s.split("/")[1:]
+    if not s.startswith("/") or s == "/" or any(c in ("", ".", "..") for c in parts):
+        raise ValueError(f"{what} must be an absolute path with no symlink and no '..': {s}")
+    me, fd, shown = os.geteuid(), os.open("/", _DIR), ""
+    try:
+        for i, name in enumerate(parts):
+            st = os.fstat(fd)  # this directory is checked before anything in it is opened
+            if st.st_uid not in (0, me) or _replaceable_by_others(st, sticky_ok=True):
+                raise ValueError(f"{what}: {shown or '/'} must be a directory owned by root "
+                                 "that no one else can write")
+            if i == len(parts) - 1:
+                return fd, name
+            shown += "/" + name
+            try:
+                nfd = _open_at(name, _DIR, fd, what, shown)
+            except FileNotFoundError:
+                raise ValueError(f"{what}: {shown} does not exist") from None
+            os.close(fd)
+            fd = nfd
+    except BaseException:
+        os.close(fd)
+        raise
+    raise AssertionError("unreachable")  # parts is never empty
 
 
-def _owned(path: str, what: str, *, links_ok: bool = False) -> os.stat_result:
-    st = os.lstat(path)
-    if stat.S_ISLNK(st.st_mode) and not links_ok:
-        raise ValueError(f"{what}: {path} is a symlink (none allowed here)")
+def _ours(st: os.stat_result, what: str, shown: str) -> None:
+    if stat.S_ISLNK(st.st_mode):
+        raise ValueError(f"{what}: {shown} is a symlink (none allowed here)")
     if st.st_uid != os.geteuid() or _replaceable_by_others(st, sticky_ok=False):
-        raise ValueError(f"{what}: {path} must be owned by uid {os.geteuid()} and writable by no one else")
-    return st
+        raise ValueError(f"{what}: {shown} must be owned by uid {os.geteuid()} and writable by no one else")
+
+
+def open_dir(p, what: str, *, create_mode: Optional[int] = None) -> int:
+    """A checked directory's descriptor (caller closes). Created only inside an already
+    checked parent (mkdirat), then reopened with O_NOFOLLOW and fchmod'ed on that descriptor."""
+    parent, name = _walk_parent(p, what)
+    try:
+        try:
+            fd = _open_at(name, _DIR, parent, what, os.fspath(p))
+        except FileNotFoundError:
+            if create_mode is None:
+                raise
+            try:
+                os.mkdir(name, create_mode, dir_fd=parent)
+            except FileExistsError:
+                pass  # someone else's (checked below) or a race we lost
+            fd = _open_at(name, _DIR, parent, what, os.fspath(p))
+            try:
+                _ours(os.fstat(fd), what, os.fspath(p))
+                os.fchmod(fd, create_mode)  # the umask may have narrowed it
+            except BaseException:
+                os.close(fd)
+                raise
+    finally:
+        os.close(parent)
+    try:
+        _ours(os.fstat(fd), what, os.fspath(p))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def check_runtime(executable: Optional[str] = None, tree: Optional[Path] = None) -> None:
-    """The interpreter file and the zee code: placed by plain_path, owned by us, writable by
-    no one else, and no symlink anywhere in the zee tree. The interpreter's own library is
-    trusted like any root service's (the runbook checks it before enabling)."""
-    exe = plain_path(Path(executable or sys.executable), "python executable")
-    _owned(str(exe), "python executable")
-    tree = plain_path(tree or Path(__file__).resolve().parent.parent, "zee code")
-    _owned(str(tree), "zee code")
-    for root, dirs, files in os.walk(tree):
-        for n in dirs + files:
-            _owned(os.path.join(root, n), "zee code")
+    """The interpreter file and the zee code: placed by the rule above, owned by us, writable
+    by no one else, and no symlink anywhere in the zee tree. The zee location is __file__ as
+    imported, never resolved first (a link or '..' in it is refused, not folded away). The
+    interpreter's own library is trusted like any root service's (the runbook checks it)."""
+    exe = os.fspath(executable or sys.executable)
+    parent, name = _walk_parent(exe, "python executable")
+    try:
+        try:
+            fd = _open_at(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, parent, "python executable", exe)
+        except FileNotFoundError:
+            raise ValueError(f"python executable: {exe} does not exist") from None
+    finally:
+        os.close(parent)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"python executable: {exe} is not a regular file")
+        _ours(st, "python executable", exe)
+    finally:
+        os.close(fd)
+    tree = tree or Path(__file__).parent.parent
+    top = open_dir(tree, "zee code")
+    try:
+        for root, dirs, files, rfd in os.fwalk(".", dir_fd=top, follow_symlinks=False):
+            for n in dirs + files:
+                _ours(os.stat(n, dir_fd=rfd, follow_symlinks=False), "zee code", os.path.join(tree, root, n))
+    finally:
+        os.close(top)
 
 
 def check_state_dir(d: Path) -> Path:
-    """Holds the approver key registry: placed by plain_path, ours, 0700, every entry ours,
-    no links, writable by no one else. Created 0700 when missing (its parent checked first)."""
+    """Holds the approver key registry: placed by the rule above, ours, 0700, every entry
+    ours, no links, writable by no one else. Created 0700 when missing, inside a checked parent.
+    After this the daemon opens files in it by path: every directory from / to here is
+    checked and only root can rename entries in them, so those paths reach the same objects."""
     d = Path(d)
-    if not os.path.lexists(d):
-        plain_path(d.parent, "state directory parent")
-        d.mkdir(mode=0o700)
-    d = plain_path(d, "state directory")
-    st = _owned(str(d), "state directory")
-    if not stat.S_ISDIR(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
-        raise ValueError(f"state directory must be a directory owned by uid {os.geteuid()}, mode 0700: {d}")
-    for root, dirs, files in os.walk(d):
-        for n in dirs + files:
-            _owned(os.path.join(root, n), "state entry")
+    fd = open_dir(d, "state directory", create_mode=0o700)
+    try:
+        if stat.S_IMODE(os.fstat(fd).st_mode) & 0o077:
+            raise ValueError(f"state directory must be a directory owned by uid {os.geteuid()}, mode 0700: {d}")
+        for root, dirs, files, rfd in os.fwalk(".", dir_fd=fd, follow_symlinks=False):
+            for n in dirs + files:
+                _ours(os.stat(n, dir_fd=rfd, follow_symlinks=False), "state entry", os.path.join(d, root, n))
+    finally:
+        os.close(fd)
     return d
 
 
 def check_socket_dir(d: Path) -> Path:
-    """Placed by plain_path, ours, a directory writable by no one else."""
-    d = plain_path(Path(d), "socket directory")
-    if not stat.S_ISDIR(_owned(str(d), "socket directory").st_mode):
-        raise ValueError(f"socket directory is not a directory: {d}")
-    return d
+    """Placed by the rule above, ours, a directory writable by no one else."""
+    os.close(open_dir(d, "socket directory"))
+    return Path(d)
+
+
+def _bind(server_cls, handler, dfd: int, name: str, group: Optional[int]):
+    """Bind ``name`` inside the checked socket directory without a path lookup from "/":
+    fchdir to its descriptor and bind the bare name (no bindat on macOS; unix(4) and unix(7)
+    take relative names). The mode comes from the umask (bind applies it; fchmod on a socket
+    descriptor is EINVAL on macOS); the group from fchownat without following links."""
+    try:
+        st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if not stat.S_ISSOCK(st.st_mode):
+            raise ValueError(f"not a socket (or a symlink): {name}")
+        os.unlink(name, dir_fd=dfd)  # our own stale socket from a previous run
+    prev = os.open(".", os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+    old = os.umask(0o117 if group is not None else 0o177)  # never wider than 0660 / 0600
+    try:
+        os.fchdir(dfd)
+        server = server_cls(name, handler)
+    finally:
+        os.umask(old)
+        os.fchdir(prev)
+        os.close(prev)
+    if group is not None:
+        os.chown(name, -1, group, dir_fd=dfd, follow_symlinks=False)
+    return server
 
 
 def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
@@ -592,17 +710,9 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
     (launchd) / `Restart=on-failure` (systemd) leave it stopped."""
     check_runtime()
     socket_path = Path(socket_path)
-    if not os.path.lexists(socket_path.parent):  # macOS /private/var/db/zee (RuntimeDirectory on Linux)
-        plain_path(socket_path.parent.parent, "socket directory parent")
-        socket_path.parent.mkdir()
-        os.chmod(socket_path.parent, 0o755)  # the daemon's umask (077) would make it untraversable
-    socket_path = check_socket_dir(socket_path.parent) / socket_path.name
-    if socket_path.is_symlink():
-        raise ValueError(f"symlink refused: {socket_path}")
-    if socket_path.exists():
-        if not stat.S_ISSOCK(socket_path.lstat().st_mode):
-            raise ValueError(f"not a socket: {socket_path}")
-        socket_path.unlink()  # our own stale socket from a previous run
+    # macOS /private/var/db/zee is created here (RuntimeDirectory on Linux); 0755 so the
+    # watch user can reach the socket. Only root can add or rename entries in it.
+    dfd = open_dir(socket_path.parent, "socket directory", create_mode=0o755)
 
     # Bounded concurrency: allowed uids (the watch, root) and everyone else get
     # separate pools, so other socket users can't crowd out a cut. Over the cap a
@@ -653,14 +763,10 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
             finally:
                 self.peer_of.pop(id(request))[1].release()
 
-    old = os.umask(0o177)  # the socket never exists with wider modes than 0600
     try:
-        server = Server(str(socket_path), Handler)
+        server = _bind(Server, Handler, dfd, socket_path.name, group)
     finally:
-        os.umask(old)
-    if group is not None:
-        os.chown(socket_path, -1, group)
-        os.chmod(socket_path, 0o660)  # BSD may ignore socket modes (unix(7)): the uid check is the gate
+        os.close(dfd)
 
     def tamper_loop() -> None:
         while not daemon.stopping:

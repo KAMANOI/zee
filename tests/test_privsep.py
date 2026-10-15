@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -742,15 +743,15 @@ def test_gid0_group_writable_socket_dir_is_refused(monkeypatch):
     from zee.privsep import daemon
     d = rtmp()
     os.chmod(d, 0o775)
-    real_lstat, target = os.lstat, str(os.path.realpath(d))
+    real_fstat, target = os.fstat, os.stat(d)
 
-    def lstat(p):
-        st = real_lstat(p)
-        if str(p) == target:
+    def fstat(fd):
+        st = real_fstat(fd)
+        if (st.st_dev, st.st_ino) == (target.st_dev, target.st_ino):
             return os.stat_result((st.st_mode, st.st_ino, st.st_dev, st.st_nlink, st.st_uid, 0,
                                    st.st_size, int(st.st_atime), int(st.st_mtime), int(st.st_ctime)))
         return st
-    monkeypatch.setattr(daemon.os, "lstat", lstat)
+    monkeypatch.setattr(daemon.os, "fstat", fstat)
     with pytest.raises(ValueError, match="writable by no one else"):
         daemon.check_socket_dir(d)
 
@@ -817,18 +818,18 @@ def test_state_dir_under_a_replaceable_parent_is_refused():
 # ---- Codex 12: one placement rule (no symlink, no "..", root-only ancestors)
 def test_dotdot_through_an_alias_is_refused():
     """alias/../late.py used to be folded by normpath before the check (Codex 12)."""
-    from zee.privsep.daemon import plain_path
+    from zee.privsep.daemon import check_socket_dir
     root = rtmp()
     (root / "real").mkdir(mode=0o755)
     (root / "alias").symlink_to(root / "real")
     with pytest.raises(ValueError, match="no symlink and no '..'"):
-        plain_path(root / "alias" / ".." / "late.py", "x")
+        check_socket_dir(root / "alias" / ".." / "real")
     with pytest.raises(ValueError, match="no symlink and no '..'"):
-        plain_path(Path(str(root / "real") + "/../real"), "x")
+        check_socket_dir(Path(str(root / "real") + "/../real"))
 
 
 def test_any_symlink_on_a_trusted_path_is_refused():
-    from zee.privsep.daemon import check_socket_dir, plain_path
+    from zee.privsep.daemon import check_socket_dir
     root = rtmp()
     (root / "real").mkdir(mode=0o755)
     (root / "alias").symlink_to(root / "real")
@@ -837,7 +838,7 @@ def test_any_symlink_on_a_trusted_path_is_refused():
     assert check_socket_dir(root / "real") == root / "real"
     if os.path.realpath("/tmp") != "/tmp":  # macOS: /tmp -> private/tmp is itself a link
         with pytest.raises(ValueError, match="no symlink"):
-            plain_path(Path("/tmp") / root.name, "x")
+            check_socket_dir(Path("/tmp") / root.name)
 
 
 def _tree(root: Path) -> tuple[Path, Path]:
@@ -873,3 +874,141 @@ def test_check_runtime_accepts_a_plain_tree_and_refuses_links_or_writable_code()
     os.chmod(exe, 0o775)
     with pytest.raises(ValueError, match="python executable"):
         check_runtime(str(exe), pkg)
+
+
+# ---- Codex 13: the placement check works on descriptors, from "/" down
+def test_nothing_is_created_under_a_parent_others_can_write():
+    """High 1: the directory used to be made (and chmod'ed by path) before its parent was checked."""
+    from zee.privsep.daemon import CutDaemon, check_state_dir, open_dir
+    loose = rtmp()
+    os.chmod(loose, 0o777)
+    with pytest.raises(ValueError, match="no one else can write"):
+        os.close(open_dir(loose / "run", "socket directory", create_mode=0o755))
+    with pytest.raises(ValueError, match="no one else can write"):
+        check_state_dir(loose / "cutd")
+    with pytest.raises(ValueError, match="no one else can write"):
+        CutDaemon(loose / "cutd2", {WATCH}, verifier=HmacVerifier())
+    assert sorted(os.listdir(loose)) == []
+
+
+def test_serve_creates_nothing_under_a_loose_parent(tmp_path):
+    from zee.privsep.daemon import CutDaemon, serve
+    state = tmp_path / "cutd"
+    state.mkdir(mode=0o700)
+    (state / "assets.toml").write_text(CFG)
+    d = CutDaemon(state, {WATCH}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
+    loose = rtmp()
+    os.chmod(loose, 0o777)
+    with pytest.raises(ValueError, match="no one else can write"):
+        serve(d, loose / "run" / "cutd.sock")
+    assert os.listdir(loose) == []
+
+
+def test_a_swapped_in_link_is_never_followed_by_the_mode_change(monkeypatch):
+    """High 1, the race itself: the new directory is replaced by a link right after mkdir.
+    The reopen is O_NOFOLLOW and the mode change is fchmod on that descriptor, so the
+    link target keeps its mode."""
+    from zee.privsep import daemon
+    root = rtmp()
+    victim = root / "victim"
+    victim.mkdir(mode=0o700)
+    real_mkdir = os.mkdir
+
+    def mkdir_then_swap(name, mode=0o777, *, dir_fd=None):
+        real_mkdir(name, mode, dir_fd=dir_fd)
+        os.rename(root / name, root / "moved")
+        os.symlink(victim, root / name)
+    monkeypatch.setattr(daemon.os, "mkdir", mkdir_then_swap)
+    monkeypatch.setattr(daemon, "fd_ops_ok", lambda: True)  # the patched call is not in supports_dir_fd
+    with pytest.raises(ValueError, match="symlink"):
+        os.close(daemon.open_dir(root / "run", "socket directory", create_mode=0o755))
+    assert stat.S_IMODE(os.stat(victim).st_mode) == 0o700
+
+
+def test_ancestors_are_opened_top_down_relative_to_the_checked_parent(monkeypatch):
+    """High 2: each directory is opened with O_NOFOLLOW relative to the descriptor of the one
+    above it, which was checked first; nothing is looked up from "/" by path after that."""
+    from zee.privsep import daemon
+    root = rtmp()
+    (root / "a" / "b").mkdir(parents=True, mode=0o755)
+    calls, real_open = [], os.open
+
+    def rec(path, flags, mode=0o777, *, dir_fd=None):
+        calls.append((path, dir_fd, flags))
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+    monkeypatch.setattr(daemon.os, "open", rec)
+    monkeypatch.setattr(daemon, "fd_ops_ok", lambda: True)  # the patched call is not in supports_dir_fd
+    os.close(daemon.open_dir(root / "a" / "b", "x"))
+    names = [c[0] for c in calls]
+    assert names == ["/"] + str(root / "a" / "b").split("/")[1:]
+    assert all(c[1] is not None for c in calls[1:])
+    assert all(c[2] & os.O_NOFOLLOW and c[2] & os.O_DIRECTORY for c in calls)
+
+
+def test_a_checked_ancestor_is_checked_before_its_child_is_opened(monkeypatch):
+    """High 2: a loose directory high up stops the walk before anything under it is opened."""
+    from zee.privsep import daemon
+    root = rtmp()
+    (root / "u" / "a").mkdir(parents=True, mode=0o755)
+    os.chmod(root / "u", 0o777)
+    opened, real_open = [], os.open
+    monkeypatch.setattr(daemon.os, "open", lambda p, f, m=0o777, *, dir_fd=None:
+                        opened.append(p) or real_open(p, f, m, dir_fd=dir_fd))
+    monkeypatch.setattr(daemon, "fd_ops_ok", lambda: True)  # the patched call is not in supports_dir_fd
+    with pytest.raises(ValueError, match="/u must be a directory owned by root"):
+        os.close(daemon.open_dir(root / "u" / "a" / "state", "x"))
+    assert "a" not in opened and "state" not in opened
+
+
+def test_check_runtime_takes_the_code_location_as_imported_not_resolved(monkeypatch):
+    """High 3: the zee tree reached through a link (or '..') is refused, not resolved first."""
+    from zee.privsep import daemon
+    root = rtmp()
+    exe, pkg = _tree(root)
+    (pkg / "privsep").mkdir(mode=0o755)
+    (root / "alias").symlink_to(root)
+    monkeypatch.setattr(daemon, "__file__", str(root / "alias" / "zee" / "privsep" / "daemon.py"))
+    with pytest.raises(ValueError, match="no symlink"):
+        daemon.check_runtime(str(exe))
+    monkeypatch.setattr(daemon, "__file__", str(root / "zee" / ".." / "zee" / "privsep" / "daemon.py"))
+    with pytest.raises(ValueError, match="no symlink and no '..'"):
+        daemon.check_runtime(str(exe))
+    monkeypatch.setattr(daemon, "__file__", str(pkg / "privsep" / "daemon.py"))
+    daemon.check_runtime(str(exe))
+
+
+def test_refuses_to_start_without_descriptor_based_calls(monkeypatch):
+    from zee.privsep import daemon
+    monkeypatch.setattr(daemon, "fd_ops_ok", lambda: False)
+    with pytest.raises(ValueError, match="O_NOFOLLOW"):
+        daemon.check_socket_dir(rtmp())
+
+
+def test_socket_is_bound_inside_the_checked_directory_with_the_umask_mode(tmp_path):
+    from zee.privsep.daemon import CutDaemon, serve
+    state = tmp_path / "cutd"
+    state.mkdir(mode=0o700)
+    (state / "assets.toml").write_text(CFG)
+    d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
+    d.engine.state["keys"]["k1"] = "s1"
+    base = rtmp()
+    sock = base / "run" / "cutd.sock"
+    cwd = os.getcwd()
+    t = threading.Thread(target=serve, args=(d, sock), kwargs={"group": os.getgid(), "check_every": 60},
+                         daemon=True)
+    t.start()
+    _wait_listening(sock)
+    assert os.getcwd() == cwd  # the fchdir for the bind is undone
+    assert stat.S_IMODE(os.stat(base / "run").st_mode) == 0o755
+    st = os.lstat(sock)
+    assert stat.S_ISSOCK(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o660 and st.st_gid == os.getgid()
+    ch = d.handle_line(json.dumps({"op": "challenge", "admin_op": "stop", "args": {}}).encode(), os.geteuid())
+    sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
+    c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    c.connect(str(sock))
+    c.sendall(json.dumps({"op": "submit", "payload": ch["payload"], "entered": ch["code"],
+                          "key_id": "k1", "signature": sig}).encode() + b"\n")
+    c.recv(1000)
+    c.close()
+    t.join(5)
+    assert not t.is_alive()
