@@ -19,14 +19,13 @@ import subprocess
 import sys
 from typing import Optional
 
-from ..telemetry.cut_state import CutStateLog
+from ..telemetry.cut_state import SENTINEL_LINUX_NMCLI, CutStateLog
 
 logger = logging.getLogger(__name__)
 
 # Sentinels recorded in cut_state.modified for cut paths that are not
 # tied to a specific interface name. recovery/restore.py branches on
 # these to undo the right side-effect.
-SENTINEL_LINUX_NMCLI = "__zee_nmcli_networking__"
 SENTINEL_LINUX_NFT_EGRESS = "__zee_nft_egress_table__"
 SENTINEL_LINUX_IPTABLES_EGRESS = "__zee_iptables_egress_chain__"
 SENTINEL_MACOS_PFCTL_EGRESS = "__zee_pfctl_egress_anchor__"

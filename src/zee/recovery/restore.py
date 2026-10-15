@@ -34,10 +34,7 @@ from ..errors import (
 from ..notifier.local import notify_local
 from ..responder.cut_egress import ZEE_RULE_TAG
 from ..responder.cut_full import (
-    SENTINEL_LINUX_IPTABLES_EGRESS,
-    SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_LINUX_NMCLI,
-    SENTINEL_MACOS_PFCTL_EGRESS,
     interface_states,
     list_linux_interfaces,
     sbin_which as _which,
@@ -59,13 +56,6 @@ LEDGER_NOTE = (
     "(docs/design/self-defense.md)."
 )
 
-_FIREWALL_ENTRIES = (
-    SENTINEL_LINUX_NFT_EGRESS,
-    SENTINEL_LINUX_IPTABLES_EGRESS,
-    SENTINEL_MACOS_PFCTL_EGRESS,
-    f"{ZEE_RULE_TAG}-block",
-    f"{ZEE_RULE_TAG}-allow-local",
-)
 
 
 def restore(
@@ -109,10 +99,10 @@ def restore(
                 "`zee restore <asset_id> --all-interfaces` re-enables everything.",
             )
             raise ZeeError(Z605_RESTORE_NO_CUT_RECORD, f"asset={asset_id}: {why}")
-        targets = latest.modified
+        targets = tuple(n for k, n in latest.entries() if k != "firewall")
         status, detail = _restore_targeted(latest)
 
-    if any(t not in _FIREWALL_ENTRIES for t in targets) or all_interfaces:
+    if targets or all_interfaces:
         rb_status, rb_detail = _readback(targets)
         status = _combine(status, rb_status)
         detail = f"{detail}; {rb_detail}"
@@ -153,10 +143,10 @@ def _restore_targeted(rec: CutRecord) -> tuple[Optional[bool], str]:
     if rec.platform != _host_platform():
         return False, f"cut recorded on {rec.platform}, this host is {sys.platform}"
     steps: list[Step] = []
-    for entry in rec.modified:
-        if entry in _FIREWALL_ENTRIES:
+    for kind, entry in rec.entries():
+        if kind == "firewall":
             continue  # handled below on every backend, record or not
-        if entry == SENTINEL_LINUX_NMCLI:
+        if kind == "nmcli":
             steps.append(("nmcli", _run(["nmcli", "networking", "on"])[0]))
         elif rec.platform == "linux":
             steps.append((entry, _run(["ip", "link", "set", entry, "up"])[0]))
@@ -182,7 +172,7 @@ def _recorded_targets(cut_state: CutStateLog, asset_id: str) -> Optional[tuple[s
     except Exception as e:  # noqa: BLE001 - any ledger problem = no record
         logger.warning("cut_state unusable for emergency restore: %s", e)
         return None
-    return None if rec is None or damaged else rec.modified
+    return None if rec is None or damaged else tuple(n for k, n in rec.entries() if k != "firewall")
 
 
 def _restore_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
@@ -330,7 +320,9 @@ def _readback(targets: Optional[tuple[str, ...]]) -> tuple[Optional[bool], str]:
     read back as enabled: disabled = failed; not enumerated, unknown or an
     unreadable listing = unverified. Disabled ones outside the record are
     only reported (warning)."""
-    wanted = [t for t in (targets or ()) if t not in _FIREWALL_ENTRIES]
+    # Callers pass only interface / service / nmcli targets (classified by
+    # kind, never by name).
+    wanted = list(dict.fromkeys(targets or ()))
     states = interface_states()
     if states is None:
         return None, "readback: state unreadable"

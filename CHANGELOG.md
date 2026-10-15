@@ -41,7 +41,9 @@ Not in any tagged release yet.
   are shown as a warning. The emergency restore reads back what it actually
   touched (plus the ledger's targets when usable), with or without a
   ledger, including names that contain ":" (e.g. a macOS service named
-  `Office: Ethernet`); an empty or all-unconfirmed check is never success. A
+  `Office: Ethernet`); ledger entries are classified by the cut method that
+  recorded them, never by name, so a service named like a Zee rule is
+  still enabled and verified; an empty or all-unconfirmed check is never success. A
   truncated or malformed `ip -o link` line reads as unknown.
   Tools are looked up on PATH plus `/usr/sbin:/sbin` and run by absolute
   path (made absolute even if PATH holds a relative entry). The emergency restore also no longer stops after `nmcli`

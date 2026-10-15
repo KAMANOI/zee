@@ -36,6 +36,11 @@ def default_cut_state_path() -> Path:
     return default_log_dir() / "cut_state.jsonl"
 
 
+# Recorded for a Linux full cut done with `nmcli networking off` (not an
+# interface name; Linux interface names are at most 15 characters).
+SENTINEL_LINUX_NMCLI = "__zee_nmcli_networking__"
+
+
 @dataclass(frozen=True)
 class CutRecord:
     asset_id: str
@@ -43,6 +48,21 @@ class CutRecord:
     method: str  # "full" / "egress"
     platform: str  # "linux" / "darwin" / "win32"
     modified: tuple[str, ...]
+    # (kind, name) per changed thing, kind = "firewall" | "nmcli" | "iface".
+    # The kind comes from the cut method of the line that recorded it, never
+    # from the name (a real service may be named like a Zee rule).
+    pairs: tuple[tuple[str, str], ...] = ()
+
+    def entries(self) -> tuple[tuple[str, str], ...]:
+        return self.pairs or tuple(_kind(self.method, self.platform, m) for m in self.modified)
+
+
+def _kind(method: str, platform: str, name: str) -> tuple[str, str]:
+    if method == "egress":
+        return ("firewall", name)
+    if platform.startswith("linux") and name == SENTINEL_LINUX_NMCLI:
+        return ("nmcli", name)
+    return ("iface", name)
 
 
 _PLATFORMS = ("linux", "darwin", "win32")
@@ -154,10 +174,12 @@ class CutStateLog:
                     logger.warning("cut_state %s:%d platform differs from earlier cut", self.path, line_no)
                     damaged = True
                 prev = candidate.modified if candidate else ()
+                prev_pairs = candidate.entries() if candidate else ()
                 candidate = CutRecord(
                     asset_id=asset_id, cut_at=rec.cut_at, method=rec.method,
                     platform=rec.platform,
                     modified=prev + tuple(m for m in rec.modified if m not in prev),
+                    pairs=prev_pairs + tuple(p for p in rec.entries() if p not in prev_pairs),
                 )
             elif rec == asset_id:
                 candidate = None

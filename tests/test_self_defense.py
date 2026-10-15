@@ -879,3 +879,49 @@ def test_macos_states_keep_colon_names(monkeypatch):
     monkeypatch.setattr(full_mod.sys, "platform", "darwin")
     _stub_check_output(monkeypatch, {"networksetup": "An asterisk (*) denotes ...\n*Office: Ethernet\nWi-Fi\n"})
     assert full_mod.interface_states() == {"Office: Ethernet": "disabled", "Wi-Fi": "enabled"}
+
+
+# ── sixth external review: classify by kind, never by name ─────────────
+
+RULE_NAME = "zee-egress-cut-block"  # also Zee's Windows rule name
+
+
+@pytest.mark.parametrize("state, code", [("disabled", "Z601"), ("unknown", "Z606"), (None, "Z606")])
+def test_emergency_verifies_service_named_like_a_rule(tmp_path, monkeypatch, quiet, state, code):
+    monkeypatch.setattr(restore_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}")
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi", RULE_NAME])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    states = {"Wi-Fi": "enabled"}
+    if state:
+        states[RULE_NAME] = state
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: states)
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)
+    assert ei.value.code == code
+
+
+@pytest.mark.parametrize("state, code", [("disabled", "Z601"), ("unknown", "Z606"), (None, "Z606")])
+def test_normal_restore_enables_and_verifies_service_named_like_a_rule(tmp_path, monkeypatch, quiet, state, code):
+    monkeypatch.setattr(restore_mod, "_host_platform", lambda: "darwin")
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}")
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    states = {"Wi-Fi": "enabled"}
+    if state:
+        states[RULE_NAME] = state
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: states)
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="t-host", method="full", platform="darwin", modified=["Wi-Fi", RULE_NAME])
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=log)
+    assert ei.value.code == code
+    assert ["networksetup", "-setnetworkserviceenabled", RULE_NAME, "on"] in calls
+
+
+def test_kinds_follow_the_cut_method(tmp_path):
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="a", method="egress", platform="win32", modified=[RULE_NAME])
+    log.record_cut(asset_id="a", method="full", platform="win32", modified=[RULE_NAME, "Ethernet"])
+    rec = log.latest_unresolved_for("a")
+    assert rec.entries() == (("firewall", RULE_NAME), ("iface", RULE_NAME), ("iface", "Ethernet"))
