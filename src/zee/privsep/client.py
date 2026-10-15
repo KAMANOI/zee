@@ -4,11 +4,14 @@ from __future__ import annotations
 import json
 import socket
 import struct
+import sys
 from pathlib import Path
 
 from ..responder.blocker import CutRequest
 
-DEFAULT_SOCKET = Path("/var/run/zee/cutd.sock")
+# macOS: /var/db (root:wheel 0755 all the way up). Not /var/run: it is root:daemon 0775,
+# so a non-root service account could replace the socket (Codex review 8).
+DEFAULT_SOCKET = Path("/var/db/zee/cutd.sock" if sys.platform == "darwin" else "/run/zee/cutd.sock")
 
 
 class NotSent(OSError):

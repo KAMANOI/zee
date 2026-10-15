@@ -24,12 +24,13 @@
      │ 状態確認 {"op":"status"}（30秒ごと。遮断部にとっての心拍）
      │ 管理（復旧・設定変更・自動遮断の切替・自己防衛の切替・停止・鍵の追加削除）
      │   = {"op":"challenge"} で請求を受け取り → 別端末で署名 → {"op":"submit"}
-     ▼ Unix ドメインソケット（/var/run/zee/cutd.sock。root 所有・業務ユーザーだけの専用グループに 0660。
+     ▼ Unix ドメインソケット（macOS /var/db/zee/cutd.sock・Linux /run/zee/cutd.sock。root 所有・業務ユーザーだけの専用グループに 0660。
      │   ソケットのディレクトリが root 所有・グループ／他から書けず、その上のどのディレクトリも
      │   他人が名前を変えられない（root 所有で書けない、または /tmp のような sticky）時だけ起動する。
      │   書かれたままの経路と解決後の経路の両方で確かめ、途中のシンボリックリンクも root 所有に限る。
      │   以後の bind・chown・chmod は確かめた解決後の経路で行う。macOS の /var/run のように
-     │   システムのグループ（ログインする利用者がいない）だけが書けるディレクトリは許す（Codex 7回目）。
+     │   gid 0 以外のグループが書けるディレクトリは許さない（Codex 8回目：uid の大小でグループを信用しない）。
+     │   リンクは1段ずつたどり、途中のリンク（連鎖の中間を含む）とそれが置かれたディレクトリをすべて確かめる。
      │   業務側も、接続した相手の uid が 0 であることをカーネルから確かめてから送る（差し替えたソケットに
      │   「遮断した」と嘘をつかせない）。送った後に返事が来なければ「遮断の結果は不明」と通知し、
      │   「何も遮断していない」とは言わない。管理の CLI も同じで、届かなければ Z710、届いて返事が無ければ Z720）
@@ -67,7 +68,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 | 　承認端末の公開鍵登録簿・使用済み署名 | 同上 `admin_keys.json`（egress と同じ形式） | root、600 | 同上 |
 | 　遮断台帳・管理の記録 | 同上 `cut_state.jsonl`・`admin.jsonl` | root、600 | 同上 |
 | 　自己防衛の設定 | 同上 `tamper.json` | root、600 | 同上 |
-| ソケット | `/var/run/zee/cutd.sock`（ディレクトリ 755、root 所有） | root:専用グループ（業務ユーザーだけ。macOS の `staff` は全員なので使わない）、660 | 接続できるだけ |
+| ソケット | macOS `/var/db/zee/cutd.sock`・Linux `/run/zee/cutd.sock`（ディレクトリ 755、root 所有。macOS の `/var/run` は root:daemon 0775＝root 以外のサービスアカウントが書けるので使わない） | root:専用グループ（業務ユーザーだけ。macOS の `staff` は全員なので使わない）、660 | 接続できるだけ |
 | 常駐の定義 | `/etc/systemd/system/zee-cutd.service`／`/Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist` | root、644 | 止められない |
 | 承認端末の秘密鍵 | 別端末（iPhone の Secure Enclave・FIDO キー等） | 端末の外 | 無い |
 

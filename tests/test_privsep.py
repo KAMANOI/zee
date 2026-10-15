@@ -717,3 +717,31 @@ def test_cli_reports_unknown_result_after_sending(monkeypatch, capsys):
     monkeypatch.setattr(pcli, "_raw_call", sent_but_no_answer)
     assert main(["privsep", "status", "--socket", "/nonexistent"]) == 1
     assert "Z720" in capsys.readouterr().err
+
+
+# ---- Codex 8
+def test_group_writable_parent_is_refused_whatever_the_group():
+    from zee.privsep.daemon import check_socket_dir
+    parent = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    (parent / "run").mkdir(mode=0o755)
+    if os.getgid() == 0:
+        pytest.skip("running with gid 0")
+    os.chown(parent, -1, os.getgid())  # a group other than gid 0 (BSD /tmp gives wheel)
+    os.chmod(parent, 0o775)
+    with pytest.raises(ValueError, match="replaceable"):
+        check_socket_dir(parent / "run")
+
+
+def test_link_hop_in_the_middle_of_a_chain_is_checked():
+    from zee.privsep.daemon import check_socket_dir
+    safe = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    (safe / "run").mkdir(mode=0o755)
+    untrusted = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(untrusted, 0o777)
+    (untrusted / "hop").symlink_to(safe)
+    trusted = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    (trusted / "link").symlink_to(untrusted / "hop")
+    with pytest.raises(ValueError, match="replaceable"):
+        check_socket_dir(trusted / "link" / "run")
+    (trusted / "direct").symlink_to(safe)
+    assert check_socket_dir(trusted / "direct" / "run") == Path(os.path.realpath(safe / "run"))

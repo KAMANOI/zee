@@ -34,7 +34,7 @@ cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3
 
 ```toml
 [privsep]
-socket = "/var/run/zee/cutd.sock"   # Linux の unit の既定は /run/zee/cutd.sock
+socket = "/var/db/zee/cutd.sock"   # macOS。Linux は "/run/zee/cutd.sock"
 ```
 
 ## 2. macOS（LaunchDaemon）

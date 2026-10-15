@@ -166,9 +166,9 @@ jobs:
           sudo chmod 644 /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
           plutil -lint /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
           sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
-          for _ in $(seq 20); do test -S /var/run/zee/cutd.sock && break; sleep 0.5; done
+          for _ in $(seq 20); do test -S /var/db/zee/cutd.sock && break; sleep 0.5; done
           sudo launchctl print system/io.github.kamanoi.zee-cutd | head -30
-          ls -l /var/run/zee/cutd.sock
+          ls -l /var/db/zee/cutd.sock
       - name: Approver key (runner user only) and root bootstrap
         run: |
           set -eux
@@ -176,11 +176,11 @@ jobs:
           openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
           openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
           cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -m zee privsep bootstrap-key \
-            --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /var/run/zee/cutd.sock
+            --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /var/db/zee/cutd.sock
       - name: Checks
         env:
           ZEE_SRC: /Library/Application Support/Zee/src
-          SOCK: /var/run/zee/cutd.sock
+          SOCK: /var/db/zee/cutd.sock
           STATE: /Library/Application Support/Zee/cutd
           WATCH_USER: zeework
           OUTSIDER: runner

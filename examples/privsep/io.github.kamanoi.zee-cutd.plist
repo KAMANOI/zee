@@ -15,7 +15,7 @@
     <string>-m</string><string>zee</string>
     <string>privsep</string><string>daemon</string>
     <string>--state-dir</string><string>/Library/Application Support/Zee/cutd</string>
-    <string>--socket</string><string>/var/run/zee/cutd.sock</string>
+    <string>--socket</string><string>/var/db/zee/cutd.sock</string>
     <string>--allow-uid</string><string>WATCH_UID</string>
     <string>--group</string><string>WATCH_GROUP</string>
     <string>--watch-config</string><string>WATCH_CONFIG</string>
