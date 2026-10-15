@@ -161,16 +161,18 @@ def main() -> int:
     addr4, why4 = resolve(args.url, socket.AF_INET)
     addr6, why6 = resolve(args.url6, socket.AF_INET6) if args.url6 else (None, "")
 
-    def probe(url: str) -> dict:
-        family, addr, why = ((socket.AF_INET6, addr6, why6) if url == args.url6
-                             else (socket.AF_INET, addr4, why4))
+    def probe(v6_probe: bool = False) -> dict:
+        # The family is chosen by the caller, never by the URL (the same URL
+        # may be given for both).
+        url, family, addr, why = ((args.url6, socket.AF_INET6, addr6, why6) if v6_probe
+                                  else (args.url, socket.AF_INET, addr4, why4))
         ok, detail = reachable(url, args.probe_timeout, family, addr) if addr else (False, why)
         return {"reachable": ok, "detail": detail}
 
     v6: dict = {"url": args.url6} if args.url6 else {}
-    result["before"] = probe(args.url)
+    result["before"] = probe()
     if args.url6:
-        v6["before"] = probe(args.url6)
+        v6["before"] = probe(v6_probe=True)
     safety = threading.Timer(args.safety_seconds, do_restore, args=("safety-timer",))
     safety.daemon = True
     safety.start()
@@ -180,27 +182,27 @@ def main() -> int:
         ok, detail = cut_fn(asset_id=ASSET, cut_state=state)
         result["cut"] = {"ok": ok, "detail": detail, "seconds": round(time.monotonic() - t0, 2)}
         time.sleep(1.0)
-        result["during"] = probe(args.url)
+        result["during"] = probe()
         if args.url6:
-            v6["during"] = probe(args.url6)
+            v6["during"] = probe(v6_probe=True)
     finally:
         do_restore("finally")
         safety.cancel()
     time.sleep(2.0)
-    after = tuple(probe(args.url).values())
+    after = tuple(probe().values())
     for _ in range(10):  # interfaces (Wi-Fi rejoin) may take a moment to come back
         if after[0]:
             break
         time.sleep(3.0)
-        after = tuple(probe(args.url).values())
+        after = tuple(probe().values())
     result["after"] = dict(zip(("reachable", "detail"), after))
     if args.url6:
-        after6 = tuple(probe(args.url6).values())
+        after6 = tuple(probe(v6_probe=True).values())
         for _ in range(5):
             if after6[0] or not v6["before"]["reachable"]:
                 break
             time.sleep(3.0)
-            after6 = tuple(probe(args.url6).values())
+            after6 = tuple(probe(v6_probe=True).values())
         v6["after"] = dict(zip(("reachable", "detail"), after6))
         v6.setdefault("during", {"reachable": None, "detail": "cut raised before the probe"})
         v6["status"] = ipv6_status(v6)

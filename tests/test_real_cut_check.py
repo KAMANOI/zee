@@ -150,3 +150,9 @@ def test_probe_reuses_the_address_resolved_before_the_cut(monkeypatch):
     # With an address already resolved, getaddrinfo is not called at all.
     ok, detail = rcc.reachable("http://example.invalid/", 0.5, socket.AF_INET, ("127.0.0.1", 9))
     assert ok is False and not detail.startswith("resolve failed")
+
+
+def test_probe_family_is_not_chosen_by_url():
+    """Codex round 4: --url and --url6 may be the same URL."""
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "real_cut_check.py").read_text()
+    assert "== args.url6" not in src and "def probe(v6_probe: bool = False)" in src
