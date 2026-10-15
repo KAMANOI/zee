@@ -137,7 +137,7 @@ responder の `cut_full` / `cut_egress` と recovery（`zee restore`）は OS �
 
 ### v0.3 で対応済み
 
-- **`zee restore` 認証**：v0.3 から `zee init-restore-token` で生成したローカル restore_token を `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できなくなりました（hmac.compare_digest で定数時間比較・標準ライブラリのみ）。同一ユーザーで動作するシェルからの誤・意図的な巻き戻しは塞げます。`~/.zee/restore_token`（0600）を読める root 相当攻撃者にはバイパスされるため、マルチユーザー本番では `sudo` で囲うか専用ユーザー運用を推奨します。
+- **`zee restore` 認証**：v0.3 から `zee init-restore-token` で生成したローカル restore_token を `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できなくなりました（hmac.compare_digest で定数時間比較・標準ライブラリのみ）。別シェルからの誤った巻き戻しは塞げます。ただし `~/.zee/restore_token`（0600）は同じユーザーなら読めるため、同じユーザー権限を持つ攻撃者（root 相当でなくても）は意図的な巻き戻しができます。マルチユーザー本番では `sudo` で囲うか専用ユーザー運用を推奨します。
 - **cut state 永続化**：v0.3 から cut で変更したインターフェース / サービス / ルール名を `~/.local/state/zee/cut_state.jsonl`（0600）に記録し、restore はそれを読んで Zee が変更したものだけ戻します。Zee 以外で disable されていた IF を意図せず enable してしまう v0.2 までの副作用を解消しました。記録が無い・壊れている時、restore は何も戻さず拒否します（Z605。以前は全面復旧に戻っていた）。全面復旧は `--all-interfaces` を付けた時だけで、各コマンドの成否を表示します。
 - **Windows interface 列挙のロケール対応**：v0.3 から PowerShell `Get-NetAdapter`（構造化 JSON 出力・ロケール非依存）を主経路に。`netsh interface show interface` のパースはフォールバックとして保持。
 - **events.jsonl の decoy_path 平文記録**：v0.3 から `decoy_ref`（`<asset_id>#<index>`）を記録します。ログを読まれても囮位置を一括列挙できません（対応関係は `assets.toml` 経由でのみ復元可能）。

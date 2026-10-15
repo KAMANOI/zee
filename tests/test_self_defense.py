@@ -100,6 +100,7 @@ def test_restore_of_other_asset_does_not_touch_recorded_cut(tmp_path, monkeypatc
 def test_emergency_all_interfaces_restore_reports_real_failure(tmp_path, monkeypatch, quiet):
     monkeypatch.setattr(restore_mod.sys, "platform", "linux")
     monkeypatch.setattr(restore_mod.shutil, "which", lambda name: f"/usr/sbin/{name}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, "operation not permitted"))
     log = CutStateLog(tmp_path / "cut_state.jsonl")
     with pytest.raises(ZeeError) as ei:
@@ -110,7 +111,7 @@ def test_emergency_all_interfaces_restore_reports_real_failure(tmp_path, monkeyp
 
 def test_emergency_all_interfaces_macos_reports_real_failure(monkeypatch):
     monkeypatch.setattr(restore_mod.shutil, "which", lambda name: f"/usr/sbin/{name}")
-    monkeypatch.setattr(restore_mod, "list_macos_services", lambda: ["Wi-Fi"])
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, "denied"))
     ok, _ = restore_mod._restore_macos_compat()
     assert ok is False
@@ -150,6 +151,124 @@ def test_cli_restore_all_interfaces_flag(tmp_path, monkeypatch):
     args = cli.build_parser().parse_args(["-c", str(cfg), "restore", "t-host", "--token", "x"])
     args.func(args)
     assert seen == {"all_interfaces": False}
+
+
+# ── independent check (ASTRA) findings, 2026-10-15 ────────────────────
+
+
+def test_emergency_macos_reenables_services_the_full_cut_disabled(monkeypatch):
+    out = "An asterisk (*) denotes that a network service is disabled.\n*Wi-Fi\n*Ethernet\n"
+    monkeypatch.setattr(full_mod.subprocess, "check_output", lambda *a, **k: out)
+    monkeypatch.setattr(restore_mod, "list_macos_services", full_mod.list_macos_services)
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda name: f"/usr/sbin/{name}")
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    ok, _ = restore_mod._restore_macos_compat()
+    assert ok is True
+    enabled = [c[2] for c in calls if c[0] == "networksetup"]
+    assert enabled == ["Wi-Fi", "Ethernet"]
+    assert full_mod.list_macos_services() == []  # cut still skips disabled ones
+
+
+def test_emergency_linux_removes_egress_rule_even_when_nmcli_succeeds(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    ok, _ = restore_mod._restore_linux_compat()
+    assert ok is True
+    assert ["nft", "delete", "table", "inet", "zee_egress"] in calls
+    assert ["iptables", "-X", "ZEE_EGRESS"] in calls
+
+
+def test_emergency_linux_does_not_hide_one_failed_firewall_removal(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(restore_mod, "_run",
+                        lambda cmd: (False, "Operation not permitted") if cmd[0] == "nft" else (True, ""))
+    ok, detail = restore_mod._restore_linux_compat()
+    assert ok is False and "nft:fail" in detail
+
+
+def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    def run(cmd):
+        if cmd[0] == "nft":
+            return False, "Error: Could not process rule: No such file or directory"
+        if cmd[0] == "iptables":
+            return False, "iptables: No chain/target/match by that name."
+        return True, ""
+    monkeypatch.setattr(restore_mod, "_run", run)
+    assert restore_mod._restore_linux_compat()[0] is True
+
+
+@pytest.mark.parametrize("content", ["[]\n", "null\n", b"\xff\xfe\n"])
+def test_emergency_restore_works_with_any_ledger_damage(tmp_path, monkeypatch, quiet, content):
+    p = tmp_path / "cut_state.jsonl"
+    (p.write_bytes if isinstance(content, bytes) else p.write_text)(content)
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on"))
+    assert restore_mod.restore("t-host", cut_state=CutStateLog(p), all_interfaces=True)[0] is True
+
+
+@pytest.mark.parametrize("content", ["[]\n", "null\n", b"\xff\xfe\n"])
+def test_normal_restore_refuses_any_ledger_damage(tmp_path, monkeypatch, quiet, content):
+    _no_compat(monkeypatch)
+    p = tmp_path / "cut_state.jsonl"
+    (p.write_bytes if isinstance(content, bytes) else p.write_text)(content)
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=CutStateLog(p))
+    assert ei.value.code == "Z605"
+
+
+def test_good_old_record_plus_damaged_line_refuses(tmp_path, monkeypatch, quiet):
+    _no_compat(monkeypatch)
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="t-host", method="full", platform="darwin", modified=["Wi-Fi"])
+    with log.path.open("a") as f:
+        f.write('{"type": "cut", "asset_id": "t-host"\n')
+    targeted: list = []
+    monkeypatch.setattr(restore_mod, "_restore_targeted", lambda r: targeted.append(r) or (True, ""))
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=log)
+    assert ei.value.code == "Z605" and targeted == []
+
+
+def test_cut_record_with_empty_modified_is_damage(tmp_path):
+    p = tmp_path / "cut_state.jsonl"
+    p.write_text('{"type":"cut","asset_id":"t-host","cut_at":"2026-10-15T00:00:00+00:00","modified":[]}\n')
+    rec, damaged = CutStateLog(p).unresolved_for("t-host")
+    assert rec is None and damaged is True
+
+
+def test_second_cut_does_not_hide_what_the_first_changed(tmp_path):
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="t-host", method="full", platform="darwin", modified=["Wi-Fi"])
+    log.record_cut(asset_id="t-host", method="full", platform="darwin", modified=["Ethernet", "Wi-Fi"])
+    rec, damaged = log.unresolved_for("t-host")
+    assert rec.modified == ("Wi-Fi", "Ethernet") and damaged is False
+    log.mark_resolved("t-host")
+    assert log.latest_unresolved_for("t-host") is None
+
+
+def test_iptables_partial_install_is_recorded(monkeypatch):
+    from zee.responder import cut_egress as egress_mod
+    monkeypatch.setattr(egress_mod.sys, "platform", "linux")
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda name: "/sbin/iptables" if name == "iptables" else None)
+    monkeypatch.setattr(egress_mod, "_run", lambda cmd: (cmd[1] != "-I", "boom"))
+    ok, _detail, modified = egress_mod._cut_egress_dispatch()
+    assert ok is False and modified == [full_mod.SENTINEL_LINUX_IPTABLES_EGRESS]
+
+
+@pytest.mark.parametrize("msg, expect_ok", [("pfctl: pf already enabled", True), ("permission denied", False)])
+def test_pf_enable_failure_is_a_failed_cut(monkeypatch, msg, expect_ok):
+    from zee.responder import cut_egress as egress_mod
+    import subprocess
+    monkeypatch.setattr(egress_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda name: "/sbin/pfctl")
+    monkeypatch.setattr(egress_mod.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", ""))
+    monkeypatch.setattr(egress_mod, "_run", lambda cmd: (False, msg))
+    ok, _detail, modified = egress_mod._cut_egress_dispatch()
+    assert ok is expect_ok and modified == [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]
 
 
 # ── cut: record what changed; empty is not success ────────────────────

@@ -92,10 +92,12 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
             ["iptables", "-A", "ZEE_EGRESS", "-j", "DROP"],
             ["iptables", "-I", "OUTPUT", "-j", "ZEE_EGRESS"],
         ]
-        for cmd in commands:
+        for i, cmd in enumerate(commands):
             ok, msg = _run(cmd)
             if not ok:
-                return False, f"{' '.join(cmd)}: {msg}", []
+                # Once the chain exists it must be recorded, or it is left
+                # behind and blocks the next `-N`.
+                return False, f"{' '.join(cmd)}: {msg}", [SENTINEL_LINUX_IPTABLES_EGRESS] if i else []
         return True, "iptables ZEE_EGRESS chain installed", [SENTINEL_LINUX_IPTABLES_EGRESS]
 
     return False, "no supported backend (need nft or iptables)", []
@@ -123,8 +125,11 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
         return False, f"pfctl failed: {e}", []
     if cp.returncode != 0:
         return False, (cp.stderr or cp.stdout).strip(), []
-    # Enable pf if it isn't already.
-    _run(["pfctl", "-e"])
+    # Enable pf if it isn't already. The anchor does nothing while pf is off,
+    # so a failure here is a failed cut (the anchor is still recorded).
+    ok, msg = _run(["pfctl", "-e"])
+    if not ok and "already enabled" not in msg:
+        return False, f"pfctl -e failed: {msg}", [SENTINEL_MACOS_PFCTL_EGRESS]
     return True, f"pfctl anchor {ZEE_RULE_TAG} loaded", [SENTINEL_MACOS_PFCTL_EGRESS]
 
 

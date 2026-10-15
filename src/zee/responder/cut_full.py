@@ -128,10 +128,12 @@ def _cut_full_macos() -> tuple[bool, str, list[str]]:
     return all_ok, "networksetup -setnetworkserviceenabled off: " + ", ".join(details), modified
 
 
-def list_macos_services() -> list[str]:
-    """Enumerate currently-enabled macOS network services. Used by both cut and restore.
+def list_macos_services(*, include_disabled: bool = False) -> list[str]:
+    """Enumerate macOS network services. Used by both cut and restore.
 
-    Disabled services (those marked with '*' by networksetup) are excluded.
+    Disabled services (marked with '*' by networksetup) are excluded unless
+    ``include_disabled`` — the emergency restore needs them, because a full
+    cut is exactly what disabled them.
     """
     try:
         out = subprocess.check_output(
@@ -142,7 +144,11 @@ def list_macos_services() -> list[str]:
     services: list[str] = []
     for line in out.splitlines()[1:]:  # skip header
         name = line.strip()
-        if name and not name.startswith("*"):  # '*' marks disabled services
+        if name.startswith("*"):  # '*' marks disabled services
+            if not include_disabled:
+                continue
+            name = name[1:].strip()
+        if name:
             services.append(name)
     return services
 

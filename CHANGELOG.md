@@ -16,16 +16,24 @@ Not in any tagged release yet.
   entry (the file is writable by the user Zee runs as) made restore fall
   back to enabling every interface / service and report success without
   checking the OS commands. Now restore refuses and re-enables nothing
-  (Z605). The broad restore is an explicit emergency path,
-  `zee restore <asset_id> --all-interfaces` (token still required), and
-  it fails (Z601) unless every step it ran succeeded. **Behaviour
+  (Z605) when there is no unresolved record for the asset or when any
+  ledger line is malformed. Cuts since the last restore are merged, so a
+  second cut no longer hides what the first one disabled. The broad
+  restore is an explicit emergency path,
+  `zee restore <asset_id> --all-interfaces` (token still required); it
+  does not read the ledger, restores interfaces and Zee's firewall rules
+  independently (Linux no longer stops after `nmcli`; macOS now
+  re-enables services the cut disabled), treats an already-absent Zee
+  rule as removed, and fails (Z601) unless every step succeeded. **Behaviour
   change:** deployments whose cuts predate the cut record, or whose
   record was cleared, need `--all-interfaces` once.
 - **A failed or empty cut is no longer reported as success.** The cut
   notification title says `Zee cut FAILED` when the cut failed (it said
   `applied`). `full` cut with no interface / service to disable returns
-  failure. A partial cut records the interfaces / rules it did change,
-  so restore can undo them.
+  failure, and so does a macOS egress cut whose `pfctl -e` fails (other
+  than "already enabled"). A partial cut records the interfaces / rules
+  it did change (full cut; Windows egress; iptables once the chain
+  exists), so restore can undo them.
 - **Cut boundary (`zee.responder.blocker`).** Every automatic cut is
   re-validated against a fixed three-field request (asset, op_class,
   confidence) right before the cut runs. Same rules as before; it does

@@ -124,8 +124,10 @@ honestly-published boundaries of what Zee is and is not:
   path, `assets.toml` and the cut ledger all run / live under the
   operator's user. An attacker with that user's shell can stop the
   watcher, edit the policy or delete the ledger. Deleting the ledger no
-  longer re-enables the network: `zee restore` refuses without a cut
-  record (Z605) and the broad restore needs `--all-interfaces`.
+  longer re-enables the network by itself: `zee restore` refuses
+  without a well-formed cut record (Z605) and the broad restore needs
+  `--all-interfaces`. The same attacker can, however, read the
+  restore token and run either restore themselves.
   Separating the cut path into its own user is designed
   ([docs/design/self-defense.md](./docs/design/self-defense.md)) but not
   applied.

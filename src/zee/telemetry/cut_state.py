@@ -12,11 +12,9 @@ The log is JSON Lines under the same state directory as
 completes; ``latest_unresolved_for(asset_id)`` walks the log and
 returns the most recent unresolved cut, or None.
 
-Compat mode: when the log file is missing or has no record for an
-asset_id (pre-v0.3 deployments), the recovery layer falls back to the
-v0.2 "enable everything" behaviour with a stderr warning. Once v0.3
-is in steady state the warning identifies stale operator state that
-needs cleanup.
+When the log is missing, damaged, or has no unresolved record for an
+asset_id, the recovery layer refuses the normal restore (Z605); only the
+explicit ``--all-interfaces`` emergency restore re-enables everything.
 """
 
 from __future__ import annotations
@@ -83,19 +81,29 @@ class CutStateLog:
         self._append(rec)
 
     def latest_unresolved_for(self, asset_id: str) -> Optional[CutRecord]:
-        """Return the most recent unresolved cut for ``asset_id``, or None.
+        """Return the unresolved cut for ``asset_id`` (see ``unresolved_for``)."""
+        return self.unresolved_for(asset_id)[0]
 
-        Walks the log in order. A ``cut`` record sets the candidate; a
-        later ``resolved`` for the same asset clears it. The final
-        non-None candidate at end-of-file is returned.
+    def unresolved_for(self, asset_id: str) -> tuple[Optional[CutRecord], bool]:
+        """Return (unresolved cut for ``asset_id`` or None, ledger_damaged).
+
+        Walks the log in order. ``cut`` records since the last ``resolved``
+        for the asset are merged: ``modified`` is the ordered union, so a
+        second (e.g. partial) cut does not hide what the first one changed;
+        ``cut_at`` / ``method`` / ``platform`` come from the latest cut.
+
+        ``ledger_damaged`` is True when the file is unreadable or ANY line
+        is not a well-formed record (any asset — a damaged line's asset is
+        unknowable). recovery refuses the normal restore in that case.
         """
         if not self.path.exists():
-            return None
+            return None, False
         try:
             content = self.path.read_text(encoding="utf-8")
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             logger.warning("cut_state read failed: %s", e)
-            return None
+            return None, True
+        damaged = False
         candidate: Optional[CutRecord] = None
         for line_no, raw_line in enumerate(content.splitlines(), start=1):
             line = raw_line.strip()
@@ -103,33 +111,43 @@ class CutStateLog:
                 continue
             try:
                 rec = json.loads(line)
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, RecursionError) as e:
                 logger.warning(
                     "cut_state %s:%d malformed line, skipping (%s)",
                     self.path, line_no, e,
                 )
+                damaged = True
                 continue
-            if rec.get("asset_id") != asset_id:
+            if not isinstance(rec, dict) or rec.get("type") not in ("cut", "resolved") \
+                    or not isinstance(rec.get("asset_id"), str):
+                damaged = True
                 continue
-            rec_type = rec.get("type")
-            if rec_type == "cut":
+            if rec["asset_id"] != asset_id:
+                continue
+            if rec["type"] == "cut":
                 try:
+                    modified = rec["modified"]
+                    if not isinstance(modified, list) or not modified or \
+                            not all(isinstance(m, str) and m for m in modified):
+                        raise ValueError("modified must be a non-empty list of names")
+                    prev = candidate.modified if candidate else ()
                     candidate = CutRecord(
                         asset_id=asset_id,
                         cut_at=datetime.fromisoformat(rec["cut_at"]),
                         method=rec.get("method", ""),
                         platform=rec.get("platform", ""),
-                        modified=tuple(rec.get("modified", [])),
+                        modified=prev + tuple(m for m in modified if m not in prev),
                     )
                 except (KeyError, ValueError, TypeError) as e:
                     logger.warning(
                         "cut_state %s:%d malformed cut record (%s)",
                         self.path, line_no, e,
                     )
+                    damaged = True
                     continue
-            elif rec_type == "resolved":
+            else:
                 candidate = None
-        return candidate
+        return candidate, damaged
 
     def _append(self, rec: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
