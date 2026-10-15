@@ -787,7 +787,9 @@ def test_check_runtime_refuses_code_others_can_write():
     pkg.mkdir(mode=0o755)
     (pkg / "a.py").write_text("")
     os.chmod(pkg / "a.py", 0o644)
-    t = {"python": root / "bin" / "python3", "prefix": root, "zee package": pkg}
+    (root / "site-packages").mkdir(mode=0o755)
+    t = {"python": (root / "bin" / "python3", "tree"), "site": (root / "site-packages", "top"),
+         "zee package": (pkg, "tree")}
     check_runtime(t)
     os.chmod(pkg / "a.py", 0o666)  # a module anyone can rewrite
     with pytest.raises(ValueError, match="zee package"):
@@ -796,18 +798,11 @@ def test_check_runtime_refuses_code_others_can_write():
     os.chmod(exe, 0o775)  # the interpreter itself group-writable
     with pytest.raises(ValueError, match="python"):
         check_runtime(t)
-
-
-def test_check_runtime_refuses_this_dev_venv():
-    """The real default targets: a dev checkout is not root-controlled, so a daemon refuses it."""
-    from zee.privsep.daemon import check_runtime
-    if os.geteuid() == 0:
-        pytest.skip("as root the tree may legitimately pass")
-    try:
-        check_runtime()
-    except ValueError:
-        return
-    pytest.skip("this tree happens to be owned and unwritable (e.g. CI copy)")
+    os.chmod(exe, 0o755)
+    (root / "site-packages" / "evil.pth").write_text("")
+    os.chmod(root / "site-packages" / "evil.pth", 0o666)  # a .pth anyone can rewrite runs at start-up
+    with pytest.raises(ValueError, match="site"):
+        check_runtime(t)
 
 
 def test_daemon_start_refusal_is_a_zee_error(tmp_path, capsys):
@@ -835,3 +830,35 @@ def test_heartbeat_names_a_refusal_by_its_code():
     cli._start_privsep_heartbeat(Path("/x"), call, None, every=0, notify=lambda t, b: notes.append(t))
     assert done.wait(5)
     assert notes == ["Zee cut daemon REFUSED this watch (Z712)"]
+
+
+# ---- Codex 10
+def test_state_dir_must_be_root_controlled(tmp_path):
+    from zee.privsep.daemon import CutDaemon
+    st = tmp_path / "cutd"
+    st.mkdir(mode=0o700)
+    (st / "assets.toml").write_text(CFG)
+    os.chmod(st / "assets.toml", 0o600)
+    CutDaemon(st, {WATCH}, verifier=HmacVerifier())
+    keys = st / "admin_keys.json"
+    if not keys.exists():
+        keys.write_text("{}")
+    os.chmod(keys, 0o666)  # someone else could plant an approver key
+    with pytest.raises(ValueError, match="admin_keys.json"):
+        CutDaemon(st, {WATCH}, verifier=HmacVerifier())
+    os.chmod(st / "admin_keys.json", 0o600)
+    os.chmod(st, 0o755)
+    with pytest.raises(ValueError, match="0700"):
+        CutDaemon(st, {WATCH}, verifier=HmacVerifier())
+    os.chmod(st, 0o700)
+    (st / "link").symlink_to("/etc/hosts")
+    with pytest.raises(ValueError, match="link"):
+        CutDaemon(st, {WATCH}, verifier=HmacVerifier())
+
+
+def test_state_dir_under_a_replaceable_parent_is_refused():
+    from zee.privsep.daemon import CutDaemon
+    parent = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(parent, 0o777)  # anyone could swap "cutd" for a directory with their own key
+    with pytest.raises(ValueError, match="replaceable"):
+        CutDaemon(parent / "cutd", {WATCH}, verifier=HmacVerifier())

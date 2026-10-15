@@ -161,8 +161,7 @@ class CutDaemon:
                  verifier: Optional[Verifier] = None, tamper_grace: float = 300,
                  clock: Callable[[], float] = time.time,
                  cut_fns: Optional[dict[str, Callable]] = None, restore_fn: Callable = restore) -> None:
-        self.dir = Path(state_dir)
-        permission.private_directory(self.dir)
+        self.dir = check_state_dir(Path(state_dir))  # before reading keys / config / ledger
         self.allow = set(allow_uids)
         self.watch_config = watch_config
         self.grace, self.clock = tamper_grace, clock
@@ -560,36 +559,82 @@ def _resolve_checked(d: Path) -> Path:
     return cur
 
 
-def check_runtime(targets: Optional[dict[str, Path]] = None) -> None:
+def _runtime_targets() -> dict[str, tuple[Path, str]]:
+    """What a root daemon actually executes: (path, depth) with depth "tree" (every file),
+    "top" (the directory and its entries: site-packages, where .pth files run at start-up)."""
+    import site
+    import sysconfig
+    t = {"python": (Path(sys.executable), "tree"),
+         "zee package": (Path(__file__).resolve().parent.parent, "tree")}
+    for k in ("stdlib", "platstdlib"):
+        t[k] = (Path(sysconfig.get_paths()[k]), "tree")
+    for n, sp in enumerate(site.getsitepackages()):
+        if os.path.isdir(sp):
+            t[f"site-packages {n}"] = (Path(sp), "top")
+    return t
+
+
+_THIRD_PARTY = {"site-packages", "dist-packages"}  # checked at the top level as their own targets
+
+
+def check_runtime(targets: Optional[dict[str, tuple[Path, str]]] = None) -> None:
     """Refuse to run as root from code that anyone but root could change: the Python
-    executable, its prefix (stdlib) and the zee package, each resolved through
-    directories and links nobody else can replace, owned by us, not group/other-writable.
+    executable, the standard library, the site-packages directories (top level: .pth files
+    run at start-up) and the zee package. Each is reached through directories and links
+    nobody else can replace, owned by us, writable by no one else (no group, gid 0 included).
     (macOS /usr/bin/python3 is 3.9; a Homebrew Python belongs to the user who installed it.)"""
     me = os.geteuid()
-    targets = targets or {"python": Path(sys.executable), "prefix": Path(sys.prefix), "base prefix": Path(sys.base_prefix),
-               "zee package": Path(__file__).resolve().parent.parent}
-    for what, t in targets.items():
+    for what, (t, depth) in (targets or _runtime_targets()).items():
         try:
             real = _resolve_checked(t.parent) / t.name
             st = os.lstat(real)
             while stat.S_ISLNK(st.st_mode):  # e.g. bin/python3 -> python3.12, in a checked directory
                 if st.st_uid not in (0, me):
                     raise ValueError(f"link not owned by root: {real}")
-                real = _resolve_checked((real.parent / os.readlink(real)).parent) / Path(os.readlink(real)).name
+                link = Path(os.readlink(real))
+                real = _resolve_checked((real.parent / link).parent) / link.name
                 st = os.lstat(real)
         except (OSError, ValueError) as e:
             raise ValueError(f"{what} ({t}) is not root-controlled: {e}") from e
         if st.st_uid != me or _replaceable_by_others(st, sticky_ok=False):
             raise ValueError(f"{what} ({real}) must be owned by uid {me} and writable by no one else")
-        if stat.S_ISDIR(st.st_mode):  # the package / prefix contents too
-            for root, dirs, files in os.walk(real):
-                for n in dirs + files:
-                    sub = os.lstat(os.path.join(root, n))
-                    if sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
-                        raise ValueError(f"{what}: {os.path.join(root, n)} must be owned by uid {me} "
-                                         "and writable by no one else")
-                if what != "zee package":
-                    break  # prefix: top level only (site-packages trees can be large)
+        if not stat.S_ISDIR(st.st_mode):
+            continue
+        for root, dirs, files in os.walk(real):
+            if depth == "tree":
+                dirs[:] = [d for d in dirs if d not in _THIRD_PARTY]
+            for n in dirs + files:
+                sub = os.lstat(os.path.join(root, n))
+                if sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
+                    raise ValueError(f"{what}: {os.path.join(root, n)} must be owned by uid {me} "
+                                     "and writable by no one else")
+            if depth == "top":
+                break
+
+
+def check_state_dir(d: Path) -> Path:
+    """The state directory holds the approver key registry: if anyone but root could put a
+    file there (or swap the directory), they could register their own key. Reached through
+    nothing others can replace; ours, 0700; every entry ours, a regular file or directory
+    (no links), writable by no one else. Created 0700 when missing. Returns the checked path."""
+    d = Path(os.path.abspath(d))
+    if os.path.islink(d):
+        raise ValueError(f"state directory is a symlink: {d}")
+    parent = _resolve_checked(d.parent)
+    real = parent / d.name
+    if not os.path.lexists(real):
+        real.mkdir(mode=0o700)
+    me = os.geteuid()
+    st = os.lstat(real)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != me or stat.S_IMODE(st.st_mode) & 0o077:
+        raise ValueError(f"state directory must be a directory owned by uid {me}, mode 0700: {real}")
+    for root, dirs, files in os.walk(real):
+        for n in dirs + files:
+            sub = os.lstat(os.path.join(root, n))
+            if stat.S_ISLNK(sub.st_mode) or sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
+                raise ValueError(f"state entry must be ours, not a link, writable by no one else: "
+                                 f"{os.path.join(root, n)}")
+    return real
 
 
 def check_socket_dir(d: Path) -> Path:

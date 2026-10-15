@@ -31,6 +31,17 @@ cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3
     # 以後 <root 所有の python3> は /Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12
     ```
 
+### 有効にする前の点検（Python の外の道具で）
+
+遮断部は起動のたびに Python・標準ライブラリ・site-packages・zee のコード・状態ディレクトリの所有者と権限を確かめ、
+root 以外が書き換えられる配置なら起動を拒否する（Z721）。ただしこの確認は Python が起動して zee を読み込んだ**後**に
+走るので、すでに書き換えられた Python・zee が相手では意味がない。だから**有効にする前に一度**、root 所有でない、
+またはグループ／他から書けるものが1つも無いことを、Python 以外の道具で確かめる（何か表示されたら直してから進む）：
+
+```sh
+sudo find <python の prefix> <zee の src> <状態ディレクトリ> \( ! -user root -o -perm -g+w -o -perm -o+w \) -print
+```
+
 ## 0. 先に用意するもの
 
 - 承認端末の P-256 鍵。試作では openssl で作った鍵（`openssl ecparam -name prime256v1 -genkey -noout -out k.pem`、

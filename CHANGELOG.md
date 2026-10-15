@@ -38,7 +38,13 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   any directory or symlink on the way to it (resolved one component at a
   time, every link hop included) could be replaced by anyone but root;
   no group may write any of them, gid 0 included. It then binds the checked path. The
-  macOS socket is `/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775). An
+  macOS socket is `/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775).
+  It also refuses to start (Z721) unless the Python executable, the standard
+  library, the site-packages directories (top level) and the zee package are
+  root-owned and writable by no one else, and unless the state directory
+  (approver key registry included) is root-owned 0700 with no links and no
+  entry anyone else can write. These checks run after Python has started:
+  the runbook adds a `find` check before enabling. An
   approved `stop` completes even if the requester hangs up. The admin CLI
   reports Z710 when nothing was sent and Z720 (result unknown) when a
   request was sent but no answer came back.
