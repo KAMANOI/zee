@@ -48,8 +48,9 @@ update.** Up to v0.13.0 those two paths did not stop outbound IPv6.
   strerror of the failed IPv6 socket) as no IPv6 chain, so nft and full
   restores do not turn unverified (Z606) on such hosts. Both need two
   independent signs: the IPv6 socket fails with EAFNOSUPPORT and the
-  kernel's records say IPv6 is off (`/sys/module/ipv6/parameters/disable`
-  = 1, or no `/proc/net/if_inet6` and no ipv6 module); a process merely
+  kernel's `/sys/module/ipv6/parameters/disable` reads 1 (unreadable or
+  missing = cannot tell; a kernel built without IPv6 is treated the same
+  way, i.e. FAILED / Z606); a process merely
   denied AF_INET6 (seccomp, systemd `RestrictAddressFamilies`) gets FAILED
   / Z606 instead. Not measured on a real host.
 - **VPNs and overlays on private / ULA addresses** (Tailscale

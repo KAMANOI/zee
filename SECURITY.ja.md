@@ -154,8 +154,8 @@ v0.3 で解消済みです。以下は、現時点の Zee が「できること�
   書きます（「IPv6 is disabled in the kernel」）。復旧は ip6tables の「Address family not
   supported by protocol」という応答を「IPv6 のチェーンは無い」と扱います。どちらも
   独立した2つの根拠を要求します：IPv6 のソケットが開けない（EAFNOSUPPORT）**かつ**
-  カーネル自身の記録が IPv6 無効を示す（`/sys/module/ipv6/parameters/disable` が 1、
-  または ipv6 モジュールが無く `/proc/net/if_inet6` も無い）。IPv6 のソケットだけを
+  カーネル自身の設定値が IPv6 無効を示す（`/sys/module/ipv6/parameters/disable` が 1。
+  読めない・無い時は「確かめられない」扱い）。IPv6 のソケットだけを
   禁じられたプロセス（systemd の `RestrictAddressFamilies` など）は同じエラーを受けますが、
   端末の他の通信は IPv6 で出られるため、その場合の遮断は FAILED、復旧は未確認（Z606）です。
 - **macOS・Windows の外向き遮断が止めるのは新しい接続です。遮断の前から開いていた

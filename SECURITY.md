@@ -178,8 +178,8 @@ honestly-published boundaries of what Zee is and is not:
   kernel"), and restore treats ip6tables' "Address family not supported
   by protocol" answer as no IPv6 chain. Both require two independent
   signs: an IPv6 socket cannot be opened (EAFNOSUPPORT) **and** the
-  kernel's own records say IPv6 is off (`/sys/module/ipv6/parameters/disable`
-  is 1, or no `/proc/net/if_inet6` with no ipv6 module). A process that is
+  kernel's own parameter says IPv6 is off (`/sys/module/ipv6/parameters/disable`
+  reads 1; unreadable or missing counts as "cannot tell"). A process that is
   merely denied IPv6 sockets (e.g. systemd `RestrictAddressFamilies`)
   gets the same socket error while IPv6 works for the rest of the host;
   there the cut is FAILED and restore is unverified (Z606).

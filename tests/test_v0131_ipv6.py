@@ -277,15 +277,15 @@ class _Sock:
         pass
 
 
-@pytest.mark.parametrize("sock_err, files, expect", [
-    (None, {}, False),                                            # IPv6 socket opens
-    ("EACCES", {}, False),                                        # other error: cannot tell
-    ("EAFNOSUPPORT", {"disable": "1"}, True),                     # ipv6.disable=1
-    ("EAFNOSUPPORT", {"disable": "0", "if_inet6": True}, False),  # seccomp-only (RestrictAddressFamilies)
-    ("EAFNOSUPPORT", {"if_inet6": True, "sysmod": True}, False),
-    ("EAFNOSUPPORT", {}, True),                                   # built without IPv6
+@pytest.mark.parametrize("sock_err, disable, expect", [
+    (None, "1", False),                 # IPv6 socket opens
+    ("EACCES", "1", False),             # other error: cannot tell
+    ("EAFNOSUPPORT", "1", True),        # ipv6.disable=1
+    ("EAFNOSUPPORT", "0", False),       # seccomp-only (RestrictAddressFamilies)
+    ("EAFNOSUPPORT", None, False),      # no parameter file: cannot tell
+    ("EAFNOSUPPORT", PermissionError, False),  # Codex round 7: unreadable is not "absent"
 ])
-def test_kernel_ipv6_absent_needs_two_independent_signs(monkeypatch, sock_err, files, expect):
+def test_kernel_ipv6_absent_needs_two_independent_signs(monkeypatch, sock_err, disable, expect):
     import builtins
     import errno as errno_mod
     import io
@@ -295,14 +295,13 @@ def test_kernel_ipv6_absent_needs_two_independent_signs(monkeypatch, sock_err, f
 
     def fake_open(path, *a, **k):
         if path == "/sys/module/ipv6/parameters/disable":
-            if "disable" not in files:
+            if disable is None:
                 raise FileNotFoundError(path)
-            return io.StringIO(files["disable"] + "\n")
+            if disable is PermissionError:
+                raise PermissionError(path)
+            return io.StringIO(disable + "\n")
         return real_open(path, *a, **k)
     monkeypatch.setattr(builtins, "open", fake_open)
-    exists = {"/proc/net/dev": True, "/proc/net/if_inet6": files.get("if_inet6", False),
-              "/sys/module/ipv6": files.get("sysmod", "disable" in files)}
-    monkeypatch.setattr(full_mod.os.path, "exists", lambda p: exists.get(p, False))
     assert full_mod.kernel_ipv6_absent() is expect
 
 

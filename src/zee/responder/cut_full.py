@@ -62,15 +62,14 @@ def sbin_which(name: str) -> Optional[str]:
 
 
 def kernel_ipv6_absent() -> bool:
-    """True only when the HOST kernel has no IPv6 (ipv6.disable=1, or built
-    without it). Two independent signs are required: this process cannot
-    open an IPv6 socket (EAFNOSUPPORT), and the kernel's own records say IPv6
-    is off. A process that is only forbidden AF_INET6 (seccomp, e.g.
+    """True only when the HOST kernel has IPv6 disabled (ipv6.disable=1).
+    Two independent signs are required: this process cannot open an IPv6
+    socket (EAFNOSUPPORT), and the kernel's ipv6 `disable` parameter reads
+    1. A process that is only forbidden AF_INET6 (seccomp, e.g.
     systemd RestrictAddressFamilies) gets the same EAFNOSUPPORT while IPv6
     works for everyone else, so the socket alone is never enough.
     Linux net/ipv6/af_inet6.c inet6_init(): with disable_ipv6_mod it returns
-    before sock_register(&inet6_family_ops) and if6_proc_init(), so
-    /proc/net/if_inet6 is absent; the `disable` parameter is 0444."""
+    before sock_register(&inet6_family_ops); the `disable` parameter is 0444."""
     try:
         socket.socket(socket.AF_INET6, socket.SOCK_DGRAM).close()
         return False
@@ -79,15 +78,14 @@ def kernel_ipv6_absent() -> bool:
             return False
     except AttributeError:  # Python built without IPv6: cannot tell
         return False
+    # Positive evidence only: the parameter must be readable and say 1. A
+    # kernel built without IPv6, or a /sys this process cannot read, is
+    # "cannot tell" (never inferred from a path that does not show up).
     try:
         with open("/sys/module/ipv6/parameters/disable", encoding="ascii") as f:
-            if f.read().strip() == "1":
-                return True
+            return f.read().strip() == "1"
     except OSError:
-        pass
-    # Built without IPv6: /proc/net readable but no if_inet6 (and no ipv6 module).
-    return (os.path.exists("/proc/net/dev") and not os.path.exists("/proc/net/if_inet6")
-            and not os.path.exists("/sys/module/ipv6"))
+        return False
 
 
 def _abs(cmd: list[str]) -> list[str]:
