@@ -39,8 +39,23 @@ root 以外が書き換えられる配置なら起動を拒否する（Z721）�
 またはグループ／他から書けるものが1つも無いことを、Python 以外の道具で確かめる（何か表示されたら直してから進む）：
 
 ```sh
-sudo find <python の prefix> <zee の src> <状態ディレクトリ> \( ! -user root -o -perm -g+w -o -perm -o+w \) -print
+sudo find <python の prefix> <zee の src> <状態ディレクトリ> \( ! -user root -o \( ! -type l \( -perm -g+w -o -perm -o+w \) \) \) -print
+# シンボリックリンクは常に lrwxrwxrwx と表示されるので権限では見ない（所有者だけ見る）
 ```
+
+`find` は指定したディレクトリの中しか見ない。**そこへ至る上のディレクトリも**、root 所有で、グループ／他から書けない
+（`/tmp` のような sticky は可）ことを、書いたままの経路と実体の経路の両方で確かめる。途中にシンボリックリンクがあれば、
+そのリンクが root 所有かも見る（下は対象ごとに上へたどって表示するだけ。1行ずつ目で確かめる）：
+
+```sh
+for t in <python の prefix> <zee の src> <状態ディレクトリ> <ソケットのディレクトリ>; do
+  for p in "$t" "$(cd "$t" && pwd -P)"; do
+    while [ "$p" != "/" ]; do ls -ld "$p"; p=$(dirname "$p"); done; ls -ld /
+  done
+done
+```
+
+Linux の置き場所は `/usr/local/lib/zee` を使う（GitHub の Ubuntu ランナーでは `/opt` が root 専用でなく、遮断部が起動を拒否した）。
 
 ## 0. 先に用意するもの
 
@@ -80,13 +95,13 @@ cd / && sudo env PYTHONPATH="$Z/src" <root 所有の python3> -P -s -m zee privs
 
 ```sh
 cd /
-sudo mkdir -p /opt/zee && sudo cp -R /絶対パス/<リポジトリ>/src /opt/zee/ && sudo chown -R root:root /opt/zee && sudo chmod -R go-w /opt/zee
+sudo mkdir -p /usr/local/lib/zee && sudo cp -R /絶対パス/<リポジトリ>/src /usr/local/lib/zee/ && sudo chown -R root:root /usr/local/lib/zee && sudo chmod -R go-w /usr/local/lib/zee
 sudo install -d -m 700 /var/lib/zee-cutd
 sudo install -m 600 <業務ユーザーの assets.toml の絶対パス> /var/lib/zee-cutd/assets.toml
 # examples/privsep/zee-cutd.service の WATCH_UID / WATCH_GROUP（専用グループ）/ WATCH_CONFIG を書き換えて：
 sudo install -m 644 /絶対パス/zee-cutd.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now zee-cutd
-cd / && sudo env PYTHONPATH=/opt/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
+cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
   --key-id phone --public-key /絶対パス/pub.pem
 ```
 

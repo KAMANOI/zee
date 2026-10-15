@@ -600,16 +600,47 @@ def check_runtime(targets: Optional[dict[str, tuple[Path, str]]] = None) -> None
             raise ValueError(f"{what} ({real}) must be owned by uid {me} and writable by no one else")
         if not stat.S_ISDIR(st.st_mode):
             continue
-        for root, dirs, files in os.walk(real):
-            if depth == "tree":
-                dirs[:] = [d for d in dirs if d not in _THIRD_PARTY]
-            for n in dirs + files:
-                sub = os.lstat(os.path.join(root, n))
-                if sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
-                    raise ValueError(f"{what}: {os.path.join(root, n)} must be owned by uid {me} "
+        _check_tree(what, real, depth, me, set())
+
+
+def _check_tree(what: str, top: Path, depth: str, me: int, seen: set) -> None:
+    """Every entry under ``top``: ours and writable by no one else. A symlink is judged by its
+    owner (its mode means nothing) and by its target: the path to the target must not be
+    replaceable, the target must pass the same test, and a linked directory is walked too."""
+    if str(top) in seen:  # link cycles
+        return
+    seen.add(str(top))
+    for root, dirs, files in os.walk(top):
+        if depth == "tree":
+            dirs[:] = [d for d in dirs if d not in _THIRD_PARTY]
+        for n in dirs + files:
+            path = os.path.join(root, n)
+            sub = os.lstat(path)
+            if stat.S_ISLNK(sub.st_mode):
+                target = Path(os.path.normpath(os.path.join(root, os.readlink(path))))
+                try:
+                    if sub.st_uid not in (0, me):
+                        raise ValueError("link not owned by root")
+                    resolved = _resolve_checked(target.parent) / target.name
+                    tst = os.lstat(resolved)
+                    while stat.S_ISLNK(tst.st_mode):
+                        if tst.st_uid not in (0, me):
+                            raise ValueError("link not owned by root")
+                        nxt = Path(os.path.normpath(os.path.join(resolved.parent, os.readlink(resolved))))
+                        resolved = _resolve_checked(nxt.parent) / nxt.name
+                        tst = os.lstat(resolved)
+                except (OSError, ValueError) as e:
+                    raise ValueError(f"{what}: link {path} -> {target} is not root-controlled: {e}") from e
+                if tst.st_uid != me or _replaceable_by_others(tst, sticky_ok=False):
+                    raise ValueError(f"{what}: {path} -> {resolved} must be owned by uid {me} "
                                      "and writable by no one else")
-            if depth == "top":
-                break
+                if stat.S_ISDIR(tst.st_mode) and depth == "tree":
+                    _check_tree(what, resolved, depth, me, seen)
+                continue
+            if sub.st_uid != me or _replaceable_by_others(sub, sticky_ok=False):
+                raise ValueError(f"{what}: {path} must be owned by uid {me} and writable by no one else")
+        if depth == "top":
+            break
 
 
 def check_state_dir(d: Path) -> Path:

@@ -38,8 +38,10 @@ jobs:
           /usr/bin/python3 --version
           sudo useradd -m -s /bin/bash zeework
           sudo useradd -m -s /bin/bash -G zeework zeeother   # can open the socket, uid not allowed
-          sudo mkdir -p /opt/zee && sudo cp -R src /opt/zee/
-          sudo chown -R root:root /opt/zee && sudo chmod -R go-w /opt/zee
+          sudo mkdir -p /usr/local/lib/zee && sudo cp -R src /usr/local/lib/zee/
+          sudo chown -R root:root /usr/local/lib/zee && sudo chmod -R go-w /usr/local/lib/zee
+          # /opt on the runner image is not root-only (the daemon refused to start there, Z721)
+          ls -ld / /usr /usr/local /usr/local/lib /usr/local/lib/zee /opt
       - name: Namespace with a non-private test server on the host side
         run: |
           set -eux
@@ -90,12 +92,12 @@ jobs:
           install -d -m 700 "$RUNNER_TEMP/approver"
           openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
           openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
-          cd / && sudo env PYTHONPATH=/opt/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
+          cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
             --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /run/zee/cutd.sock
       - name: Checks
         env:
           PY: /usr/bin/python3
-          ZEE_SRC: /opt/zee/src
+          ZEE_SRC: /usr/local/lib/zee/src
           SOCK: /run/zee/cutd.sock
           STATE: /var/lib/zee-cutd
           WATCH_USER: zeework

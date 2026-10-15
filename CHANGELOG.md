@@ -44,7 +44,9 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   root-owned and writable by no one else, and unless the state directory
   (approver key registry included) is root-owned 0700 with no links and no
   entry anyone else can write. These checks run after Python has started:
-  the runbook adds a `find` check before enabling. An
+  the runbook adds a check of the trees and of every directory above them
+  before enabling. Symlinks inside these trees are judged by their owner and
+  their target (linked directories are walked too). An
   approved `stop` completes even if the requester hangs up. The admin CLI
   reports Z710 when nothing was sent and Z720 (result unknown) when a
   request was sent but no answer came back.

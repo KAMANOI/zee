@@ -63,7 +63,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 | 対象 | 置き場所（Linux／macOS） | 所有者・権限 | 業務ユーザーから |
 |---|---|---|---|
-| 遮断部のコード | `/opt/zee/src`／`/Library/Application Support/Zee/src` | root、ディレクトリ 755・ファイル 644 | 読めるが書けない |
+| 遮断部のコード | `/usr/local/lib/zee/src`／`/Library/Application Support/Zee/src` | root、ディレクトリ 755・ファイル 644 | 読めるが書けない |
 | Python 本体 | Linux `/usr/bin/python3`／macOS は python.org の 3.11+ を入れて `chown -R root:wheel`・`chmod -R go-w` したもの（macOS の `/usr/bin/python3` は 3.9 で動かず、Homebrew の Python は利用者の所有） | **root 所有であること**。遮断部は起動時に、Python の実体・`sys.prefix`・zee のコード一式が root 所有でグループ／他から書けず、そこへの経路も差し替えられないことを確かめ、満たさなければ起動を拒否する（Z721）。（業務ユーザーが書ける Python を root で動かすと、その人に root を渡す）。**root で動かす時は必ず `-P -s`**（作業ディレクトリとユーザーの site-packages を import しない）で、`cd /` から、ファイルは絶対パスで。付けないと、業務ユーザーが書ける場所に置いた `zee/__main__.py` が root で動く（4ペルソナ・レビューで再現、CI で毎回確認）。常駐の定義（plist・unit）にも `-P -s` を入れた | 書けない |
 | 状態ディレクトリ | `/var/lib/zee-cutd`／`/Library/Application Support/Zee/cutd` | root、700 | 一覧も読めない |
 | 　承認済みの assets.toml | 同上 `assets.toml` | root、600 | 読めない・書けない |

@@ -75,6 +75,18 @@ def env(tmp_path):
     return d, cuts, restores, clock
 
 
+def _wait_listening(sock: Path) -> None:
+    """The socket file appears at bind(); connect() works only after listen()."""
+    for _ in range(250):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+                c.connect(str(sock))
+            return
+        except OSError:
+            time.sleep(0.02)
+    raise AssertionError(f"not listening: {sock}")
+
+
 def req(d, uid=WATCH, **r):
     return d.handle_line(json.dumps(r).encode(), uid)
 
@@ -479,10 +491,7 @@ def test_serve_end_to_end(tmp_path):
     sock = sockdir / "s"
     t = threading.Thread(target=serve, args=(d, sock), kwargs={"check_every": 0.05}, daemon=True)
     t.start()
-    for _ in range(100):
-        if sock.exists():
-            break
-        time.sleep(0.02)
+    _wait_listening(sock)
     assert oct(sock.stat().st_mode & 0o777) == "0o600"
     me = os.geteuid()
     assert call(sock, {"op": "status"}, server_uid=me)["ok"]
@@ -533,10 +542,8 @@ def test_slow_and_excess_connections_cannot_block_the_daemon(tmp_path, monkeypat
     d = dm.CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
     sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
     threading.Thread(target=dm.serve, args=(d, sock), kwargs={"check_every": 60}, daemon=True).start()
-    for _ in range(100):
-        if sock.exists():
-            break
-        time.sleep(0.02)
+    _wait_listening(sock)
+    time.sleep(0.3)  # let the probe connection release its slot
     slow = []
     for _ in range(2):  # fill this uid's pool with clients that trickle bytes
         c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -702,10 +709,7 @@ def test_approved_stop_completes_even_if_the_requester_hangs_up(tmp_path):
     sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
     t = threading.Thread(target=serve, args=(d, sock), kwargs={"check_every": 60}, daemon=True)
     t.start()
-    for _ in range(100):
-        if sock.exists():
-            break
-        time.sleep(0.02)
+    _wait_listening(sock)
     ch = d.handle_line(json.dumps({"op": "challenge", "admin_op": "stop", "args": {}}).encode(), os.geteuid())
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
     c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -862,3 +866,28 @@ def test_state_dir_under_a_replaceable_parent_is_refused():
     os.chmod(parent, 0o777)  # anyone could swap "cutd" for a directory with their own key
     with pytest.raises(ValueError, match="replaceable"):
         CutDaemon(parent / "cutd", {WATCH}, verifier=HmacVerifier())
+
+
+# ---- Codex 11
+def test_check_runtime_follows_links_to_their_targets():
+    from zee.privsep.daemon import check_runtime
+    root = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    pkg = root / "zee"
+    pkg.mkdir(mode=0o755)
+    open_dir = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(open_dir, 0o777)
+    (open_dir / "mod.py").write_text("")
+    os.chmod(open_dir / "mod.py", 0o644)
+    (pkg / "mod.py").symlink_to(open_dir / "mod.py")  # target sits where anyone can swap it
+    with pytest.raises(ValueError, match="mod.py"):
+        check_runtime({"zee package": (pkg, "tree")})
+    (pkg / "mod.py").unlink()
+    safe = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    (safe / "inner").mkdir(mode=0o755)
+    (safe / "inner" / "x.py").write_text("")
+    os.chmod(safe / "inner" / "x.py", 0o666)  # inside a linked directory
+    (pkg / "sub").symlink_to(safe / "inner")
+    with pytest.raises(ValueError, match="x.py"):
+        check_runtime({"zee package": (pkg, "tree")})
+    os.chmod(safe / "inner" / "x.py", 0o644)
+    check_runtime({"zee package": (pkg, "tree")})  # a safe link is fine whatever its own mode
