@@ -52,6 +52,8 @@ TAMPER_ASSET = "zee-tamper"  # ledger id of a cut made by the tamper response
 MAX_LINE = 16 * 1024
 MAX_CONFIG = 256 * 1024
 MAX_PENDING = 16
+CONN_SLOTS = 16  # concurrent connections per pool (allowed uids / everyone else)
+READ_DEADLINE = 5.0  # seconds for the whole request line
 _ASSET_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
 # Bound fields: filled in by the daemon when it issues the request (never by the
 # requester) and re-checked right before applying, so an old, unused signature can't
@@ -462,6 +464,25 @@ class CutDaemon:
             self.engine._log("tamper_cut", ok=ok, method=action, detail=detail[:500])
 
 
+def _read_line(sock: socket.socket) -> Optional[bytes]:
+    """One request line within an overall deadline (a trickling client can't hold a slot)."""
+    end, buf = time.monotonic() + READ_DEADLINE, b""
+    while b"\n" not in buf and len(buf) <= MAX_LINE:
+        left = end - time.monotonic()
+        if left <= 0:
+            return None
+        sock.settimeout(left)
+        try:
+            chunk = sock.recv(4096)
+        except OSError:  # includes the timeout
+            return None
+        if not chunk:
+            break
+        buf += chunk
+    line, nl, _ = buf.partition(b"\n")
+    return line + nl if nl and len(line) < MAX_LINE else None
+
+
 def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
           check_every: float = 30) -> int:
     """Bind, then serve until a signed ``stop``. Exit 0 so `KeepAlive.SuccessfulExit=false`
@@ -477,26 +498,52 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
             raise ValueError(f"not a socket: {socket_path}")
         socket_path.unlink()  # our own stale socket from a previous run
 
-    class Handler(socketserver.StreamRequestHandler):
-        timeout = 5  # a slow client must not hold a thread forever
+    # Bounded concurrency: allowed uids (the watch, root) and everyone else get
+    # separate pools, so other socket users can't crowd out a cut. Over the cap a
+    # connection is closed before any thread starts.
+    pools = {True: threading.BoundedSemaphore(CONN_SLOTS), False: threading.BoundedSemaphore(CONN_SLOTS)}
 
+    class Handler(socketserver.BaseRequestHandler):
         def handle(self) -> None:
-            try:
-                uid = peer_uid(self.request)
-            except OSError:
-                self.wfile.write(b'{"ok": false, "error": "peer_unknown"}\n')
+            uid = self.server.peer_of[id(self.request)][0]
+            if uid is None:
+                self.request.sendall(b'{"ok": false, "error": "peer_unknown"}\n')
                 return
-            line = self.rfile.readline(MAX_LINE + 1)
-            if len(line) > MAX_LINE or not line.endswith(b"\n"):
+            line = _read_line(self.request)
+            if line is None:
                 reply = {"ok": False, "error": "malformed"}
             else:
                 reply = daemon.handle_line(line, uid)
-            self.wfile.write(json.dumps(reply).encode() + b"\n")
+            self.request.sendall(json.dumps(reply).encode() + b"\n")
             if daemon.stopping:
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     class Server(socketserver.ThreadingUnixStreamServer):
         daemon_threads = True
+        peer_of: dict = {}
+
+        def process_request(self, request, client_address):
+            try:
+                uid = peer_uid(request)
+            except OSError:
+                uid = None
+            pool = pools[uid is not None and (uid in daemon.allow or uid == 0)]
+            if not pool.acquire(blocking=False):
+                self.shutdown_request(request)  # too many at once: refuse, don't queue
+                return
+            self.peer_of[id(request)] = (uid, pool)  # sockets take no attributes (__slots__)
+            try:
+                super().process_request(request, client_address)
+            except BaseException:
+                self.peer_of.pop(id(request), None)
+                pool.release()
+                raise
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self.peer_of.pop(id(request))[1].release()
 
     old = os.umask(0o177)  # the socket never exists with wider modes than 0600
     try:

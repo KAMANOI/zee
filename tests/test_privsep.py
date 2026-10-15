@@ -505,3 +505,42 @@ def test_real_p256_admin_signature(env, tmp_path):
     r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="p256",
             signature=base64.b64encode(der).decode())
     assert r["ok"] and restores == [("ws", False)]
+
+
+def test_slow_and_excess_connections_cannot_block_the_daemon(tmp_path, monkeypatch):
+    """Codex 3: a trickling client is cut off by the overall deadline; past the cap,
+    other uids are refused while the allowed uid still gets through."""
+    from zee.privsep import daemon as dm
+    from zee.privsep.client import call
+    monkeypatch.setattr(dm, "READ_DEADLINE", 0.5)
+    monkeypatch.setattr(dm, "CONN_SLOTS", 2)
+    state = tmp_path / "cutd"
+    state.mkdir(mode=0o700)
+    (state / "assets.toml").write_text(CFG)
+    d = dm.CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier(), cut_fns=Cuts().fns())
+    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
+    threading.Thread(target=dm.serve, args=(d, sock), kwargs={"check_every": 60}, daemon=True).start()
+    for _ in range(100):
+        if sock.exists():
+            break
+        time.sleep(0.02)
+    slow = []
+    for _ in range(2):  # fill this uid's pool with clients that trickle bytes
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.connect(str(sock))
+        c.sendall(b"{")
+        slow.append(c)
+    time.sleep(0.1)
+    extra = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    extra.connect(str(sock))
+    extra.settimeout(2)
+    assert extra.recv(100) == b""  # over the cap: closed at once, no thread
+    t0 = time.monotonic()
+    for c in slow:
+        c.sendall(b" ")  # keep trickling: the overall deadline still ends it
+    time.sleep(0.6)
+    for c in slow:
+        c.settimeout(2)
+        assert b"malformed" in c.recv(200)
+    assert time.monotonic() - t0 < 2
+    assert call(sock, {"op": "status"})["ok"]  # slots were released
