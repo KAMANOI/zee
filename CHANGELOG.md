@@ -40,7 +40,8 @@ Not in any tagged release yet.
   / empty listing is unverified (Z606). Disabled ones outside the record
   are shown as a warning. The emergency restore reads back what it actually
   touched (plus the ledger's targets when usable), with or without a
-  ledger; an empty or all-unconfirmed check is never success. A
+  ledger, including names that contain ":" (e.g. a macOS service named
+  `Office: Ethernet`); an empty or all-unconfirmed check is never success. A
   truncated or malformed `ip -o link` line reads as unknown.
   Tools are looked up on PATH plus `/usr/sbin:/sbin` and run by absolute
   path (made absolute even if PATH holds a relative entry). The emergency restore also no longer stops after `nmcli`

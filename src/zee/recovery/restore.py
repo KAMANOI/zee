@@ -199,7 +199,10 @@ def _restore_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
 def _restore_linux_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
     # An interface step is always counted: no tool / nothing enumerated is a
     # failure, never silently dropped.
+    # `touched` is collected where each name is operated on, never parsed
+    # back out of step labels (names may contain ":").
     steps: list[Step] = []
+    touched: list[str] = []
     on_ok = False
     if _which("nmcli"):
         # A failed `networking on` stays a failure unless NetworkManager
@@ -208,43 +211,41 @@ def _restore_linux_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
         on_ok = _run(["nmcli", "networking", "on"])[0]
         nm_ok = on_ok or _run(["nmcli", "networking"])[1].strip() == "enabled"
         steps.append(("nmcli", nm_ok))
+        touched.append(SENTINEL_LINUX_NMCLI)
     if not on_ok:
         if _which("ip"):
+            ifaces = list_linux_interfaces()
+            touched += ifaces
             steps += [(i, _run(["ip", "link", "set", i, "up"])[0])
-                      for i in list_linux_interfaces()] or [("interfaces:none-found", False)]
+                      for i in ifaces] or [("interfaces:none-found", False)]
         else:
             steps.append(("ip:not-found", False))
-    return (*_summary("linux all-interfaces restore", steps + _firewall_steps("linux")), _touched(steps))
+    return (*_summary("linux all-interfaces restore", steps + _firewall_steps("linux")), tuple(touched))
 
 
 def _restore_macos_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
     steps: list[Step] = []
+    touched: tuple[str, ...] = ()
     if _which("networksetup"):
         # include_disabled: a full cut leaves the services disabled ('*').
+        touched = tuple(list_macos_services(include_disabled=True))
         steps += [(svc, _run(["networksetup", "-setnetworkserviceenabled", svc, "on"])[0])
-                  for svc in list_macos_services(include_disabled=True)] \
-            or [("services:none-found", False)]
+                  for svc in touched] or [("services:none-found", False)]
     else:
         steps.append(("services:no-networksetup", False))
-    return (*_summary("macos all-interfaces restore", steps + _firewall_steps("darwin")), _touched(steps))
+    return (*_summary("macos all-interfaces restore", steps + _firewall_steps("darwin")), touched)
 
 
 def _restore_windows_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
     steps: list[Step] = []
+    touched: tuple[str, ...] = ()
     if _which("netsh"):
+        touched = tuple(list_windows_interfaces(only_enabled=False))
         steps += [(i, _run(["netsh", "interface", "set", "interface", i, "admin=enable"])[0])
-                  for i in list_windows_interfaces(only_enabled=False)] \
-            or [("interfaces:none-found", False)]
+                  for i in touched] or [("interfaces:none-found", False)]
     else:
         steps.append(("netsh:not-found", False))
-    return (*_summary("windows all-interfaces restore", steps + _firewall_steps("win32")), _touched(steps))
-
-
-def _touched(steps: list[Step]) -> tuple[str, ...]:
-    """Interface / service names an emergency step operated on (marker steps
-    such as `interfaces:none-found` are not names)."""
-    names = tuple(SENTINEL_LINUX_NMCLI if n == "nmcli" else n for n, _ in steps if ":" not in n)
-    return names
+    return (*_summary("windows all-interfaces restore", steps + _firewall_steps("win32")), touched)
 
 
 # ── Zee's own firewall rules: always removed, then verified absent ────

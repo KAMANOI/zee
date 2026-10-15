@@ -458,6 +458,17 @@ def test_nmcli_failure_is_kept_unless_networking_is_confirmed_on(monkeypatch, st
     assert ok is expect and "nmcli" in detail
     # A cut may have used `ip link down` (nmcli off failed): sweep regardless.
     assert "eth0:ok" in detail
+    assert _t == (full_mod.SENTINEL_LINUX_NMCLI, "eth0")
+
+
+def test_nmcli_success_touches_only_the_sentinel(monkeypatch):
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/x/{n}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or _absent_on_show(cmd))
+    _ok, _d, touched = restore_mod._restore_linux_compat()
+    assert touched == (full_mod.SENTINEL_LINUX_NMCLI,)
+    assert not any(c[:2] == ["ip", "link"] for c in calls)
 
 
 class _BrokenLedger(CutStateLog):
@@ -828,3 +839,43 @@ def test_linux_real_ip_lines_parse(monkeypatch, line, state):
     _stub_check_output(monkeypatch, {"ip": "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536\n" + line + "\n"})
     name = line.split(":")[1].strip().split("@")[0]
     assert full_mod.interface_states() == {name: state}
+
+
+# ── fifth external review: names containing ":" are verified too ───────
+
+
+def _fake_macos(monkeypatch):
+    monkeypatch.setattr(restore_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}")
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi", "Office: Ethernet"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))  # pfctl -s rules: empty = absent
+
+
+def test_emergency_touched_keeps_names_with_colon(monkeypatch):
+    _fake_macos(monkeypatch)
+    assert restore_mod._restore_macos_compat()[2] == ("Wi-Fi", "Office: Ethernet")
+
+
+@pytest.mark.parametrize("state, code", [("disabled", "Z601"), ("unknown", "Z606"), (None, "Z606")])
+def test_colon_named_service_is_read_back(tmp_path, monkeypatch, quiet, state, code):
+    _fake_macos(monkeypatch)
+    states = {"Wi-Fi": "enabled"}
+    if state:
+        states["Office: Ethernet"] = state
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: states)
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)
+    assert ei.value.code == code
+
+
+def test_colon_named_service_enabled_succeeds(tmp_path, monkeypatch, quiet):
+    _fake_macos(monkeypatch)
+    monkeypatch.setattr(restore_mod, "interface_states",
+                        lambda: {"Wi-Fi": "enabled", "Office: Ethernet": "enabled"})
+    assert restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)[0] is True
+
+
+def test_macos_states_keep_colon_names(monkeypatch):
+    monkeypatch.setattr(full_mod.sys, "platform", "darwin")
+    _stub_check_output(monkeypatch, {"networksetup": "An asterisk (*) denotes ...\n*Office: Ethernet\nWi-Fi\n"})
+    assert full_mod.interface_states() == {"Office: Ethernet": "disabled", "Wi-Fi": "enabled"}
