@@ -28,6 +28,14 @@ releases.
   signed `tamper_set egress|full` makes it cut (after two checks in a row,
   once per incident; never under `dry_run`).
 
+### Security
+
+- **macOS notifications no longer build AppleScript from text.** Title and
+  body are passed as `osascript` arguments. Before, an asset id containing a
+  quote and backslash could escape the string and run AppleScript (found by
+  the external review of the privsep daemon, which sends notifications as
+  root; the in-process path ran it as the operator's user).
+
 ### Verification
 
 - `.github/workflows/privsep.yml` + `scripts/privsep_ci.sh` on disposable
