@@ -131,7 +131,7 @@ def test_emergency_all_interfaces_macos_reports_real_failure(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda name: f"/usr/sbin/{name}")
     monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, "denied"))
-    ok, _ = restore_mod._restore_macos_compat()
+    ok, _, _t = restore_mod._restore_macos_compat()
     assert ok is False
 
 
@@ -139,7 +139,7 @@ def test_emergency_all_interfaces_windows_reports_real_failure(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda name: f"C:/{name}")
     monkeypatch.setattr(restore_mod, "list_windows_interfaces", lambda only_enabled: ["Ethernet"])
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, "denied"))
-    ok, _ = restore_mod._restore_windows_compat()
+    ok, _, _t = restore_mod._restore_windows_compat()
     assert ok is False
 
 
@@ -181,7 +181,7 @@ def test_emergency_macos_reenables_services_the_full_cut_disabled(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda name: f"/usr/sbin/{name}")
     calls: list = []
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
-    ok, _ = restore_mod._restore_macos_compat()
+    ok, _, _t = restore_mod._restore_macos_compat()
     assert ok is True
     enabled = [c[2] for c in calls if c[0] == "networksetup"]
     assert enabled == ["Wi-Fi", "Ethernet"]
@@ -193,7 +193,7 @@ def test_emergency_linux_removes_egress_rule_even_when_nmcli_succeeds(monkeypatc
     monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     calls: list = []
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or _absent_on_show(cmd))
-    ok, _ = restore_mod._restore_linux_compat()
+    ok, _, _t = restore_mod._restore_linux_compat()
     assert ok is True
     assert ["nft", "delete", "table", "inet", "zee_egress"] in calls
     assert ["iptables", "-X", "ZEE_EGRESS"] in calls
@@ -203,7 +203,7 @@ def test_emergency_linux_does_not_hide_one_failed_firewall_removal(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(restore_mod, "_run",
                         lambda cmd: (False, "Operation not permitted") if cmd[0] == "nft" else (True, ""))
-    ok, detail = restore_mod._restore_linux_compat()
+    ok, detail, _t = restore_mod._restore_linux_compat()
     assert ok is False and "nft:fail" in detail
 
 
@@ -223,7 +223,7 @@ def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
 def test_emergency_restore_works_with_any_ledger_damage(tmp_path, monkeypatch, quiet, content):
     p = tmp_path / "cut_state.jsonl"
     (p.write_bytes if isinstance(content, bytes) else p.write_text)(content)
-    monkeypatch.setattr(restore_mod, "_restore_compat", lambda *_a, **_k: (True, "all on"))
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda *_a, **_k: (True, "all on", ("eth0",)))
     assert restore_mod.restore("t-host", cut_state=CutStateLog(p), all_interfaces=True)[0] is True
 
 
@@ -432,7 +432,7 @@ def test_linux_no_firewall_tool_at_all_is_unverified(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda n: "/x/ip" if n == "ip" else None)
     monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
-    ok, detail = restore_mod._restore_linux_compat()
+    ok, detail, _t = restore_mod._restore_linux_compat()
     assert ok is None and "nft:not-found:unverified" in detail
 
 
@@ -454,7 +454,7 @@ def test_nmcli_failure_is_kept_unless_networking_is_confirmed_on(monkeypatch, st
             return True, state
         return _absent_on_show(cmd)
     monkeypatch.setattr(restore_mod, "_run", run)
-    ok, detail = restore_mod._restore_linux_compat()
+    ok, detail, _t = restore_mod._restore_linux_compat()
     assert ok is expect and "nmcli" in detail
     # A cut may have used `ip link down` (nmcli off failed): sweep regardless.
     assert "eth0:ok" in detail
@@ -568,7 +568,7 @@ def test_no_ledger_nft_missing_iptables_ok_is_unverified(tmp_path, monkeypatch, 
 
 def test_one_backend_permission_error_continues_then_fails(monkeypatch):
     calls = _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"}, present_rules={"nft"}, deny={"nft"})
-    ok, detail = restore_mod._restore_linux_compat()
+    ok, detail, _t = restore_mod._restore_linux_compat()
     assert ok is False
     assert IPT_SHOW in calls  # kept going after nft failed
     assert "nft:fail" in detail and "iptables:ok" in detail
@@ -584,7 +584,7 @@ def test_rule_still_listed_after_removal_is_failure(monkeypatch):
     monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
     monkeypatch.setattr(restore_mod, "_run",
                         lambda cmd: (True, "block drop out all") if cmd[-1] == "rules" else (True, ""))
-    ok, detail = restore_mod._restore_macos_compat()
+    ok, detail, _t = restore_mod._restore_macos_compat()
     assert ok is False and "pfctl:fail" in detail
 
 
@@ -631,7 +631,7 @@ def test_notifications_say_the_ledger_is_user_writable(tmp_path, monkeypatch):
     bodies: list = []
     monkeypatch.setattr(restore_mod, "notify_local", lambda t, b: bodies.append(b) or True)
     monkeypatch.setattr(restore_mod, "interface_states", lambda: _AllEnabled())
-    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on"))
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on", ("eth0",)))
     restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"), all_interfaces=True)
     assert "writable by the same user" in bodies[-1]
 
@@ -640,7 +640,7 @@ def test_ledger_exception_does_not_block_emergency_restore(tmp_path, monkeypatch
     class Exploding(CutStateLog):
         def unresolved_for(self, asset_id):
             raise RuntimeError("boom")
-    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on"))
+    monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on", ("eth0",)))
     assert restore_mod.restore("t-host", cut_state=Exploding(tmp_path / "c.jsonl"), all_interfaces=True)[0] is True
 
 
@@ -652,7 +652,7 @@ def test_windows_both_rules_always_checked(monkeypatch):
         calls.append(cmd)
         return (False, "No rules match the specified criteria.") if "show" in cmd else (True, "")
     monkeypatch.setattr(restore_mod, "_run", run)
-    ok, _ = restore_mod._restore_windows_compat()
+    ok, _, _t = restore_mod._restore_windows_compat()
     shown = [c[-1] for c in calls if "show" in c]
     assert ok is True and shown == ["name=zee-egress-cut-block", "name=zee-egress-cut-allow-local"]
 
@@ -726,12 +726,52 @@ def test_readback_nmcli_sentinel_three_states(monkeypatch, nm_state, expect):
     assert restore_mod._readback((full_mod.SENTINEL_LINUX_NMCLI,))[0] is expect
 
 
-def test_readback_without_record(monkeypatch):
+def test_empty_verification_is_never_success(monkeypatch):
+    """Nothing to check is not a confirmed restore (fourth external review)."""
     monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
-    ok, detail = restore_mod._readback(None)
-    assert ok is True and "no recorded targets to verify" in detail
-    monkeypatch.setattr(restore_mod, "interface_states", lambda: None)
     assert restore_mod._readback(None)[0] is None
+    assert restore_mod._readback(())[0] is None
+    assert restore_mod._combine() is None
+    assert restore_mod._summary("x", [("nft:not-found", None), ("iptables:not-found", None)])[0] is None
+
+
+@pytest.mark.parametrize("state, code", [("disabled", "Z601"), ("unknown", "Z606")])
+def test_emergency_without_ledger_reads_back_what_it_touched(tmp_path, monkeypatch, quiet, state, code):
+    monkeypatch.setattr(restore_mod.sys, "platform", "linux")
+    _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": state})
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)
+    assert ei.value.code == code
+
+
+def test_emergency_without_ledger_succeeds_when_touched_reads_enabled(tmp_path, monkeypatch, quiet):
+    monkeypatch.setattr(restore_mod.sys, "platform", "linux")
+    _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
+    assert restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)[0] is True
+
+
+def test_egress_only_record_restore_still_succeeds(tmp_path, monkeypatch, quiet):
+    """An egress cut changes no interface: the firewall re-read is the check."""
+    monkeypatch.setattr(restore_mod, "_host_platform", lambda: "linux")
+    _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="t-host", method="egress", platform="linux", modified=[NFT])
+    assert restore_mod.restore("t-host", cut_state=log)[0] is True
+
+
+@pytest.mark.parametrize("line", [
+    "2: eth0: <BROADCAST,MULTICAST,UP",          # truncated, no closing >
+    "2: eth0: BROADCAST,MULTICAST,UP> mtu 1500",  # no opening <
+    "2: eth0: <BROADCAST,MULTI CAST,UP> mtu",     # malformed flag field
+    "2: eth0: <> mtu 1500",                       # empty flag field
+])
+def test_linux_malformed_ip_line_is_unknown(monkeypatch, line):
+    monkeypatch.setattr(full_mod.sys, "platform", "linux")
+    _stub_check_output(monkeypatch, {"ip": line + "\n"})
+    assert full_mod.interface_states() == {"eth0": "unknown"}
 
 
 def test_readback_nmcli_missing_is_unverified(monkeypatch):
@@ -776,3 +816,15 @@ def test_targeted_darwin_and_windows_branches(monkeypatch, platform, expect_cmd)
     r = CutRecord("t-host", datetime.now(timezone.utc), "full", platform, ("Wi-Fi",))
     ok, _ = restore_mod._restore_targeted(r)
     assert expect_cmd in calls and ok is True
+
+
+@pytest.mark.parametrize("line, state", [
+    ("2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc", "enabled"),
+    ("3: veth1@if5: <BROADCAST,MULTICAST,M-DOWN> mtu 1500", "disabled"),
+])
+def test_linux_real_ip_lines_parse(monkeypatch, line, state):
+    """Right after `ip link set up` the carrier is often not back yet."""
+    monkeypatch.setattr(full_mod.sys, "platform", "linux")
+    _stub_check_output(monkeypatch, {"ip": "1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536\n" + line + "\n"})
+    name = line.split(":")[1].strip().split("@")[0]
+    assert full_mod.interface_states() == {name: state}

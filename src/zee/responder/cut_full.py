@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -318,6 +319,12 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
     return True, (cp.stdout or "").strip()
 
 
+# `ip -o link show`: "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu ..."
+# (name may carry "@peer"). The flag field must be complete and well formed.
+_IP_LINE = re.compile(r"^\s*\d+:\s+([^\s:@]+)(?:@[^\s:]+)?:\s+<([A-Z0-9_-]+(?:,[A-Z0-9_-]+)*)>(?:\s|$)")
+_IP_NAME = re.compile(r"^\s*\d+:\s+([^\s:@]+)")
+
+
 def interface_states() -> Optional[dict[str, str]]:
     """Read back every interface / service and its state right now.
 
@@ -332,13 +339,19 @@ def interface_states() -> Optional[dict[str, str]]:
             out = subprocess.check_output(_abs(["ip", "-o", "link", "show"]), text=True, timeout=5)
             states: dict[str, str] = {}
             for line in out.splitlines():
-                parts = line.split(":", 2)
-                if len(parts) < 3 or "<" not in parts[2]:
-                    continue
-                name = parts[1].strip().split("@")[0]
-                flags = parts[2].split(">", 1)[0].lstrip(" <").split(",")
-                if name and name != "lo":
-                    states[name] = "enabled" if "UP" in flags else "disabled"
+                m = _IP_LINE.match(line)
+                if m:
+                    name, flags = m.group(1), m.group(2).split(",")
+                    state = "enabled" if "UP" in flags else "disabled"
+                else:
+                    # A line we cannot fully parse (truncated, odd flags):
+                    # its interface is "unknown", never enabled.
+                    loose = _IP_NAME.match(line)
+                    if not loose:
+                        continue
+                    name, state = loose.group(1), "unknown"
+                if name != "lo":
+                    states[name] = state
             if not states:
                 return None
             if sbin_which("nmcli"):

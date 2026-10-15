@@ -95,10 +95,10 @@ def restore(
             "service (may re-enable interfaces disabled by other tools)",
             asset_id,
         )
-        # The ledger is only used to name what must be back afterwards;
-        # reading it can never fail or block this path.
-        targets = _recorded_targets(cut_state, asset_id)
-        status, detail = _restore_compat()
+        # Read back what this restore actually touched, plus whatever the
+        # ledger recorded (if usable — reading it never blocks this path).
+        status, detail, touched = _restore_compat()
+        targets = tuple(dict.fromkeys(touched + (_recorded_targets(cut_state, asset_id) or ())))
     else:
         latest, damaged = cut_state.unresolved_for(asset_id)
         if latest is None or damaged:
@@ -112,9 +112,14 @@ def restore(
         targets = latest.modified
         status, detail = _restore_targeted(latest)
 
-    rb_status, rb_detail = _readback(targets)
-    status = _combine(status, rb_status)
-    detail = f"{detail}; {rb_detail}"
+    if any(t not in _FIREWALL_ENTRIES for t in targets) or all_interfaces:
+        rb_status, rb_detail = _readback(targets)
+        status = _combine(status, rb_status)
+        detail = f"{detail}; {rb_detail}"
+    else:
+        # egress-only record: no interface was changed; the firewall re-read
+        # in _firewall_steps is the verification.
+        detail = f"{detail}; readback: no interface in the record (egress cut)"
 
     if status is True:
         try:
@@ -131,10 +136,11 @@ def restore(
 
 
 def _combine(*statuses: Optional[bool]) -> Optional[bool]:
-    """False if any failed, None if any is unconfirmed, else True."""
+    """False if any failed, None if any is unconfirmed or there is nothing
+    to judge (an empty check is never success), else True."""
     if any(s is False for s in statuses):
         return False
-    if any(s is None for s in statuses):
+    if not statuses or any(s is None for s in statuses):
         return None
     return True
 
@@ -179,17 +185,18 @@ def _recorded_targets(cut_state: CutStateLog, asset_id: str) -> Optional[tuple[s
     return None if rec is None or damaged else rec.modified
 
 
-def _restore_compat() -> tuple[Optional[bool], str]:
+def _restore_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
+    """Returns (status, detail, names of the interfaces / services touched)."""
     if sys.platform.startswith("linux"):
         return _restore_linux_compat()
     if sys.platform == "darwin":
         return _restore_macos_compat()
     if sys.platform == "win32":
         return _restore_windows_compat()
-    return False, f"unsupported platform: {sys.platform}"
+    return False, f"unsupported platform: {sys.platform}", ()
 
 
-def _restore_linux_compat() -> tuple[Optional[bool], str]:
+def _restore_linux_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
     # An interface step is always counted: no tool / nothing enumerated is a
     # failure, never silently dropped.
     steps: list[Step] = []
@@ -207,10 +214,10 @@ def _restore_linux_compat() -> tuple[Optional[bool], str]:
                       for i in list_linux_interfaces()] or [("interfaces:none-found", False)]
         else:
             steps.append(("ip:not-found", False))
-    return _summary("linux all-interfaces restore", steps + _firewall_steps("linux"))
+    return (*_summary("linux all-interfaces restore", steps + _firewall_steps("linux")), _touched(steps))
 
 
-def _restore_macos_compat() -> tuple[Optional[bool], str]:
+def _restore_macos_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
     steps: list[Step] = []
     if _which("networksetup"):
         # include_disabled: a full cut leaves the services disabled ('*').
@@ -219,10 +226,10 @@ def _restore_macos_compat() -> tuple[Optional[bool], str]:
             or [("services:none-found", False)]
     else:
         steps.append(("services:no-networksetup", False))
-    return _summary("macos all-interfaces restore", steps + _firewall_steps("darwin"))
+    return (*_summary("macos all-interfaces restore", steps + _firewall_steps("darwin")), _touched(steps))
 
 
-def _restore_windows_compat() -> tuple[Optional[bool], str]:
+def _restore_windows_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
     steps: list[Step] = []
     if _which("netsh"):
         steps += [(i, _run(["netsh", "interface", "set", "interface", i, "admin=enable"])[0])
@@ -230,7 +237,14 @@ def _restore_windows_compat() -> tuple[Optional[bool], str]:
             or [("interfaces:none-found", False)]
     else:
         steps.append(("netsh:not-found", False))
-    return _summary("windows all-interfaces restore", steps + _firewall_steps("win32"))
+    return (*_summary("windows all-interfaces restore", steps + _firewall_steps("win32")), _touched(steps))
+
+
+def _touched(steps: list[Step]) -> tuple[str, ...]:
+    """Interface / service names an emergency step operated on (marker steps
+    such as `interfaces:none-found` are not names)."""
+    names = tuple(SENTINEL_LINUX_NMCLI if n == "nmcli" else n for n, _ in steps if ":" not in n)
+    return names
 
 
 # ── Zee's own firewall rules: always removed, then verified absent ────
