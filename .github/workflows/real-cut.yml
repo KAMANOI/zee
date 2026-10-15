@@ -1,0 +1,159 @@
+name: Real cut (virtual runners)
+
+# Real cut -> measure -> restore -> measure with Zee's own code on GitHub's
+# virtual runners. Never runs on an ordinary push to main or on PRs.
+# workflow_dispatch needs the file on the default branch, so while this
+# lives on a feature branch the run is started by a push to that branch only.
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/self-defense-20261015]
+    paths:
+      - .github/workflows/real-cut.yml
+      - scripts/real_cut_check.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # All cuts happen inside a network namespace: the runner's own network
+    # (and its link to GitHub) is never touched.
+    name: Linux netns / ${{ matrix.backend }} / ${{ matrix.method }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [nft, iptables-nft, iptables-legacy]
+        method: [egress, full]
+        exclude:
+          - backend: iptables-nft
+            method: full
+          - backend: iptables-legacy
+            method: full
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+      - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c  # v5.0.0
+        with:
+          python-version: '3.12'
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables iptables
+      - name: Namespace with a non-private test server on the host side
+        run: |
+          set -eux
+          sudo ip netns add zt
+          sudo ip link add zt-host type veth peer name zt-in
+          sudo ip link set zt-in netns zt
+          # TEST-NET-2 (RFC 5737): not RFC 1918, so Zee's egress cut must block it.
+          sudo ip addr add 198.51.100.1/24 dev zt-host
+          sudo ip link set zt-host up
+          sudo ip netns exec zt ip addr add 198.51.100.2/24 dev zt-in
+          sudo ip netns exec zt ip link set zt-in up
+          sudo ip netns exec zt ip link set lo up
+          nohup python -m http.server 8080 --bind 198.51.100.1 > /tmp/http.log 2>&1 &
+          sleep 1
+          sudo ip netns exec zt curl -sS -m 3 -o /dev/null -w '%{http_code}\n' http://198.51.100.1:8080/
+      - name: Backend selection (PATH with only the chosen firewall tool)
+        run: |
+          set -eux
+          mkdir -p /tmp/zee-bin
+          ln -s "$(command -v ip)" /tmp/zee-bin/ip
+          case "${{ matrix.backend }}" in
+            nft) src=/usr/sbin/nft; dst=nft ;;
+            iptables-nft) src=/usr/sbin/iptables-nft; dst=iptables ;;
+            iptables-legacy) src=/usr/sbin/iptables-legacy; dst=iptables ;;
+          esac
+          test -x "$src" || { echo "::error::$src not found on this runner image"; exit 1; }
+          ln -s "$src" "/tmp/zee-bin/$dst"
+          ls -l /tmp/zee-bin
+      - name: Cut -> measure -> restore -> measure
+        run: |
+          set -x
+          PY="$(command -v python)"
+          sudo ip netns exec zt env PATH=/tmp/zee-bin:/usr/bin:/bin PYTHONPATH="$GITHUB_WORKSPACE/src" \
+            "$PY" scripts/real_cut_check.py --method "${{ matrix.method }}" \
+            --url http://198.51.100.1:8080/ --label "linux-${{ matrix.backend }}" \
+            --out result.json --safety-seconds 45
+          rc=$?
+          cat result.json
+          { echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+      - name: Cleanup
+        if: always()
+        run: sudo ip netns del zt || true
+
+  macos:
+    # pf rules under com.apple/ (referenced by the stock main ruleset). The
+    # runner's existing connections keep their pf state; an outer timer
+    # flushes Zee's anchor even if the script hangs.
+    name: macOS pf / egress
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+      - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c  # v5.0.0
+        with:
+          python-version: '3.12'
+      - name: Record pf state before
+        run: |
+          sudo pfctl -s info | head -3 || true
+          sudo pfctl -s rules || true
+      - name: Cut -> measure -> restore -> measure
+        run: |
+          set -x
+          sudo sh -c '(sleep 120; pfctl -a com.apple/zee-egress-cut -F all) >/dev/null 2>&1 &'
+          PY="$(command -v python)"
+          sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" "$PY" scripts/real_cut_check.py --method egress \
+            --url http://example.com/ --label macos-runner --out result.json --safety-seconds 45
+          rc=$?
+          cat result.json
+          { echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
+      - name: pf state after
+        if: always()
+        run: |
+          sudo pfctl -a com.apple/zee-egress-cut -s rules || true
+          sudo pfctl -s info | head -3 || true
+
+  windows:
+    # netsh rules block outbound except RFC 1918 / loopback. A SYSTEM task
+    # deletes Zee's rules after 3 minutes even if the script hangs.
+    name: Windows netsh / egress
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+      - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c  # v5.0.0
+        with:
+          python-version: '3.12'
+      - name: Firewall profile state before
+        shell: pwsh
+        run: netsh advfirewall show allprofiles state
+      - name: Cut -> measure -> restore -> measure
+        shell: pwsh
+        run: |
+          $when = (Get-Date).AddMinutes(3)
+          schtasks /create /f /tn zee-safety /sc once /sd $when.ToString("MM/dd/yyyy") /st $when.ToString("HH:mm") /ru SYSTEM `
+            /tr "cmd /c netsh advfirewall firewall delete rule name=zee-egress-cut-block & netsh advfirewall firewall delete rule name=zee-egress-cut-allow-local"
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\src"
+          python scripts/real_cut_check.py --method egress --url http://example.com/ `
+            --label windows-runner --out result.json --safety-seconds 45
+          $rc = $LASTEXITCODE
+          Get-Content result.json
+          "``````json" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          Get-Content result.json | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "``````" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          schtasks /delete /f /tn zee-safety
+          exit $rc
+      - name: Rules after
+        if: always()
+        shell: pwsh
+        run: |
+          netsh advfirewall firewall show rule name=zee-egress-cut-block
+          netsh advfirewall firewall show rule name=zee-egress-cut-allow-local
+          exit 0
