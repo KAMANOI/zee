@@ -114,6 +114,8 @@ The MVP lives under `src/zee/`. **It runs dry_run by default and does not actual
 
 > **If you use `cut_method: egress` on Windows (2026-10-15)** — Up to v0.12.0, the Windows outbound cut never installs its rules: `netsh` rejects the all-addresses range, so outbound traffic is not stopped. In this case Zee reports the cut as failed (it does not claim success). The fix blocks every range except private addresses and loopback with a single block rule, and was confirmed to stop and restore traffic on a GitHub Windows runner. Until the fix is released, please do not rely on the outbound cut on Windows.
 
+> **If your Linux host has no nft and the outbound cut uses iptables (2026-10-15)** — The iptables path installs IPv4 rules only, so outbound IPv6 traffic is not stopped (the nft path stops IPv6 as well). On IPv6-capable hosts, do not rely on the outbound cut to stop exfiltration until this is fixed.
+
 ### Install
 
 ```bash
