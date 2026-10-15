@@ -136,7 +136,7 @@ OS の権限を変える操作・root での実行・実機の pf 有効化は�
 
 **意図して入れなかったもの**：`permission.py` の配線（10/13 に未配線のまま入れる判断がされている）、心拍・監督（同じユーザーで動く監督は、監督対象と一緒に止められるので意味がない。第二段で別ユーザーとして作る）、ソケット・別プロセス化（§7 の承認後）。
 
-テスト：`tests/test_self_defense.py` 144件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 680 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
+テスト：`tests/test_self_defense.py` 167件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 703 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
 
 <a id="privileged-deployment"></a>
 ## 7. 【代表承認事項】権限分離を実地に適用する手順案
@@ -213,8 +213,10 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 | 同上 | 失敗 | 失敗を残す。NM が enabled と答えた時だけ ✅ | `test_nmcli_failure_is_kept_unless_networking_is_confirmed_on` |
 | Linux の `ip link set <if> up`（全面） | nmcli が成功した後で失敗（消えた veth など） | その手順は ❓。最終判定はその名前の読み直し（無効 ❌・一覧に無い ❓） | `test_sweep_command_failure_after_working_nmcli_is_decided_by_read_back` |
 | 規則の削除（nft・iptables・pfctl・netsh） | 削除の終了コード | 判定に使わない（読み直しで決める） | `test_forged_ledger_rule_removed_then_success` |
-| 規則の読み直し | 無い | ✅ | `test_both_backends_absent_is_success` |
-| 同上 | 残っている・読めない | ❌（他のバックエンドも続けて処理） | `test_one_backend_permission_error_continues_then_fails`・`test_rule_still_listed_after_removal_is_failure` |
+| 規則の読み直し | バックエンド自身が「その名前のテーブル／チェーン／規則は無い」と答えた（nft：`Error:` で始まり `No such file or directory` と `zee_egress` を含む。iptables：`No chain/target/match by that name`。netsh：`No rules match the specified criteria`。pfctl：アンカーが空） | ✅ | `test_both_backends_absent_is_success`・`test_nft_absence_needs_backend_specific_answer` |
+| 同上 | 規則が表示された | ❌（他のバックエンドも続けて処理） | `test_one_backend_permission_error_continues_then_fails`・`test_rule_still_listed_after_removal_is_failure`・`test_nft_rule_listed_is_present` |
+| 同上 | 終了コード 126／127（ローダーエラー等）・権限エラー・形の違う答え | ❓（同じ文言を含んでも「無い」とは読まない。8回目の指摘で修正） | `test_loader_error_is_a_launch_failure`・`test_unreadable_listing_is_unverified_not_absent` |
+| macOS の pf アンカー | 新旧両方（`com.apple/zee-egress-cut` と旧 `zee-egress-cut`） | 両方を消して読み直す | `test_restore_flushes_new_and_old_pf_anchor` |
 | 同上 | ツールなし | ❓ | `test_no_ledger_nft_missing_iptables_ok_is_unverified`・`test_recorded_nft_with_nft_missing_is_unverified` |
 | 対象の読み直し | 有効 | ✅ | `test_readback_needs_positive_enabled` |
 | 同上 | 無効 | ❌ | 同上・`test_colon_named_service_is_read_back` |
@@ -235,6 +237,8 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 | 台帳に書けない | — | FAILED（`os=… ledger=FAILED` と戻し方を表示） | `test_ledger_write_failure_is_reported_not_raised` |
 | egress 遮断（`cut_egress`）の規則の読み直し | 全部確認 | 成功（台帳に `verified: confirmed`） | `test_egress_cut_confirmed_when_rule_reads_back`・`test_iptables_egress_needs_chain_and_jump`・`test_pf_egress_needs_rules_and_pf_enabled` |
 | 同上 | 無い（missing）・読めない／ツールなし（unverified） | FAILED。通知の本文に「not confirmed by read-back」と理由。台帳に結果 | `test_egress_cut_not_confirmed_is_failed`・`test_egress_cut_tool_missing_is_unverified`・`test_windows_egress_rule_missing_is_failed`・`test_handle_notifies_unconfirmed_egress_cut` |
+| macOS（pf）の成功条件 | アンカー `com.apple/zee-egress-cut` に block があり、pf が有効で、**主ルールセットに `anchor "com.apple/*"`（または Zee のアンカー名）がある** | どれか欠ければ FAILED（参照が無ければ missing） | `test_pf_cut_requires_anchor_reachable_from_main_ruleset`・`test_pf_cut_loads_rules_under_the_com_apple_anchor` |
+| Windows の成功条件 | 規則ごとに `Enabled: Yes`・`Direction: Out`・`Action`（block／allow）・block 規則の `RemoteIP` が全範囲、さらに規則の `Profiles` のすべてで `netsh advfirewall show allprofiles state` が ON | 違えば missing、英語以外の項目名などで読めなければ unverified。どちらも FAILED | `test_windows_rule_must_be_enabled_outbound_block_in_active_profiles` |
 
 ### A-4. 点検で見つけた追加の穴
 
@@ -242,5 +246,8 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 2. **記録外で状態が「不明」のものは警告にも出ていなかった**。修正済み：無効・不明とも警告に出す。
 3. **（今回の修正で入れた退行）全面復旧で nmcli が成功した後の個別インターフェースの失敗が、全体を FAILED にしていた**（消えた veth 1つで「復旧失敗」と誤報）。修正済み：その手順は未確認にし、名前ごとの読み直しで決める。
 4. **遮断の読み直しが、遮断と同じ代わりの道具を持っていなかった**（Linux で `ip` が無い・Windows で PowerShell が無いと、遮断できていても FAILED）。修正済み：nmcli・netsh でも読み直す。
-5. **未対応**：Linux の full 遮断は `nmcli networking off` が成功すると `ip link down` を行わず、確認も NetworkManager の状態だけ。NetworkManager の管理外のインターフェースは止まらない可能性がある（実機での確認が要る。§7.3 の隔離環境で確かめる）。
-6. **egress 遮断（`cut_egress.py`）が規則を入れたあと読み直していなかった**（コマンドの終了コードで「applied」）。修正済み：同じバックエンドの表示コマンドで Zee 固有名の規則を読み直し（nft はテーブルに drop、iptables はチェーンの DROP と OUTPUT からの jump、pfctl はアンカーの block と pf の有効、netsh は各ルール名）、確認できた時だけ applied。ツールが「無い」と答えたら missing、ツールが無い・読めない・形が違えば unverified で、どちらも FAILED と通知に書く。台帳の遮断記録に読み直しの結果（`verified`: confirmed／missing／unverified）を残す（full 遮断も同じ。full では、まだ有効と読めた＝missing、読めない・不明＝unverified）。pf のアンカーが空なら missing。ツールの出力が読めない文字コードでも例外で止まらず（置き換えて読む）、台帳と通知まで必ず進む。
+5. **macOS の egress 遮断が評価されていなかった**（8回目の外部レビュー）。pf は主ルールセットから参照されたアンカーしか評価しない（出典：OpenBSD pf.conf(5) の ANCHORS 節 https://man.openbsd.org/pf.conf ）。macOS の標準 `/etc/pf.conf` は `anchor "com.apple/*"` を参照するだけで、Zee が規則を入れていた最上位の `zee-egress-cut` は参照されていなかった（開発機の `/etc/pf.conf` で確認）。修正済み：`com.apple/zee-egress-cut` に入れ、主ルールセットからの参照を読み直して確認。主ルールセットを Zee が書き換えることはしない（利用者の設定を壊すため）。参照が無い環境では FAILED と表示する。**実機での遮断の成立は未確認**（§7.3 の隔離環境で確かめる）。
+6. **Windows の egress 遮断を規則名の存在だけで成功にしていた**（8回目）。修正済み：有効・方向・動作・範囲と、適用先プロファイルのファイアウォールが ON かを確認（出典：Microsoft Learn「netsh advfirewall」 https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/netsh-advfirewall ）。`RemoteIP` の表示形式は実機で確かめていない（`0.0.0.0/0`・`0.0.0.0-255.255.255.255`・`Any` 以外なら missing＝FAILED に倒す）。
+7. **復旧の読み直しが「No such file or directory」という文言だけで規則なしと判定していた**（8回目）。nft の共有ライブラリが無い時（終了 127）も同じ文言が出る。修正済み：終了 126／127 は起動失敗、バックエンド固有の形の答えだけを「無い」とし、それ以外は未確認。
+8. **egress 遮断（`cut_egress.py`）が規則を入れたあと読み直していなかった**（コマンドの終了コードで「applied」）。修正済み：同じバックエンドの表示コマンドで Zee 固有名の規則を読み直し（nft はテーブルに drop、iptables はチェーンの DROP と OUTPUT からの jump、pfctl はアンカーの block と pf の有効、netsh は各ルール名）、確認できた時だけ applied。ツールが「無い」と答えたら missing、ツールが無い・読めない・形が違えば unverified で、どちらも FAILED と通知に書く。台帳の遮断記録に読み直しの結果（`verified`: confirmed／missing／unverified）を残す（full 遮断も同じ。full では、まだ有効と読めた＝missing、読めない・不明＝unverified）。pf のアンカーが空なら missing。ツールの出力が読めない文字コードでも例外で止まらず（置き換えて読む）、台帳と通知まで必ず進む。
+9. **未対応**：Linux の full 遮断は `nmcli networking off` が成功すると `ip link down` を行わず、確認も NetworkManager の状態だけ。NetworkManager の管理外のインターフェースは止まらない可能性がある（実機での確認が要る。§7.3 の隔離環境で確かめる）。

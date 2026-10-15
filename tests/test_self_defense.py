@@ -72,7 +72,7 @@ def quiet(monkeypatch):
 def _absent_on_show(cmd):
     """_run stub: every command succeeds; rule listings report 'absent'."""
     if cmd[:3] == ["nft", "list", "table"]:
-        return False, "Error: No such file or directory"
+        return False, "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^"
     if cmd[:2] == ["iptables", "-S"]:
         return False, "iptables: No chain/target/match by that name."
     if cmd[:4] == ["netsh", "advfirewall", "firewall", "show"]:
@@ -204,7 +204,7 @@ def test_emergency_linux_does_not_hide_one_failed_firewall_removal(monkeypatch):
     monkeypatch.setattr(restore_mod, "_run",
                         lambda cmd: (False, "Operation not permitted") if cmd[0] == "nft" else (True, ""))
     ok, detail, _t = restore_mod._restore_linux_compat()
-    assert ok is False and "nft:fail" in detail
+    assert ok is False and "nft:unverified" in detail  # unreadable listing is never "absent"
 
 
 def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
@@ -212,7 +212,7 @@ def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
     monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     def run(cmd):
         if cmd[0] == "nft":
-            return False, "Error: Could not process rule: No such file or directory"
+            return False, "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^"
         if cmd[0] == "iptables":
             return False, "iptables: No chain/target/match by that name."
         return True, ""
@@ -510,10 +510,10 @@ NFT = full_mod.SENTINEL_LINUX_NFT_EGRESS
 IPT = full_mod.SENTINEL_LINUX_IPTABLES_EGRESS
 NFT_SHOW = ["nft", "list", "table", "inet", "zee_egress"]
 IPT_SHOW = ["iptables", "-S", "ZEE_EGRESS"]
-ABSENT = {"nft": "Error: No such file or directory", "iptables": "iptables: No chain/target/match by that name."}
+ABSENT = {"nft": "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^", "iptables": "iptables: No chain/target/match by that name."}
 
 
-def _fake_linux(monkeypatch, *, tools, present_rules=(), deny=()):
+def _fake_linux(monkeypatch, *, tools, present_rules=(), deny=(), deny_show=()):
     """OS stub: `tools` installed; rules in `present_rules` exist and survive
     removal when the tool is in `deny` (permission error)."""
     rules = set(present_rules)
@@ -527,7 +527,7 @@ def _fake_linux(monkeypatch, *, tools, present_rules=(), deny=()):
         if tool in deny and cmd not in (NFT_SHOW, IPT_SHOW):
             return False, "Operation not permitted"
         if cmd in (NFT_SHOW, IPT_SHOW):
-            if tool in deny:
+            if tool in deny_show:
                 return False, "Operation not permitted"
             return (True, "table ...") if tool in rules else (False, ABSENT[tool])
         if cmd[:2] == ["nft", "delete"] or cmd[:2] == ["iptables", "-X"]:
@@ -589,6 +589,12 @@ def test_one_backend_permission_error_continues_then_fails(monkeypatch):
     assert "nft:fail" in detail and "iptables:ok" in detail
 
 
+def test_unreadable_listing_is_unverified_not_absent(monkeypatch):
+    _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"}, deny_show={"nft"})
+    ok, detail, _t = restore_mod._restore_linux_compat()
+    assert ok is None and "nft:unverified" in detail
+
+
 def test_both_backends_absent_is_success(monkeypatch):
     _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
     assert restore_mod._restore_linux_compat()[0] is True
@@ -600,7 +606,7 @@ def test_rule_still_listed_after_removal_is_failure(monkeypatch):
     monkeypatch.setattr(restore_mod, "_run",
                         lambda cmd: (True, "block drop out all") if cmd[-1] == "rules" else (True, ""))
     ok, detail, _t = restore_mod._restore_macos_compat()
-    assert ok is False and "pfctl:fail" in detail
+    assert ok is False and "pfctl com.apple/zee-egress-cut:fail" in detail
 
 
 def test_tools_resolved_with_sbin_and_run_with_absolute_path(monkeypatch):
@@ -1049,7 +1055,7 @@ def _egress_setup(monkeypatch, tmp_path, modified, *, outputs, tools=None):
 NFT_LIST = ("nft", "list", "table", "inet", "zee_egress")
 IPT_S = ("iptables", "-S", "ZEE_EGRESS")
 IPT_C = ("iptables", "-C", "OUTPUT", "-j", "ZEE_EGRESS")
-PF_RULES = ("pfctl", "-a", "zee-egress-cut", "-s", "rules")
+PF_RULES = ("pfctl", "-a", "com.apple/zee-egress-cut", "-s", "rules")
 PF_INFO = ("pfctl", "-s", "info")
 
 
@@ -1084,7 +1090,8 @@ def test_iptables_egress_needs_chain_and_jump(tmp_path, monkeypatch):
 
 def test_pf_egress_needs_rules_and_pf_enabled(tmp_path, monkeypatch):
     sentinel = full_mod.SENTINEL_MACOS_PFCTL_EGRESS
-    rules = {PF_RULES: (True, "block drop out all\npass out on lo0 all")}
+    rules = {PF_RULES: (True, "block drop out all\npass out on lo0 all"),
+             ("pfctl", "-s", "rules"): (True, 'anchor "com.apple/*" all')}
     ok, _d, _r = _egress_setup(monkeypatch, tmp_path, [sentinel],
                                outputs={**rules, PF_INFO: (True, "Status: Disabled")})
     assert ok is False
@@ -1144,5 +1151,162 @@ def test_undecodable_tool_output_never_raises(monkeypatch, mod_path):
 
 def test_empty_pf_anchor_is_missing(tmp_path, monkeypatch):
     ok, _d, rec = _egress_setup(monkeypatch, tmp_path, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS],
-                                outputs={PF_RULES: (True, ""), PF_INFO: (True, "Status: Enabled")})
+                                outputs={PF_RULES: (True, ""), PF_INFO: (True, "Status: Enabled"),
+                                         ("pfctl", "-s", "rules"): (True, 'anchor "com.apple/*" all')})
+    assert ok is False and rec["verified"] == "missing"
+
+
+
+# ── eighth external review ─────────────────────────────────────────────
+
+
+def test_loader_error_is_a_launch_failure(monkeypatch):
+    import subprocess
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}")
+    msg = ("nft: error while loading shared libraries: libnftables.so.1: "
+           "cannot open shared object file: No such file or directory")
+    monkeypatch.setattr(restore_mod.subprocess, "run",
+                        lambda argv, **k: subprocess.CompletedProcess(argv, 127, "", msg))
+    ok, out = restore_mod._run(["nft", "list", "table", "inet", "zee_egress"])
+    assert ok is False and out.startswith(restore_mod._LAUNCH_FAILED)
+
+
+@pytest.mark.parametrize("msg, expect", [
+    ("Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^", True),
+    ("Error: No such file or directory", None),
+    ("nft: error while loading shared libraries: x.so: No such file or directory", None),
+    ("launch failed: exit 127", None),
+])
+def test_nft_absence_needs_backend_specific_answer(monkeypatch, msg, expect):
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, msg))
+    assert restore_mod._verify_absent("nft", ["nft", "list", "table", "inet", "zee_egress"]) is expect
+
+
+def test_nft_rule_listed_is_present(monkeypatch):
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, "table inet zee_egress { }"))
+    assert restore_mod._verify_absent("nft", ["nft", "list", "table", "inet", "zee_egress"]) is False
+
+
+def test_restore_flushes_new_and_old_pf_anchor(monkeypatch):
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    ok, _d, _t = restore_mod._restore_macos_compat()
+    assert ok is True
+    for anchor in ("com.apple/zee-egress-cut", "zee-egress-cut"):
+        assert ["pfctl", "-a", anchor, "-F", "all"] in calls
+        assert ["pfctl", "-a", anchor, "-s", "rules"] in calls
+
+
+PF_MAIN = ("pfctl", "-s", "rules")
+PF_NEW_RULES = ("pfctl", "-a", "com.apple/zee-egress-cut", "-s", "rules")
+
+
+@pytest.mark.parametrize("main, expect", [
+    ('scrub-anchor "com.apple/*" all fragment reassemble\nanchor "com.apple/*" all', True),
+    ('anchor "com.apple/zee-egress-cut" all', True),
+    ('pass out all', False),
+    ('scrub-anchor "com.apple/*" all fragment reassemble', False),   # not a filter anchor
+    ('nat-anchor "com.apple/*" all\nrdr-anchor "com.apple/*" all', False),
+])
+def test_pf_cut_requires_anchor_reachable_from_main_ruleset(tmp_path, monkeypatch, main, expect):
+    outputs = {PF_NEW_RULES: (True, "block drop out all"), PF_INFO: (True, "Status: Enabled"),
+               PF_MAIN: (True, main)}
+    ok, detail, rec = _egress_setup(monkeypatch, tmp_path, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS],
+                                    outputs=outputs)
+    assert ok is expect
+    if not expect:
+        assert rec["verified"] == "missing" and "anchor reference" in detail
+
+
+def test_pf_cut_loads_rules_under_the_com_apple_anchor(monkeypatch):
+    import subprocess
+    from zee.responder import cut_egress as egress_mod
+    seen: list = []
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(egress_mod.subprocess, "run",
+                        lambda argv, **k: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
+    monkeypatch.setattr(egress_mod, "_run", lambda cmd: (True, ""))
+    egress_mod._cut_egress_macos()
+    assert seen[0][:3] == ["pfctl", "-a", "com.apple/zee-egress-cut"]
+
+
+ANY_V4 = ".".join(["0"] * 4) + "/0"
+
+
+def _win_rule(name, *, enabled="Yes", direction="Out", action="Block", remote=ANY_V4,
+              profiles="Domain,Private,Public"):
+    return (f"\nRule Name:                            {name}\n"
+            "----------------------------------------------------------------------\n"
+            f"Enabled:                              {enabled}\n"
+            f"Direction:                            {direction}\n"
+            f"Profiles:                             {profiles}\n"
+            "Grouping:                             \n"
+            "LocalIP:                              Any\n"
+            f"RemoteIP:                             {remote}\n"
+            "Protocol:                             Any\n"
+            "Edge traversal:                       No\n"
+            f"Action:                               {action}\nOk.\n")
+
+
+PROFILES_ON = ("\nDomain Profile Settings:\n----\nState                                 ON\nOk.\n"
+               "\nPrivate Profile Settings:\n----\nState                                 ON\nOk.\n"
+               "\nPublic Profile Settings:\n----\nState                                 ON\nOk.\n")
+
+
+def _win_outputs(block, allow, profiles=PROFILES_ON):
+    show = lambda r: ("netsh", "advfirewall", "firewall", "show", "rule", f"name={r}")
+    return {show("zee-egress-cut-block"): (True, block),
+            show("zee-egress-cut-allow-local"): (True, allow),
+            ("netsh", "advfirewall", "show", "allprofiles", "state"): (True, profiles)}
+
+
+WIN_RULES = ["zee-egress-cut-block", "zee-egress-cut-allow-local"]
+GOOD_ALLOW = _win_rule("zee-egress-cut-allow-local", action="Allow",
+                       remote="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8")
+
+
+@pytest.mark.parametrize("block, profiles, expect, verified", [
+    (_win_rule("zee-egress-cut-block"), PROFILES_ON, True, "confirmed"),
+    (_win_rule("zee-egress-cut-block", enabled="No"), PROFILES_ON, False, "missing"),
+    (_win_rule("zee-egress-cut-block", direction="In"), PROFILES_ON, False, "missing"),
+    (_win_rule("zee-egress-cut-block", action="Allow"), PROFILES_ON, False, "missing"),
+    (_win_rule("zee-egress-cut-block", remote="192.0.2.1"), PROFILES_ON, False, "missing"),
+    (_win_rule("zee-egress-cut-block"), PROFILES_ON.replace("ON", "OFF", 1), False, "missing"),
+    (_win_rule("zee-egress-cut-block").replace("Enabled:", "Activé :"), PROFILES_ON, False, "unverified"),
+])
+def test_windows_rule_must_be_enabled_outbound_block_in_active_profiles(tmp_path, monkeypatch, block, profiles,
+                                                                        expect, verified):
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, WIN_RULES,
+                                outputs=_win_outputs(block, GOOD_ALLOW, profiles))
+    assert ok is expect and rec["verified"] == verified
+
+
+
+def test_egress_readback_loader_error_is_unverified_not_missing(tmp_path, monkeypatch):
+    import subprocess
+    from zee.responder import cut_egress as egress_mod
+    monkeypatch.setattr(egress_mod.subprocess, "run",
+                        lambda argv, **k: subprocess.CompletedProcess(
+                            argv, 127, "", "nft: error while loading shared libraries: x.so: No such file or directory"))
+    ok, msg = egress_mod._run(["/sbin/nft", "list", "table", "inet", "zee_egress"])
+    assert ok is False and msg.startswith("launch failed")
+    monkeypatch.setattr(egress_mod, "_cut_egress_dispatch", lambda: (True, "rules installed", [NFT]))
+    monkeypatch.setattr(egress_mod, "sbin_which", lambda n: f"/sbin/{n}")
+    log = CutStateLog(tmp_path / "c.jsonl")
+    egress_mod.cut_egress(asset_id="t-host", cut_state=log)
+    assert _json.loads(log.path.read_text())["verified"] == "unverified"
+
+
+def test_windows_profiles_cover_every_rule(tmp_path, monkeypatch):
+    """The allow rule's profiles are collected too before profile states are judged."""
+    allow = _win_rule("zee-egress-cut-allow-local", action="Allow", remote="10.0.0.0/8", profiles="Public")
+    block = _win_rule("zee-egress-cut-block", profiles="Domain")
+    profiles = PROFILES_ON.replace("State                                 ON\nOk.\n\nPublic",
+                                   "State                                 ON\nOk.\n\nPublic").replace(
+        "Public Profile Settings:\n----\nState                                 ON",
+        "Public Profile Settings:\n----\nState                                 OFF")
+    ok, _d, rec = _egress_setup(monkeypatch, tmp_path, ["zee-egress-cut-block", "zee-egress-cut-allow-local"],
+                                outputs=_win_outputs(block, allow, profiles))
     assert ok is False and rec["verified"] == "missing"

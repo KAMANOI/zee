@@ -32,7 +32,7 @@ from ..errors import (
     Z606_RESTORE_UNVERIFIED,
 )
 from ..notifier.local import notify_local
-from ..responder.cut_egress import ZEE_RULE_TAG
+from ..responder.cut_egress import PF_ANCHOR, PF_LEGACY_ANCHOR, ZEE_RULE_TAG
 from ..responder.cut_full import (
     SENTINEL_LINUX_NMCLI,
     interface_states,
@@ -268,39 +268,56 @@ def _firewall_steps(platform: str) -> list[Step]:
     if platform == "linux":
         backends = [
             ("nft", lambda: _run(["nft", "delete", "table", "inet", "zee_egress"]),
-             ["nft", "list", "table", "inet", "zee_egress"], False),
-            ("iptables", _remove_iptables_chain, ["iptables", "-S", "ZEE_EGRESS"], False),
+             ["nft", "list", "table", "inet", "zee_egress"]),
+            ("iptables", _remove_iptables_chain, ["iptables", "-S", "ZEE_EGRESS"]),
         ]
     elif platform == "darwin":
         backends = [
-            ("pfctl", lambda: _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"]),
-             ["pfctl", "-a", ZEE_RULE_TAG, "-s", "rules"], True),
+            (f"pfctl {a}", (lambda a=a: _run(["pfctl", "-a", a, "-F", "all"])),
+             ["pfctl", "-a", a, "-s", "rules"])
+            for a in (PF_ANCHOR, PF_LEGACY_ANCHOR)
         ]
     elif platform == "win32":
         backends = [
             (f"netsh rule {r}",
              (lambda r=r: _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={r}"])),
-             ["netsh", "advfirewall", "firewall", "show", "rule", f"name={r}"], False)
+             ["netsh", "advfirewall", "firewall", "show", "rule", f"name={r}"])
             for r in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local")
         ]
     else:
         return [("firewall:unsupported-platform", False)]
     steps: list[Step] = []
-    for name, remove, show, empty_means_absent in backends:
+    for name, remove, show in backends:
         tool = show[0]
         if not _which(tool):
             steps.append((f"{name}:not-found", None))
             continue
         remove()  # the verdict is the re-read below, not the remove's exit code
-        steps.append((name, _verify_absent(show, empty_means_absent)))
+        steps.append((name, _verify_absent(tool, show)))
     return steps
 
 
-def _verify_absent(show: list[str], empty_means_absent: bool) -> bool:
+def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
+    """True = the backend itself answered "no such table / chain / rule";
+    False = the rule is still listed; None = anything else (launch or loader
+    failure, permission error, unexpected output) — never read as absent."""
     ok, msg = _run(show)
     if ok:
-        return empty_means_absent and not msg.strip()
-    return not msg.startswith(_LAUNCH_FAILED) and any(m in msg for m in _ABSENT_MARKERS)
+        if tool == "pfctl":
+            return not msg.strip()  # empty anchor = no rules
+        return False  # listed
+    if msg.startswith(_LAUNCH_FAILED):
+        return None
+    if tool == "nft":
+        absent = (msg.startswith("Error:") and "No such file or directory" in msg
+                  and "zee_egress" in msg)
+    elif tool == "iptables":
+        absent = msg.startswith("iptables") and "No chain/target/match by that name" in msg
+    elif tool == "netsh":
+        absent = "No rules match the specified criteria" in msg
+    else:
+        absent = False
+    return True if absent else None
 
 
 def _run_removal(cmd: list[str]) -> tuple[bool, str]:
@@ -365,6 +382,8 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
         cp = subprocess.run([exe, *cmd[1:]], capture_output=True, text=True, errors="replace", timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
         return False, f"{_LAUNCH_FAILED}{e}"
+    if cp.returncode in (126, 127):  # not executable / loader failure
+        return False, f"{_LAUNCH_FAILED}exit {cp.returncode}: {(cp.stderr or cp.stdout or '').strip()}"
     if cp.returncode != 0:
         return False, (cp.stderr or cp.stdout or "").strip()
     return True, (cp.stdout or "").strip()

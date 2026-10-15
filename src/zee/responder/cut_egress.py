@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 
 # A single rule name we own end-to-end, so recovery can find it back.
 ZEE_RULE_TAG = "zee-egress-cut"
+# pf only evaluates an anchor that the main ruleset references
+# (https://man.openbsd.org/pf.conf, "ANCHORS"). macOS's stock /etc/pf.conf
+# references `anchor "com.apple/*"`, so Zee loads its rules as a child of it.
+# The cut is confirmed only if the loaded main ruleset still references it.
+PF_ANCHOR = "com.apple/" + ZEE_RULE_TAG
+PF_LEGACY_ANCHOR = ZEE_RULE_TAG  # pre-fix cuts loaded here (never evaluated)
 
 
 def cut_egress(
@@ -59,9 +65,10 @@ _ABSENT = ("No such file or directory", "No chain/target/match by that name",
 
 def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
     """Read Zee's rules back. Returns ("confirmed" | "missing" | "unverified",
-    names of the checks that did not confirm). "missing" = the tool says the
-    rule is not there; "unverified" = tool absent / unreadable / odd output."""
-    checks: list[tuple[str, list[str], str]] = []  # (label, show command, text that must appear)
+    labels of the checks that did not confirm). "missing" = the tool says the
+    rule is not there or not in force; "unverified" = tool absent, output
+    unreadable or in an unexpected form."""
+    checks: list[tuple[str, list[str], object]] = []
     for m in modified:
         if m == SENTINEL_LINUX_NFT_EGRESS:
             checks.append(("nft", ["nft", "list", "table", "inet", "zee_egress"], "drop"))
@@ -69,26 +76,97 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
             checks.append(("iptables chain", ["iptables", "-S", "ZEE_EGRESS"], "-j DROP"))
             checks.append(("iptables jump", ["iptables", "-C", "OUTPUT", "-j", "ZEE_EGRESS"], ""))
         elif m == SENTINEL_MACOS_PFCTL_EGRESS:
-            checks.append(("pfctl rules", ["pfctl", "-a", ZEE_RULE_TAG, "-s", "rules"], "block"))
+            checks.append(("pfctl rules", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], "block"))
             checks.append(("pf enabled", ["pfctl", "-s", "info"], "Status: Enabled"))
+            checks.append(("pf anchor reference", ["pfctl", "-s", "rules"], _pf_anchor_referenced))
         else:  # Windows rule name
-            checks.append((m, ["netsh", "advfirewall", "firewall", "show", "rule", f"name={m}"], m))
+            checks.append((m, ["netsh", "advfirewall", "firewall", "show", "rule", f"name={m}"],
+                           _netsh_rule_check(m)))
+    if any(cmd[0] == "netsh" for _l, cmd, _m in checks):
+        # Last, so the Profiles of every rule above are already collected.
+        checks.append(("firewall profiles", ["netsh", "advfirewall", "show", "allprofiles", "state"], None))
     missing: list[str] = []
     unverified: list[str] = []
+    rule_profiles: set[str] = set()
     for label, cmd, must in checks:
         exe = sbin_which(cmd[0])
         if exe is None:
             unverified.append(label)
             continue
         ok, out = _run([exe, *cmd[1:]])
-        if ok and must in out:
-            continue
-        absent = (not ok and any(a in out for a in _ABSENT)) or (
-            ok and cmd[:2] == ["pfctl", "-a"] and not out.strip())  # empty anchor = no rules
-        (missing if absent else unverified).append(label)
+        if label == "firewall profiles":
+            verdict = _netsh_profiles_on(out, rule_profiles) if ok else "unverified"
+        elif callable(must):
+            verdict = must(out, rule_profiles) if ok else None
+        else:
+            verdict = "confirmed" if ok and must in out else None
+        if verdict is None:  # generic: tool's own "not there" answer, else unverified
+            absent = (not ok and not out.startswith("launch failed") and any(a in out for a in _ABSENT)) or (
+                ok and cmd[:2] == ["pfctl", "-a"] and not out.strip())  # empty anchor = no rules
+            verdict = "missing" if absent else "unverified"
+        if verdict == "missing":
+            missing.append(label)
+        elif verdict == "unverified":
+            unverified.append(label)
     if missing:
         return "missing", missing + unverified
     return ("unverified", unverified) if unverified else ("confirmed", [])
+
+
+def _pf_anchor_referenced(out: str, _profiles: set[str]) -> str:
+    # A filter `anchor` line at the start of a rule: scrub-/nat-/rdr-anchor
+    # lines merely contain the same text and do not evaluate filter rules.
+    refs = ('anchor "com.apple/*"', f'anchor "{PF_ANCHOR}"')
+    hit = any(line.strip().startswith(r) for line in out.splitlines() for r in refs)
+    return "confirmed" if hit else "missing"
+
+
+# Forms netsh may show for the block rule's remoteip (Zee sets 0.0.0.0/0).
+# ponytail: exact display not checked on a real Windows host; any other form
+# is "missing" (the cut is then reported FAILED, never applied).
+_ANY_V4 = ("0.0.0.0/0", "0.0.0.0-255.255.255.255", "Any")
+
+
+def _netsh_rule_check(name: str):
+    """`netsh advfirewall firewall show rule` must show the rule enabled,
+    outbound, with the action and remote range Zee set. English field names
+    only: any other form is unverified."""
+    want_action = "Block" if name.endswith("-block") else "Allow"
+
+    def check(out: str, profiles: set[str]) -> str:
+        fields: dict[str, str] = {}
+        for line in out.splitlines():
+            key, sep, value = line.partition(":")
+            if sep:
+                fields.setdefault(key.strip(), value.strip())
+        need = ("Enabled", "Direction", "Action", "RemoteIP", "Profiles")
+        if fields.get("Rule Name") != name or any(k not in fields for k in need):
+            return "unverified"
+        profiles.update(p.strip() for p in fields["Profiles"].split(",") if p.strip())
+        if fields["Enabled"] != "Yes" or fields["Direction"] != "Out" or fields["Action"] != want_action:
+            return "missing"
+        if want_action == "Block" and fields["RemoteIP"] not in _ANY_V4:
+            return "missing"
+        return "confirmed"
+    return check
+
+
+def _netsh_profiles_on(out: str, profiles: set[str]) -> str:
+    """Every profile the block rule applies to must have the firewall ON
+    (`netsh advfirewall show allprofiles state`)."""
+    state: dict[str, str] = {}
+    current = None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.endswith("Profile Settings:"):
+            current = line.split()[0]
+        elif current and line.startswith("State"):
+            state[current] = line.split()[-1]
+    wanted = profiles or {"Domain", "Private", "Public"}
+    if any(p not in state for p in wanted):
+        return "unverified"
+    return "confirmed" if all(state[p] == "ON" for p in wanted) else "missing"
+
 
 
 def _cut_egress_dispatch() -> tuple[bool, str, list[str]]:
@@ -160,7 +238,7 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
     )
     try:
         cp = subprocess.run(
-            ["pfctl", "-a", ZEE_RULE_TAG, "-f", "-"],
+            ["pfctl", "-a", PF_ANCHOR, "-f", "-"],
             input=rules,
             capture_output=True,
             text=True,
@@ -175,7 +253,7 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
     ok, msg = _run(["pfctl", "-e"])
     if not ok and "already enabled" not in msg:
         return False, f"pfctl -e failed: {msg}", [SENTINEL_MACOS_PFCTL_EGRESS]
-    return True, f"pfctl anchor {ZEE_RULE_TAG} loaded", [SENTINEL_MACOS_PFCTL_EGRESS]
+    return True, f"pfctl anchor {PF_ANCHOR} loaded", [SENTINEL_MACOS_PFCTL_EGRESS]
 
 
 def _cut_egress_windows() -> tuple[bool, str, list[str]]:
@@ -211,6 +289,8 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
         cp = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
         return False, str(e)
+    if cp.returncode in (126, 127):  # not executable / loader failure: never "absent"
+        return False, f"launch failed: exit {cp.returncode}: {(cp.stderr or cp.stdout or '').strip()}"
     if cp.returncode != 0:
         return False, (cp.stderr or cp.stdout or "").strip()
     return True, (cp.stdout or "").strip()

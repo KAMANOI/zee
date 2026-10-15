@@ -27,10 +27,14 @@ Not in any tagged release yet.
   cleared, need `--all-interfaces` once.
 - **`zee restore` reports success only after re-reading the OS.** On both
   paths, Zee's own fixed-name firewall rules (nft `inet zee_egress`,
-  iptables `ZEE_EGRESS`, pfctl anchor `zee-egress-cut`, netsh
+  iptables `ZEE_EGRESS`, pfctl anchors `com.apple/zee-egress-cut` and the
+  legacy `zee-egress-cut`, netsh
   `zee-egress-cut-block` / `-allow-local`; host-wide, not per asset) are
   removed on every backend of the OS regardless of the ledger, then
-  listed again: still present or unreadable fails (Z601). A backend whose
+  listed again: still listed fails (Z601); only the backend's own
+  "no such table / chain / rule" answer counts as gone, while a
+  loader error (exit 126/127), permission error or unexpected answer is
+  unverified (Z606). A backend whose
   tool is not installed cannot be checked: restore exits 1 with the new
   **Z606 (unverified)** and the cut stays unresolved — on a Linux host
   with only one of nft / iptables this is expected; read the per-step
@@ -59,7 +63,13 @@ Not in any tagged release yet.
   failure, and so does a full cut whose changed interfaces / services
   do not read back as disabled, and so does an egress cut whose
   Zee-named rules are not listed back by the same backend (nft table,
-  iptables chain + OUTPUT jump, pf anchor + pf enabled, netsh rules);
+  iptables chain + OUTPUT jump; pf anchor + pf enabled + the main
+  ruleset referencing the anchor; each netsh rule enabled, outbound,
+  with the expected action and range, in profiles whose firewall is ON);
+  on macOS the rules now load under `com.apple/zee-egress-cut`, because
+  pf only evaluates anchors the main ruleset references and the stock
+  macOS ruleset references `com.apple/*` (the old top-level anchor was
+  never evaluated);
   the cut record stores the read-back result (`verified`). Tool output
   in an undecodable code page no longer raises mid-cut. A macOS egress
   cut also fails when its
