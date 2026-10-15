@@ -1,0 +1,197 @@
+name: Privsep (virtual runners)
+
+# Root cut daemon + a separate business user, measured on GitHub's disposable
+# runners only (docs/design/privsep.md). Creates users and a system service,
+# so it never runs on PRs (a fork's PR must not drive root on the runner).
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/privsep-stage2]
+    paths:
+      - .github/workflows/privsep.yml
+      - scripts/privsep_ci.sh
+      - examples/privsep/**
+      - src/zee/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    # Daemon under the shipped systemd unit, inside a network namespace
+    # (NetworkNamespacePath): its real cut never touches the runner's own link.
+    name: Linux systemd / root daemon + zeework / real egress cut
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
+      - name: Tools, users, root-owned code
+        run: |
+          set -eux
+          sudo apt-get update -qq && sudo apt-get install -y -qq nftables jq
+          /usr/bin/python3 --version
+          sudo useradd -m -s /bin/bash zeework
+          sudo useradd -m -s /bin/bash -G zeework zeeother   # can open the socket, uid not allowed
+          sudo mkdir -p /opt/zee && sudo cp -R src /opt/zee/
+          sudo chown -R root:root /opt/zee && sudo chmod -R go-w /opt/zee
+      - name: Namespace with a non-private test server on the host side
+        run: |
+          set -eux
+          sudo ip netns add zt
+          sudo ip link add zt-host type veth peer name zt-in
+          sudo ip link set zt-in netns zt
+          sudo ip addr add 198.51.100.1/24 dev zt-host
+          sudo ip link set zt-host up
+          sudo ip netns exec zt ip addr add 198.51.100.2/24 dev zt-in
+          sudo ip netns exec zt ip link set zt-in up
+          sudo ip netns exec zt ip link set lo up
+          nohup python3 -m http.server 8080 --bind 198.51.100.1 > /tmp/http.log 2>&1 &
+          sudo ip netns exec zt curl -sS -m 3 --retry 10 --retry-delay 1 --retry-connrefused \
+            -o /dev/null -w '%{http_code}\n' http://198.51.100.1:8080/
+      - name: Configs (watch user's file; the daemon's approved root-owned copy)
+        run: |
+          set -eux
+          sudo -u zeework mkdir -p /home/zeework/zee /home/zeework/decoys
+          sudo -u zeework tee /home/zeework/zee/assets.toml >/dev/null <<'EOF'
+          dry_run = false
+          [privsep]
+          socket = "/run/zee/cutd.sock"
+          [[assets]]
+          id = "ws"
+          response_mode = "auto"
+          cut_method = "egress"
+          decoy_paths = ["/home/zeework/decoys/secret-plan.txt"]
+          EOF
+          sudo install -d -m 700 -o root -g root /var/lib/zee-cutd
+          sudo install -m 600 -o root -g root /home/zeework/zee/assets.toml /var/lib/zee-cutd/assets.toml
+      - name: Install and start the shipped unit
+        run: |
+          set -eux
+          sed -e "s/WATCH_UID/$(id -u zeework)/" -e "s/WATCH_GROUP/zeework/" \
+              -e "s#WATCH_CONFIG#/home/zeework/zee/assets.toml#" examples/privsep/zee-cutd.service \
+            | sudo tee /etc/systemd/system/zee-cutd.service
+          sudo mkdir -p /etc/systemd/system/zee-cutd.service.d
+          printf '[Service]\nNetworkNamespacePath=/run/netns/zt\n' \
+            | sudo tee /etc/systemd/system/zee-cutd.service.d/netns.conf
+          sudo systemctl daemon-reload
+          sudo systemctl start zee-cutd
+          for _ in $(seq 20); do test -S /run/zee/cutd.sock && break; sleep 0.5; done
+          sudo systemctl status zee-cutd --no-pager
+          ls -l /run/zee/cutd.sock
+      - name: Approver key (runner user only) and root bootstrap
+        run: |
+          set -eux
+          install -d -m 700 "$RUNNER_TEMP/approver"
+          openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
+          openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
+          sudo env PYTHONPATH=/opt/zee/src /usr/bin/python3 -m zee privsep bootstrap-key \
+            --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /run/zee/cutd.sock
+      - name: Checks
+        env:
+          PY: /usr/bin/python3
+          ZEE_SRC: /opt/zee/src
+          SOCK: /run/zee/cutd.sock
+          STATE: /var/lib/zee-cutd
+          WATCH_USER: zeework
+          OUTSIDER: zeeother
+          DAEMON_PID_CMD: systemctl show -p MainPID --value zee-cutd
+          STOP_AS_USER_CMD: sudo -u zeework systemctl --no-ask-password stop zee-cutd 2>/dev/null
+          ACTIVE_CMD: systemctl is-active --quiet zee-cutd
+          REAL_CUT: '1'
+          TEST_URL: http://198.51.100.1:8080/
+          DECOY: /home/zeework/decoys/secret-plan.txt
+          WATCH_CONFIG: /home/zeework/zee/assets.toml
+        run: |
+          export KEY="$RUNNER_TEMP/approver/k.pem"
+          bash scripts/privsep_ci.sh
+      - name: Logs
+        if: always()
+        run: |
+          sudo journalctl -u zee-cutd --no-pager | tail -50 || true
+          sudo cat /var/lib/zee-cutd/admin.jsonl || true
+          sudo cat /var/lib/zee-cutd/cut_state.jsonl || true
+          sudo nft list ruleset || true
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo systemctl stop zee-cutd || true
+          sudo ip netns del zt || true
+
+  macos:
+    # LaunchDaemon + LOCAL_PEERCRED across real users. No cut here (the
+    # runner's network is not ours to cut; macOS cuts are in real-cut.yml).
+    name: macOS launchd / root daemon + zeework / peer credentials
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
+      - name: Python readable by every user, root-owned code, a second user
+        run: |
+          set -eux
+          PY=/opt/homebrew/bin/python3
+          "$PY" -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          Z="/Library/Application Support/Zee"
+          sudo mkdir -p "$Z" && sudo cp -R src "$Z/"
+          sudo chown -R root:wheel "$Z" && sudo chmod -R go-w "$Z"
+          sudo dscl . -create /Users/zeework
+          sudo dscl . -create /Users/zeework UserShell /bin/bash
+          sudo dscl . -create /Users/zeework UniqueID 550
+          sudo dscl . -create /Users/zeework PrimaryGroupID 20
+          sudo dscl . -create /Users/zeework NFSHomeDirectory /var/empty
+          id zeework
+          sudo -u zeework "$PY" -c 'print("python ok for zeework")'
+          brew list jq >/dev/null 2>&1 || brew install jq
+      - name: Install and bootstrap the shipped LaunchDaemon
+        run: |
+          set -eux
+          Z="/Library/Application Support/Zee"
+          sudo install -d -m 700 -o root -g wheel "$Z/cutd"
+          printf '[[assets]]\nid = "ws"\nresponse_mode = "auto"\ncut_method = "egress"\n' > /tmp/assets.toml
+          sudo install -m 600 -o root -g wheel /tmp/assets.toml "$Z/cutd/assets.toml"
+          # staff (20): the runner user can open the socket too, but its uid is not allowed
+          sed -e "s#PYTHON_BIN#$PY#" -e "s/WATCH_UID/550/" -e "s/WATCH_GROUP/20/" \
+              -e "s#WATCH_CONFIG#/tmp/assets.toml#" examples/privsep/io.github.kamanoi.zee-cutd.plist \
+            | sudo tee /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
+          sudo chown root:wheel /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
+          sudo chmod 644 /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
+          plutil -lint /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
+          sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
+          for _ in $(seq 20); do test -S /var/run/zee/cutd.sock && break; sleep 0.5; done
+          sudo launchctl print system/io.github.kamanoi.zee-cutd | head -30
+          ls -l /var/run/zee/cutd.sock
+      - name: Approver key (runner user only) and root bootstrap
+        run: |
+          set -eux
+          install -d -m 700 "$RUNNER_TEMP/approver"
+          openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
+          openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
+          sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -m zee privsep bootstrap-key \
+            --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /var/run/zee/cutd.sock
+      - name: Checks
+        env:
+          ZEE_SRC: /Library/Application Support/Zee/src
+          SOCK: /var/run/zee/cutd.sock
+          STATE: /Library/Application Support/Zee/cutd
+          WATCH_USER: zeework
+          OUTSIDER: runner
+          DAEMON_PID_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd | awk '/^\tpid = /{print $3; exit}'
+          STOP_AS_USER_CMD: sudo -u zeework launchctl bootout system/io.github.kamanoi.zee-cutd 2>/dev/null
+          ACTIVE_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd 2>/dev/null | grep -q 'state = running'
+        run: |
+          export KEY="$RUNNER_TEMP/approver/k.pem"
+          bash scripts/privsep_ci.sh
+      - name: Logs
+        if: always()
+        run: |
+          sudo cat /var/log/zee-cutd.log || true
+          sudo cat "/Library/Application Support/Zee/cutd/admin.jsonl" || true
+          sudo launchctl print system/io.github.kamanoi.zee-cutd 2>/dev/null | head -40 || true

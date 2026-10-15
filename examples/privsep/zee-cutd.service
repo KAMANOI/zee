@@ -1,0 +1,27 @@
+# Zee cut daemon (privsep prototype) — docs/design/privsep.md
+# Install as root: /etc/systemd/system/zee-cutd.service (root:root 0644).
+# Replace WATCH_UID / WATCH_GROUP / WATCH_CONFIG with the user that runs
+# `zee watch`. The code under /opt/zee must be root-owned (0755 dirs, 0644 files).
+[Unit]
+Description=Zee cut daemon (privsep prototype)
+After=network.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/opt/zee/src
+ExecStart=/usr/bin/python3 -m zee privsep daemon --state-dir /var/lib/zee-cutd --socket /run/zee/cutd.sock --allow-uid WATCH_UID --group WATCH_GROUP --watch-config WATCH_CONFIG
+# A signed `stop` exits 0 and must stay stopped; a crash restarts.
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=zee
+RuntimeDirectoryMode=0755
+StateDirectory=zee-cutd
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Zee cut daemon (privsep prototype) — docs/design/privsep.md
+     Install as root: /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist (root:wheel 0644).
+     Replace PYTHON_BIN (Python 3.11+, readable by root) / WATCH_UID / WATCH_GROUP / WATCH_CONFIG. The code under
+     /Library/Application Support/Zee/src must be root-owned (0755 dirs, 0644 files). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>io.github.kamanoi.zee-cutd</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>PYTHON_BIN</string>
+    <string>-m</string><string>zee</string>
+    <string>privsep</string><string>daemon</string>
+    <string>--state-dir</string><string>/Library/Application Support/Zee/cutd</string>
+    <string>--socket</string><string>/var/run/zee/cutd.sock</string>
+    <string>--allow-uid</string><string>WATCH_UID</string>
+    <string>--group</string><string>WATCH_GROUP</string>
+    <string>--watch-config</string><string>WATCH_CONFIG</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PYTHONPATH</key><string>/Library/Application Support/Zee/src</string></dict>
+  <key>RunAtLoad</key><true/>
+  <!-- A signed `stop` exits 0 and must stay stopped; a crash restarts. -->
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>Umask</key><integer>63</integer>
+  <key>StandardErrorPath</key><string>/var/log/zee-cutd.log</string>
+</dict>
+</plist>
