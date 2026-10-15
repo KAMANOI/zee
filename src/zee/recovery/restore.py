@@ -425,9 +425,14 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
         # Ubuntu runner); the answer is the line after it.
         msg = "\n".join(ln for ln in msg.splitlines() if not ln.startswith("# Warning:")).strip()
         # "Table does not exist": that backend's filter table was never set
-        # up, so no chain of Zee's can be in it.
+        # up, so no chain of Zee's can be in it. "Address family not
+        # supported by protocol": ip6tables-legacy could not open its IPv6
+        # socket (libiptc TC_INIT: socket(AF_INET6) fails with EAFNOSUPPORT,
+        # printed via strerror) -- the kernel has no IPv6 (ipv6.disable=1),
+        # so no IPv6 chain can exist.
         absent = msg.startswith(("iptables", "ip6tables")) and (
-            "No chain/target/match by that name" in msg or "Table does not exist" in msg)
+            "No chain/target/match by that name" in msg or "Table does not exist" in msg
+            or (tool in _IP6TABLES and "Address family not supported by protocol" in msg))
     elif tool == "netsh":
         absent = "No rules match the specified criteria" in msg
     else:

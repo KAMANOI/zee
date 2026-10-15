@@ -156,3 +156,7 @@ def test_probe_family_is_not_chosen_by_url():
     """Codex round 4: --url and --url6 may be the same URL."""
     src = (Path(__file__).resolve().parent.parent / "scripts" / "real_cut_check.py").read_text()
     assert "== args.url6" not in src and "def probe(v6_probe: bool = False)" in src
+
+
+def test_workflow_runs_when_the_ledger_format_changes():
+    assert "src/zee/telemetry/cut_state.py" in WF

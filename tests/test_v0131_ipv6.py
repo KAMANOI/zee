@@ -227,3 +227,52 @@ def test_record_with_only_the_ipv6_chain_gets_an_unknown_backend(tmp_path):
     log = CutStateLog(tmp_path / "c.jsonl")
     log.record_cut(asset_id="a", method="egress", platform="linux", modified=[IP6T])
     assert full_mod.IPT_BACKEND_PREFIX + "unknown" in log.latest_unresolved_for("a").modified
+
+
+# ── 4-persona review of v0.13.1 ───────────────────────────────────────
+
+# libiptc TC_INIT: socket(AF_INET6, ...) fails with EAFNOSUPPORT when the
+# kernel has no IPv6; TC_STRERROR has no entry for it, so strerror() prints:
+NO_V6 = ("ip6tables v1.8.7 (legacy): can't initialize ip6tables table `filter': "
+         "Address family not supported by protocol")
+
+
+def test_ipv6_disabled_kernel_answer_is_absent_for_ip6tables_only(monkeypatch):
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, NO_V6))
+    assert restore_mod._verify_absent("ip6tables-legacy", ["ip6tables-legacy", "-S", "ZEE_EGRESS"]) is True
+    msg4 = NO_V6.replace("ip6tables", "iptables")
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (False, msg4))
+    assert restore_mod._verify_absent("iptables-legacy", ["iptables-legacy", "-S", "ZEE_EGRESS"]) is None
+
+
+def test_ipv6_disabled_kernel_needs_no_ipv6_rule(monkeypatch):
+    calls = _linux(monkeypatch, {"iptables", "ip6tables"},
+                   {"iptables": "iptables v1.8.7 (legacy)", "ip6tables": "ip6tables v1.8.7 (legacy)"})
+    monkeypatch.setattr(egress_mod, "_kernel_has_ipv6", lambda: False)
+    ok, detail, modified = egress_mod._cut_egress_linux()
+    assert ok is True and "IPv6 is disabled in the kernel" in detail and "NOT blocked" not in detail
+    assert IP6T not in modified and not any(c[0].startswith("ip6tables") for c in calls)
+
+
+@pytest.mark.parametrize("err, has", [(97, False), (13, True), (None, True)])
+def test_kernel_has_ipv6(monkeypatch, err, has):
+    import errno as errno_mod
+
+    class Sock:
+        def __init__(self, *a):
+            if err is not None:
+                code = errno_mod.EAFNOSUPPORT if err == 97 else errno_mod.EACCES
+                raise OSError(code, "x")
+
+        def close(self):
+            pass
+    monkeypatch.setattr(egress_mod.socket, "socket", Sock)
+    assert egress_mod._kernel_has_ipv6() is has
+
+
+def test_ip6tables_failure_says_the_ipv4_chain_stays(monkeypatch):
+    _linux(monkeypatch, {"iptables", "ip6tables"},
+           {"iptables": "iptables v1.8.7 (legacy)", "ip6tables": "ip6tables v1.8.7 (legacy)"},
+           fail=("ip6tables", "-A"))
+    ok, detail, _m = egress_mod._cut_egress_linux()
+    assert ok is False and detail.startswith("iptables ZEE_EGRESS chain installed, but ip6tables -A")

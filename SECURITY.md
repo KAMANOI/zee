@@ -157,6 +157,13 @@ honestly-published boundaries of what Zee is and is not:
   loopback only. Operators who rely on APIPA addresses, or on IPv6
   link-local / ULA LANs with nft or pf, should review the egress rules
   before enabling `cut_egress`.
+- **VPNs and overlays on private / ULA addresses are not stopped by the
+  egress cut.** If an overlay or VPN (Tailscale `fd7a:115c:a1e0::/48`,
+  ZeroTier, or an IPv4 VPN routing RFC 1918 space) reaches remote peers
+  over private IPv4 or ULA addresses, traffic to them passes as "local",
+  so data can still leave over it. Use `cut_method: full` on such hosts.
+  The paths also differ: IPv6 link-local and ULA pass on the iptables and
+  Windows paths and are blocked on the nft and pf paths.
 - **Outbound IPv6 (fixed in v0.13.1).** Up to v0.13.0 the `iptables` path
   (Linux without `nft`) and the Windows `netsh` rule covered IPv4 only,
   so outbound IPv6 was not stopped there. Since v0.13.1 the `iptables`
@@ -166,8 +173,11 @@ honestly-published boundaries of what Zee is and is not:
   well. Measured on Linux (network namespace; nft, iptables nf_tables
   and legacy). **On Windows, IPv6 traffic stopping is not measured**
   (the runner has no outbound IPv6); the rule was accepted and read back
-  as set. A Linux host with IPv6 disabled in the kernel can make
-  ip6tables fail; the cut then reports FAILED although no IPv6 can leave.
+  as set. On a Linux kernel without IPv6 (`ipv6.disable=1`: an IPv6
+  socket cannot be opened, EAFNOSUPPORT), the iptables cut adds no IPv6
+  rule and says so ("IPv6 is disabled in the kernel"); restore treats
+  ip6tables' "Address family not supported by protocol" answer as no
+  IPv6 chain (libiptc cannot open its IPv6 socket there).
 - **On macOS and Windows the egress cut stops new connections;
   connections opened before the cut may continue.** pf passes packets
   that match an existing state entry without evaluating the new rules,

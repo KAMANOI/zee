@@ -42,8 +42,16 @@ update.** Up to v0.13.0 those two paths did not stop outbound IPv6.
 ### Known limitations
 
 - **Windows: IPv6 traffic stopping is not measured** (see above).
-- **Linux with IPv6 disabled in the kernel:** ip6tables can fail, and the
-  cut then reports FAILED although no IPv6 can leave (the safe direction).
+- **Linux with IPv6 disabled in the kernel** (`ipv6.disable=1`): the
+  iptables cut checks that an IPv6 socket cannot be opened (EAFNOSUPPORT)
+  and then adds no IPv6 rule, saying so in the result; restore reads
+  ip6tables' "Address family not supported by protocol" (libiptc's
+  strerror of the failed IPv6 socket) as no IPv6 chain, so nft and full
+  restores do not turn unverified (Z606) on such hosts. Not measured.
+- **VPNs and overlays on private / ULA addresses** (Tailscale
+  `fd7a:115c:a1e0::/48`, ZeroTier, IPv4 VPNs over RFC 1918) are passed as
+  "local", so the egress cut does not stop traffic to remote peers over
+  them; use `cut_method: full` there.
 - **Linux full cut and static IPv6 addresses:** `ip link down` flushes
   static IPv6 addresses by default (`keep_addr_on_down=0`). Addresses not
   re-created by SLAAC / DHCPv6 / NetworkManager do not come back on

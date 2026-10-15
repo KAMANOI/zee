@@ -136,6 +136,12 @@ v0.3 で解消済みです。以下は、現時点の Zee が「できること�
   （`ff02::/16`。近隣探索に使う）を通します。`nftables` と `pfctl` の経路が通す IPv6 は
   ループバックだけです。APIPA アドレスや、nft・pf の端末で IPv6 のリンクローカル／ULA の
   LAN を使っている場合は、`cut_egress` を有効にする前に遮断ルールを確認してください。
+- **私用アドレス・ULA を使う VPN・オーバーレイは、egress 遮断では止まりません。**
+  Tailscale（`fd7a:115c:a1e0::/48`）・ZeroTier などのオーバーレイや、RFC 1918 の範囲を
+  流す IPv4 の VPN が、私用アドレスや ULA で遠くの相手につながっている場合、その宛先は
+  「ローカル」として通るため、そこから持ち出せます。そうした端末では `cut_method: full` を
+  使ってください。経路による違いもあります：IPv6 のリンクローカル・ULA は iptables・
+  Windows の経路では通し、nft・pf の経路では止めます。
 - **IPv6 の外向き通信（v0.13.1 で修正）。** v0.13.0 までは `iptables` の経路（`nft` の
   無い Linux）と Windows の `netsh` の規則が IPv4 だけを対象にしており、IPv6 の外向き
   通信は止まりませんでした。v0.13.1 から `iptables` の経路は同じバックエンドの ip6tables
@@ -144,7 +150,10 @@ v0.3 で解消済みです。以下は、現時点の Zee が「できること�
   Linux（ネットワーク名前空間。nft・iptables nf_tables 版・legacy 版）で実測済みです。
   **Windows で IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が
   無いため。規則が入り、読み直しで一致することは確認）。カーネルで IPv6 を無効にした
-  Linux では ip6tables が失敗しうるため、IPv6 が出られなくても遮断は FAILED と出ます。
+  Linux（`ipv6.disable=1`。IPv6 のソケットが開けない＝EAFNOSUPPORT）では、iptables の
+  遮断は IPv6 の規則を入れず、結果にそう書きます（「IPv6 is disabled in the kernel」）。
+  復旧は ip6tables の「Address family not supported by protocol」という応答を
+  「IPv6 のチェーンは無い」と扱います（libiptc がそこで IPv6 のソケットを開けないため）。
 - **macOS・Windows の外向き遮断が止めるのは新しい接続です。遮断の前から開いていた
   接続は続く場合があります。** pf は状態表に載った接続のパケットを新しい規則で
   評価し直さず、Windows ファイアウォールも接続を張る時に規則を当てます。Linux の
