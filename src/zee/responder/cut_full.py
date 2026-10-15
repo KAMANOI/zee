@@ -21,6 +21,7 @@ from typing import Optional
 
 from ..telemetry.cut_state import (  # noqa: F401 - re-exported
     IPT_BACKEND_PREFIX,
+    SENTINEL_LINUX_IP6TABLES_EGRESS,
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NMCLI,
     CutStateLog,

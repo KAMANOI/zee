@@ -37,6 +37,7 @@ from ..responder.cut_full import (
     IPT_BACKEND_PREFIX,
     PF_TOKEN_PREFIX,
     iptables_backend,
+    SENTINEL_LINUX_IP6TABLES_EGRESS,
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_LINUX_NMCLI,
@@ -185,9 +186,9 @@ def _recorded_targets(cut_state: CutStateLog, asset_id: str) -> Optional[tuple[s
 
 
 # What the emergency restore assumes when the ledger cannot be read: an
-# iptables cut on an unknown backend may exist, so both backends must be
-# readable (on Linux; ignored elsewhere).
-_LEDGER_UNREADABLE = (IPT_BACKEND_PREFIX + "unknown",)
+# iptables / ip6tables cut on an unknown backend may exist, so both backends
+# must be readable by both tools (on Linux; ignored elsewhere).
+_LEDGER_UNREADABLE = (IPT_BACKEND_PREFIX + "unknown", SENTINEL_LINUX_IP6TABLES_EGRESS)
 
 
 def _recorded_firewall(cut_state: CutStateLog, asset_id: str) -> tuple[str, ...]:
@@ -295,6 +296,7 @@ _ABSENT_MARKERS = (
 # or nf_tables), and `iptables` may point at either; the cut used whichever
 # `iptables` was then, so restore checks every one installed now.
 _IPTABLES = ("iptables", "iptables-legacy", "iptables-nft")
+_IP6TABLES = ("ip6tables", "ip6tables-legacy", "ip6tables-nft")
 
 
 def _firewall_steps(platform: str, recorded: tuple[str, ...] = ()) -> list[Step]:
@@ -316,6 +318,9 @@ def _firewall_steps(platform: str, recorded: tuple[str, ...] = ()) -> list[Step]
             (SENTINEL_LINUX_IPTABLES_EGRESS, "iptables", [
                 (t, (lambda t=t: _remove_iptables_chain(t)), [t, "-S", "ZEE_EGRESS"])
                 for t in _IPTABLES]),
+            (SENTINEL_LINUX_IP6TABLES_EGRESS, "ip6tables", [
+                (t, (lambda t=t: _remove_iptables_chain(t)), [t, "-S", "ZEE_EGRESS"])
+                for t in _IP6TABLES]),
         ]
     elif platform == "darwin":
         groups = [(SENTINEL_MACOS_PFCTL_EGRESS, "pfctl", [
@@ -354,20 +359,27 @@ def _iptables_backend_coverage(recorded: tuple[str, ...]) -> list[Step]:
     """An iptables cut must be read back by a tool of the same kernel
     backend (legacy / nf_tables): `iptables` may point at the other one now.
     The record names the backend; a record without it (before v0.13.0)
-    needs both. No tool for a needed backend = None (unverified)."""
+    needs both. The ip6tables chain (v0.13.1+, same backend) is needed only
+    when recorded. No tool for a needed backend = None (unverified)."""
     need = {r.removeprefix(IPT_BACKEND_PREFIX) for r in recorded if r.startswith(IPT_BACKEND_PREFIX)}
     if "unknown" in need or (not need and SENTINEL_LINUX_IPTABLES_EGRESS in recorded):
         need = (need - {"unknown"}) | {"legacy", "nf_tables"}
     if not need:
         return []
-    covered: set[str] = set()
-    for tool in _IPTABLES:
-        if _which(tool):
-            ok, out = _run([tool, "--version"])
-            backend = iptables_backend(out) if ok else None
-            if backend:
-                covered.add(backend)
-    return [(f"iptables {b} backend:not-found", None) for b in sorted(need - covered)]
+    steps: list[Step] = []
+    families = [("iptables", _IPTABLES)]
+    if SENTINEL_LINUX_IP6TABLES_EGRESS in recorded:
+        families.append(("ip6tables", _IP6TABLES))
+    for label, tools in families:
+        covered: set[str] = set()
+        for tool in tools:
+            if _which(tool):
+                ok, out = _run([tool, "--version"])
+                backend = iptables_backend(out) if ok else None
+                if backend:
+                    covered.add(backend)
+        steps += [(f"{label} {b} backend:not-found", None) for b in sorted(need - covered)]
+    return steps
 
 
 def _release_pf_tokens(recorded: tuple[str, ...]) -> list[Step]:
@@ -407,14 +419,14 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
     if tool == "nft":
         absent = (msg.startswith("Error:") and "No such file or directory" in msg
                   and "zee_egress" in msg)
-    elif tool in _IPTABLES:
+    elif tool in _IPTABLES or tool in _IP6TABLES:
         # iptables-nft first prints "# Warning: iptables-legacy tables
         # present, ..." when the other backend has tables (seen on GitHub's
         # Ubuntu runner); the answer is the line after it.
         msg = "\n".join(ln for ln in msg.splitlines() if not ln.startswith("# Warning:")).strip()
         # "Table does not exist": that backend's filter table was never set
         # up, so no chain of Zee's can be in it.
-        absent = msg.startswith("iptables") and (
+        absent = msg.startswith(("iptables", "ip6tables")) and (
             "No chain/target/match by that name" in msg or "Table does not exist" in msg)
     elif tool == "netsh":
         absent = "No rules match the specified criteria" in msg

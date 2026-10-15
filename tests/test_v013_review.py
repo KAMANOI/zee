@@ -228,10 +228,12 @@ def test_token_entry_is_not_read_back_as_a_rule(tmp_path, monkeypatch):
 
 
 def test_iptables_and_windows_cuts_say_ipv6_is_not_blocked(monkeypatch):
-    monkeypatch.setattr(egress_mod.shutil, "which", lambda n: f"/sbin/{n}" if n != "nft" else None)
+    """v0.13.1: both paths block IPv6 now; an iptables cut without a usable
+    ip6tables is a failure that says so (tests/test_v0131_ipv6.py)."""
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda n: f"/sbin/{n}" if n == "iptables" else None)
     monkeypatch.setattr(egress_mod, "_run", lambda cmd: (True, ""))
-    assert "IPv6 NOT blocked" in egress_mod._cut_egress_linux()[1]
-    assert "IPv6 NOT blocked" in egress_mod._cut_egress_windows()[1]
+    ok, detail, _m = egress_mod._cut_egress_linux()
+    assert ok is False and "IPv6 NOT blocked" in detail
 
 
 # ── 4-persona #14: a failed cut says so, with a code; no dead restore hint ──

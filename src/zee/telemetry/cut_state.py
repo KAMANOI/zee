@@ -41,6 +41,8 @@ def default_cut_state_path() -> Path:
 SENTINEL_LINUX_NMCLI = "__zee_nmcli_networking__"
 # iptables egress cut and the kernel backend its `iptables` used.
 SENTINEL_LINUX_IPTABLES_EGRESS = "__zee_iptables_egress_chain__"
+# ip6tables chain of the same cut (v0.13.1+; same backend as iptables).
+SENTINEL_LINUX_IP6TABLES_EGRESS = "__zee_ip6tables_egress_chain__"
 IPT_BACKEND_PREFIX = "__zee_iptables_backend__:"
 
 
@@ -95,7 +97,7 @@ def _parse(raw: object) -> "CutRecord | str":
     if not isinstance(modified, list) or not modified or \
             not all(isinstance(m, str) and m for m in modified):
         raise ValueError("modified must be a non-empty list of names")
-    if SENTINEL_LINUX_IPTABLES_EGRESS in modified and not any(
+    if (SENTINEL_LINUX_IPTABLES_EGRESS in modified or SENTINEL_LINUX_IP6TABLES_EGRESS in modified) and not any(
             m.startswith(IPT_BACKEND_PREFIX) for m in modified):
         # Per record, before records are merged: an iptables cut that did not
         # say its backend (before v0.13.0) stays "unknown" even when a later

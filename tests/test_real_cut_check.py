@@ -90,3 +90,29 @@ def test_mac_script_snapshot_fails_when_an_anchor_read_fails():
     body = SH.split("snapshot() {", 1)[1].split("\n}\n", 1)[0]
     assert 'r="$(pfctl -a "$a" -s rules 2>/dev/null)" || return 1' in body
     assert "|| true" not in body
+
+
+# ── v0.13.1: IPv6 ─────────────────────────────────────────────────────
+
+V6 = {"before": {"reachable": True}, "during": {"reachable": False}, "after": {"reachable": True}}
+
+
+@pytest.mark.parametrize("change, status", [
+    ({}, "passed"),
+    ({"before": {"reachable": False}}, "unmeasured"),  # no IPv6 path: never a pass
+    ({"during": {"reachable": True}}, "failed"),
+    ({"after": {"reachable": False}}, "failed"),
+])
+def test_ipv6_status(change, status):
+    assert rcc.ipv6_status({**V6, **change}) == status
+
+
+@pytest.mark.parametrize("status, expect", [("passed", True), ("unmeasured", False), ("failed", False)])
+def test_required_ipv6_must_pass(status, expect):
+    assert rcc.passed({**GOOD, "ipv6": {"status": status}}, require_ipv6=True) is expect
+    assert rcc.passed({**GOOD, "ipv6": {"status": status}}) is True  # not required: IPv4 verdict
+
+
+def test_linux_jobs_require_ipv6_and_link_the_same_backend_ip6tables():
+    assert "--url6 'http://[2001:db8::1]:8081/' --require-ipv6" in WF
+    assert 'src6="/usr/sbin/ip6tables-${src##*-}"' in WF

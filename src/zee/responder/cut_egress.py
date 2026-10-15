@@ -10,6 +10,7 @@ invoke these on dry_run.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import shutil
@@ -19,6 +20,7 @@ from typing import Optional
 
 from ..telemetry.cut_state import CutStateLog
 from .cut_full import (
+    SENTINEL_LINUX_IP6TABLES_EGRESS,
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_MACOS_PFCTL_EGRESS,
@@ -81,6 +83,11 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
         elif m == SENTINEL_LINUX_IPTABLES_EGRESS:
             checks.append(("iptables chain", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure))
             checks.append(("iptables jump", ["iptables", "-S", "OUTPUT"], _iptables_jump_first))
+        elif m == SENTINEL_LINUX_IP6TABLES_EGRESS:
+            # Same tool the cut picked (deterministic from the recorded backend).
+            v6 = _ip6tables_tool(_recorded_backend(modified)) or "ip6tables"
+            checks.append(("ip6tables chain", [v6, "-S", "ZEE_EGRESS"], _iptables_chain_structure))
+            checks.append(("ip6tables jump", [v6, "-S", "OUTPUT"], _iptables_jump_first))
         elif m == SENTINEL_MACOS_PFCTL_EGRESS:
             checks.append(("pfctl rules", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule))
             checks.append(("pf enabled", ["pfctl", "-s", "info"], "Status: Enabled"))
@@ -226,14 +233,57 @@ def _pf_siblings_clear(out: str, _profiles: set[str]) -> str:
     return "confirmed"
 
 
-# IPv4 outside RFC 1918 (10/8, 172.16/12, 192.168/16) and loopback (127/8).
+# IPv6 destinations the egress cut leaves open (the IPv6 side of "loopback
+# and the local network"): link-local, ULA (fc00::/7, the RFC 1918
+# counterpart) and link-scope multicast ff02::/16, which carries neighbor
+# discovery (ICMPv6, filtered by OUTPUT unlike ARP): without it the
+# link-local / ULA allowances stop working once the neighbor cache expires.
+IPV6_LOCAL = ("fe80::/10", "fc00::/7", "ff02::/16")
+
+# IPv4 outside RFC 1918 (10/8, 172.16/12, 192.168/16) and loopback (127/8),
+# then IPv6 outside ::/127 (:: and ::1; a connect to :: reaches the host
+# itself) and IPV6_LOCAL. netsh takes IPv4 and IPv6 ranges as `start-end`
+# in one comma list ("Netsh AdvFirewall Firewall Commands", remoteip:
+# IPAddress / IPSubnet / IPRange). Tests check that these ranges plus the
+# allowed ones tile the whole address space with no overlap.
 WINDOWS_BLOCK_RANGES = (
     "0.0.0.0-9.255.255.255",
     "11.0.0.0-126.255.255.255",
     "128.0.0.0-172.15.255.255",
     "172.32.0.0-192.167.255.255",
     "192.169.0.0-255.255.255.255",
+    "::2-fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+    "fe00::-fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+    "fec0::-ff01:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+    "ff03::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
 )
+
+
+def _intervals(entries) -> Optional[set[tuple[int, int, int]]]:
+    """Address set of netsh RemoteIP entries as merged (version, first, last)
+    intervals, so the comparison does not depend on how netsh prints them
+    (zero compression, a range shown as a subnet). None if any entry is
+    unreadable."""
+    raw: list[tuple[int, int, int]] = []
+    try:
+        for e in entries:
+            if "-" in e:
+                a, b = (ipaddress.ip_address(x.strip()) for x in e.split("-", 1))
+            else:
+                net = ipaddress.ip_network(e.strip(), strict=False)
+                a, b = net[0], net[-1]
+            if a.version != b.version or int(a) > int(b):
+                return None
+            raw.append((a.version, int(a), int(b)))
+    except ValueError:
+        return None
+    merged: list[list[int]] = []
+    for v, a, b in sorted(raw):
+        if merged and merged[-1][0] == v and a <= merged[-1][2] + 1:
+            merged[-1][2] = max(merged[-1][2], b)
+        else:
+            merged.append([v, a, b])
+    return {(v, a, b) for v, a, b in merged}
 
 
 def _netsh_rule_check(name: str):
@@ -255,8 +305,10 @@ def _netsh_rule_check(name: str):
         if fields["Enabled"] != "Yes" or fields["Direction"] != "Out" or fields["Action"] != want_action:
             return "missing"
         if want_action == "Block":
-            shown = {r.strip() for r in fields["RemoteIP"].split(",") if r.strip()}
-            if shown != set(WINDOWS_BLOCK_RANGES):
+            shown = _intervals(r for r in fields["RemoteIP"].split(",") if r.strip())
+            if shown is None:
+                return "unverified"
+            if shown != _intervals(WINDOWS_BLOCK_RANGES):
                 return "missing"
         return "confirmed"
     return check
@@ -337,10 +389,45 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
             if not ok:
                 # Recorded even when the first command fails: a timed-out
                 # `-N` may still have created the chain, which restore removes.
-                return False, f"{' '.join(cmd)}: {msg}", tags
-        return (True, "iptables ZEE_EGRESS chain installed (IPv4 only: IPv6 NOT blocked)", tags)
+                return False, f"{' '.join(cmd)}: {msg} (IPv6 NOT blocked)", tags
+        # IPv6 has its own table: the same chain through ip6tables of the
+        # same kernel backend. Without it the cut is a failure, never an
+        # IPv4-only success.
+        v6 = _ip6tables_tool(backend)
+        if v6 is None:
+            return False, ("iptables ZEE_EGRESS chain installed, but no ip6tables of the "
+                           f"{backend or 'unknown'} backend: IPv6 NOT blocked"), tags
+        tags.append(SENTINEL_LINUX_IP6TABLES_EGRESS)
+        v6_commands = [[v6, "-N", "ZEE_EGRESS"], [v6, "-A", "ZEE_EGRESS", "-o", "lo", "-j", "ACCEPT"]]
+        v6_commands += [[v6, "-A", "ZEE_EGRESS", "-d", net, "-j", "ACCEPT"] for net in IPV6_LOCAL]
+        v6_commands += [[v6, "-A", "ZEE_EGRESS", "-j", "DROP"], [v6, "-I", "OUTPUT", "-j", "ZEE_EGRESS"]]
+        for cmd in v6_commands:
+            ok, msg = _run(cmd)
+            if not ok:
+                return False, f"{' '.join(cmd)}: {msg} (IPv6 NOT blocked)", tags
+        return True, f"iptables + {v6} ZEE_EGRESS chains installed (IPv4 and IPv6)", tags
 
     return False, "no supported backend (need nft or iptables)", []
+
+
+def _recorded_backend(modified) -> Optional[str]:
+    for m in modified:
+        if m.startswith(IPT_BACKEND_PREFIX):
+            b = m.removeprefix(IPT_BACKEND_PREFIX)
+            return None if b == "unknown" else b
+    return None
+
+
+def _ip6tables_tool(backend: Optional[str]) -> Optional[str]:
+    """The ip6tables front end of the same kernel backend as the cut's
+    iptables (backend None = unknown: ip6tables must then be unknown too,
+    and restore checks both backends), or None."""
+    for tool in ("ip6tables", "ip6tables-legacy" if backend == "legacy" else "ip6tables-nft"):
+        if shutil.which(tool):
+            ok, out = _run([tool, "--version"])
+            if ok and iptables_backend(out) == backend:
+                return tool
+    return None
 
 
 def _cut_egress_macos() -> tuple[bool, str, list[str]]:
@@ -396,7 +483,7 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
 def _cut_egress_windows() -> tuple[bool, str, list[str]]:
     if not shutil.which("netsh"):
         return False, "netsh not available", []
-    # One block rule over every IPv4 range except RFC 1918 and loopback.
+    # One block rule over every IPv4 / IPv6 range except the local ones.
     # (netsh rejects remoteip=0.0.0.0/0, and in Windows Firewall a block rule
     # beats any allow rule, so "block all + allow local" cannot work; both
     # were found by the real-cut workflow run on 2026-10-15.)
@@ -416,7 +503,7 @@ def _cut_egress_windows() -> tuple[bool, str, list[str]]:
         ok, msg = _run(cmd)
         if not ok:
             return False, f"{cmd[3:6]}: {msg}", added
-    return True, "netsh advfirewall rules installed (IPv4 only: IPv6 NOT blocked)", added
+    return True, "netsh advfirewall rule installed (IPv4 and IPv6)", added
 
 
 def _text(v) -> str:

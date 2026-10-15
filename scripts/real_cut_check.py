@@ -1,5 +1,10 @@
 """Real cut -> measure -> restore -> measure, for one cut method.
 
+IPv6 (--url6, an IPv6-only URL so nothing falls back to IPv4) is measured
+the same way. With --require-ipv6 it is part of the pass; without it, a
+host with no IPv6 path before the cut records IPv6 as "unmeasured" (never
+as passed) and the verdict is the IPv4 one.
+
 Used by .github/workflows/real-cut.yml (virtual runners) and by
 scripts/verify-real-macos.sh (a real Mac). Needs root (the cut changes the
 OS firewall / interfaces). Writes one JSON result and exits 0 only if Zee's
@@ -40,16 +45,28 @@ def reachable(url: str, timeout: float) -> tuple[bool, str]:
         return False, f"{type(e).__name__}: {e}"
 
 
-def passed(result: dict) -> bool:
+def passed(result: dict, require_ipv6: bool = False) -> bool:
     """Zee's own cut and normal restore must both report success, the restore
     must be the normal one (not the safety timer), and the traffic must have
     stopped and come back. Reachability alone can come from a DNS blip or
-    an outer safety net, so it never passes by itself."""
+    an outer safety net, so it never passes by itself. With require_ipv6,
+    IPv6 must have stopped and come back too ("unmeasured" fails)."""
     restore = result.get("restore") or {}
-    return bool(
+    ok = bool(
         (result.get("cut") or {}).get("ok") is True
         and restore.get("ok") is True and restore.get("by") == "finally"
         and result.get("stopped") and result.get("came_back"))
+    if require_ipv6:
+        ok = ok and (result.get("ipv6") or {}).get("status") == "passed"
+    return ok
+
+
+def ipv6_status(v6: dict) -> str:
+    """"unmeasured" when IPv6 was not reachable before the cut (no IPv6
+    path to test), else "passed" / "failed" on stopped and came back."""
+    if not v6.get("before", {}).get("reachable"):
+        return "unmeasured"
+    return "passed" if not v6["during"]["reachable"] and v6["after"]["reachable"] else "failed"
 
 
 def main() -> int:
@@ -60,7 +77,12 @@ def main() -> int:
     ap.add_argument("--probe-timeout", type=float, default=4.0)
     ap.add_argument("--safety-seconds", type=float, default=60.0)
     ap.add_argument("--label", default="")
+    ap.add_argument("--url6", help="IPv6-only URL to probe as well")
+    ap.add_argument("--require-ipv6", action="store_true",
+                    help="IPv6 must be measured and pass (needs --url6)")
     args = ap.parse_args()
+    if args.require_ipv6 and not args.url6:
+        ap.error("--require-ipv6 needs --url6")
 
     from zee.recovery.restore import restore
     from zee.responder.cut_egress import cut_egress
@@ -92,7 +114,13 @@ def main() -> int:
                     {"by": why, "error": f"{type(e).__name__}: {e}"})
                 result["restore"] = {"by": why, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
-    result["before"] = dict(zip(("reachable", "detail"), reachable(args.url, args.probe_timeout)))
+    def probe(url: str) -> dict:
+        return dict(zip(("reachable", "detail"), reachable(url, args.probe_timeout)))
+
+    v6: dict = {"url": args.url6} if args.url6 else {}
+    result["before"] = probe(args.url)
+    if args.url6:
+        v6["before"] = probe(args.url6)
     safety = threading.Timer(args.safety_seconds, do_restore, args=("safety-timer",))
     safety.daemon = True
     safety.start()
@@ -102,7 +130,9 @@ def main() -> int:
         ok, detail = cut_fn(asset_id=ASSET, cut_state=state)
         result["cut"] = {"ok": ok, "detail": detail, "seconds": round(time.monotonic() - t0, 2)}
         time.sleep(1.0)
-        result["during"] = dict(zip(("reachable", "detail"), reachable(args.url, args.probe_timeout)))
+        result["during"] = probe(args.url)
+        if args.url6:
+            v6["during"] = probe(args.url6)
     finally:
         do_restore("finally")
         safety.cancel()
@@ -114,13 +144,27 @@ def main() -> int:
         time.sleep(3.0)
         after = reachable(args.url, args.probe_timeout)
     result["after"] = dict(zip(("reachable", "detail"), after))
+    if args.url6:
+        after6 = reachable(args.url6, args.probe_timeout)
+        for _ in range(5):
+            if after6[0] or not v6["before"]["reachable"]:
+                break
+            time.sleep(3.0)
+            after6 = reachable(args.url6, args.probe_timeout)
+        v6["after"] = dict(zip(("reachable", "detail"), after6))
+        v6.setdefault("during", {"reachable": None, "detail": "cut raised before the probe"})
+        v6["status"] = ipv6_status(v6)
+        result["ipv6"] = v6
+    else:
+        result["ipv6"] = {"status": "unmeasured", "detail": "no --url6"}
     result["stopped"] = result["before"]["reachable"] and not result["during"]["reachable"]
     result["came_back"] = result["after"]["reachable"]
-    result["passed"] = passed(result)
+    result["passed"] = passed(result, require_ipv6=args.require_ipv6)
     result["finished_at"] = datetime.now(timezone.utc).isoformat()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(json.dumps({k: result[k] for k in ("label", "method", "stopped", "came_back", "passed")}))
+    print(json.dumps({**{k: result[k] for k in ("label", "method", "stopped", "came_back", "passed")},
+                      "ipv6": result["ipv6"]["status"]}))
     return 0 if result["passed"] else 1
 
 

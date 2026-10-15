@@ -60,9 +60,15 @@ jobs:
           sudo ip netns exec zt ip addr add 198.51.100.2/24 dev zt-in
           sudo ip netns exec zt ip link set zt-in up
           sudo ip netns exec zt ip link set lo up
+          # IPv6 too: 2001:db8::/32 (RFC 3849) is neither ULA nor link-local,
+          # so the cut must block it. nodad: usable at once.
+          sudo ip -6 addr add 2001:db8::1/64 dev zt-host nodad
+          sudo ip netns exec zt ip -6 addr add 2001:db8::2/64 dev zt-in nodad
           nohup python -m http.server 8080 --bind 198.51.100.1 > /tmp/http.log 2>&1 &
+          nohup python -m http.server 8081 --bind 2001:db8::1 > /tmp/http6.log 2>&1 &
           sleep 1
           sudo ip netns exec zt curl -sS -m 3 -o /dev/null -w '%{http_code}\n' http://198.51.100.1:8080/
+          sudo ip netns exec zt curl -sS -m 3 -o /dev/null -w '%{http_code}\n' 'http://[2001:db8::1]:8081/'
       - name: Backend selection (PATH with only the chosen firewall tool)
         run: |
           set -eux
@@ -75,6 +81,11 @@ jobs:
           esac
           test -x "$src" || { echo "::error::$src not found on this runner image"; exit 1; }
           ln -s "$src" "/tmp/zee-bin/$dst"
+          if [ "$dst" = iptables ]; then  # ip6tables of the same backend
+            src6="/usr/sbin/ip6tables-${src##*-}"
+            test -x "$src6" || { echo "::error::$src6 not found on this runner image"; exit 1; }
+            ln -s "$src6" /tmp/zee-bin/ip6tables
+          fi
           ls -l /tmp/zee-bin
       - name: Cut -> measure -> restore -> measure
         run: |
@@ -83,8 +94,8 @@ jobs:
           rc=0  # the default shell is bash -e: capture the exit code instead of stopping here
           sudo ip netns exec zt env PATH=/tmp/zee-bin:/usr/bin:/bin PYTHONPATH="$GITHUB_WORKSPACE/src" \
             "$PY" scripts/real_cut_check.py --method "${{ matrix.method }}" \
-            --url http://198.51.100.1:8080/ --label "linux-${{ matrix.backend }}" \
-            --out result.json --safety-seconds 45 || rc=$?
+            --url http://198.51.100.1:8080/ --url6 'http://[2001:db8::1]:8081/' --require-ipv6 \
+            --label "linux-${{ matrix.backend }}" --out result.json --safety-seconds 45 || rc=$?
           cat result.json
           { echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
@@ -119,7 +130,8 @@ jobs:
           PY="$(command -v python)"
           rc=0
           sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" "$PY" scripts/real_cut_check.py --method egress \
-            --url http://example.com/ --label macos-runner --out result.json --safety-seconds 45 || rc=$?
+            --url http://example.com/ --url6 http://ipv6.google.com/ --label macos-runner \
+            --out result.json --safety-seconds 45 || rc=$?
           cat result.json
           { echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           # Zee's restore releases its pf enable reference (pfctl -X): pf must
@@ -135,7 +147,9 @@ jobs:
           sudo pfctl -s info | head -3 || true
 
   windows:
-    # netsh rules block outbound except RFC 1918 / loopback. A SYSTEM task
+    # netsh rule blocks outbound except RFC 1918 / loopback (IPv4) and
+    # loopback / link-local / ULA / ff02::/16 (IPv6). IPv6 is measured only
+    # if the runner has an IPv6 path ("unmeasured" otherwise, never a pass). A SYSTEM task
     # deletes Zee's rules after 3 minutes even if the script hangs.
     name: Windows netsh / egress
     runs-on: windows-latest
@@ -161,7 +175,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $task -notmatch "zee-egress-cut-block") { throw "safety task not as expected: no cut without it" }
           $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\src"
           python scripts/real_cut_check.py --method egress --url http://example.com/ `
-            --label windows-runner --out result.json --safety-seconds 45
+            --url6 http://ipv6.google.com/ --label windows-runner --out result.json --safety-seconds 45
           $rc = $LASTEXITCODE
           Get-Content result.json
           "``````json" | Out-File -Append $env:GITHUB_STEP_SUMMARY

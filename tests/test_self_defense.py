@@ -73,8 +73,8 @@ def _absent_on_show(cmd):
     """_run stub: every command succeeds; rule listings report 'absent'."""
     if cmd[:3] == ["nft", "list", "table"]:
         return False, "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^"
-    if cmd[0].startswith("iptables") and cmd[1] == "-S":  # iptables / -legacy / -nft
-        return False, "iptables: No chain/target/match by that name."
+    if cmd[0].startswith(("iptables", "ip6tables")) and cmd[1] == "-S":  # also -legacy / -nft
+        return False, f"{cmd[0].split('-')[0]}: No chain/target/match by that name."
     if cmd[:4] == ["netsh", "advfirewall", "firewall", "show"]:
         return False, "No rules match the specified criteria."
     return True, ""
@@ -213,8 +213,8 @@ def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
     def run(cmd):
         if cmd[0] == "nft":
             return False, "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^"
-        if cmd[0].startswith("iptables"):
-            return False, "iptables: No chain/target/match by that name."
+        if cmd[0].startswith(("iptables", "ip6tables")):
+            return False, f"{cmd[0].split('-')[0]}: No chain/target/match by that name."
         return True, ""
     monkeypatch.setattr(restore_mod, "_run", run)
     assert restore_mod._restore_linux_compat()[0] is True
