@@ -260,7 +260,7 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 
 1. **macOS：`com.apple/zee-egress-cut` に入れた規則が実際に通信を止めるか。** 主ルールセットの `anchor "com.apple/*"` の後に quick 付きの通過規則が他のソフトから入っていれば、Zee の block は上書きされうる（pf は quick が無ければ最後に一致した規則が勝つ）。Zee は主ルールセットを書き換えない。
 2. **Windows：netsh の表示形式。** `show rule` の `RemoteIP` の表示（Zee が入れた5つの範囲と同じ並びでなければ FAILED）、項目名、`show allprofiles state` の形式。英語以外の表示では未確認＝FAILED になる。
-   - **GitHub Actions の Windows ランナーでの実測（2026-10-15、commit 238fb0e）で、Zee の Windows の egress 遮断はそもそも成立していなかったことが分かった**：netsh は `remoteip=0.0.0.0/0` を「IP アドレスが無効」として受け付けず、遮断の規則が入らなかった（Zee はこれを FAILED と表示し、通信は止まらなかった）。加えて Windows ファイアウォールでは block の規則が allow の規則より優先されるため、「全部 block＋ローカルだけ allow」の2規則の作りはローカルも止めてしまう。修正：RFC 1918 と 127/8 を除いた IPv4 の5範囲を1つの block 規則で止める（`WINDOWS_BLOCK_RANGES`）。この修正の実測結果は下の「実測」に記す。
+   - **GitHub Actions の Windows ランナーでの実測（2026-10-15、commit 238fb0e）で、Zee の Windows の egress 遮断はそもそも成立していなかったことが分かった**：netsh は `remoteip=0.0.0.0/0` を「IP アドレスが無効」として受け付けず、遮断の規則が入らなかった（Zee はこれを FAILED と表示し、通信は止まらなかった）。加えて Windows ファイアウォールでは block の規則が allow の規則より優先されるため、「全部 block＋ローカルだけ allow」の2規則の作りはローカルも止めてしまう。修正：RFC 1918 と 127/8 を除いた IPv4 の5範囲を1つの block 規則で止める（`WINDOWS_BLOCK_RANGES`）。修正後の実測（run 38739379077、commit e226127）では Windows ランナーで通信が止まり、復旧で戻った。netsh が表示した `RemoteIP` は Zee が入れた5範囲と一致し、Zee 自身の読み直しも confirmed だった。
 3. **Windows：Get-NetAdapter の状態。** `NotPresent` 等の状態の機器があると、遮断は無効を確認できず FAILED になる（安全側だが、誤報になりうる）。
 4. **Linux：`nmcli networking off` が NetworkManager の管理外のインターフェースを止めるか。** 遮断の確認は NetworkManager の状態だけ（付録A-4）。
 5. **Linux：nft・iptables の出力形式。** nft の版による表記の違い（priority の名前表記など）、iptables-legacy と iptables-nft の `-S` の違い。想定と違えば未確認＝FAILED。

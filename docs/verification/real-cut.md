@@ -27,3 +27,17 @@ sudo bash scripts/verify-real-macos.sh
 `feat/self-defense-20261015` の枝で、この workflow か測定スクリプトを変更して push した時と、手動実行（workflow_dispatch。既定の枝に入った後）でだけ動きます。main への通常の push や PR では動きません。結果は各ジョブのログとジョブの要約（Summary）に JSON で出ます。
 
 ランナーの通信を止めない工夫：Linux は名前空間の中だけで遮断します。macOS は pf の状態表により既存の接続（ランナーと GitHub の接続）は遮断中も通り、新しい接続だけが止まる想定です。遮断は数秒で、Python 側の45秒の時間切れに加え、macOS は2分後に Zee のアンカーを空にするタイマー、Windows は3分後に Zee の規則を消す SYSTEM のタスクを、遮断の前に仕掛けます。Windows で既存の接続が保たれるかは、実行結果で確かめます。
+
+## 実測の結果
+
+| 日付 | 対象 commit | 環境 | 方法 | 止まった | 戻った | Zee 自身の読み直し |
+|---|---|---|---|---|---|---|
+| 2026-10-15 | 238fb0e（run 38738827699） | Windows ランナー | egress | **いいえ** | — | FAILED（netsh が規則を受け付けず。修正前の不具合） |
+| 2026-10-15 | e226127（run 38739379077） | Linux ランナー・名前空間（nft） | egress / full | はい / はい | はい / はい | confirmed / confirmed |
+| 2026-10-15 | 同上 | Linux ランナー・名前空間（iptables nf_tables 版） | egress | はい | はい | confirmed |
+| 2026-10-15 | 同上 | Linux ランナー・名前空間（iptables legacy 版） | egress | はい | はい | confirmed |
+| 2026-10-15 | 同上 | macOS ランナー（pf、`com.apple/zee-egress-cut`） | egress | はい | はい | confirmed |
+| 2026-10-15 | 同上 | Windows ランナー（netsh） | egress | はい | はい | confirmed |
+| （未実施） | — | macOS 実機 | egress / full | | | |
+
+ランナーは GitHub が用意する仮想マシンで、実機ではありません。Windows・macOS の full 遮断（全インターフェースの停止）はランナーの接続を失うため行っていません。
