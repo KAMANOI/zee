@@ -58,6 +58,15 @@ def cut_full(
     ``--all-interfaces`` emergency restore can undo it.
     """
     ok, detail, modified = _cut_full_dispatch()
+    if ok and modified:
+        # Exit codes are not proof: every changed interface / service must
+        # read back as disabled, or the cut is not reported as applied.
+        states = interface_states()
+        unconfirmed = [m for m in modified if (states or {}).get(m) != "disabled"]
+        if states is None or unconfirmed:
+            ok = False
+            detail += ("; cut not confirmed by read-back: "
+                       + ("state unreadable" if states is None else ", ".join(unconfirmed)))
     # Record whatever actually changed, even on a partial failure: restore
     # refuses without a record, so an unrecorded partial cut could only be
     # undone by the broad emergency restore.
@@ -324,6 +333,20 @@ _IP_LINE = re.compile(r"^\s*\d+:\s+([^\s:@]+)(?:@[^\s:]+)?:\s+<([A-Z0-9_-]+(?:,[
 _IP_NAME = re.compile(r"^\s*\d+:\s+([^\s:@]+)")
 
 
+def _windows_states_via_netsh() -> Optional[dict[str, str]]:
+    """Fallback when PowerShell is unavailable (the cut can use netsh too).
+    Admin State is read as written; any other word (a non-English locale)
+    is "unknown", never enabled."""
+    out = subprocess.check_output(_abs(["netsh", "interface", "show", "interface"]), text=True, timeout=5)
+    states: dict[str, str] = {}
+    for line in out.splitlines()[3:]:
+        cols = line.split()
+        if len(cols) < 4:
+            continue
+        states[" ".join(cols[3:])] = {"enabled": "enabled", "disabled": "disabled"}.get(cols[0].lower(), "unknown")
+    return states or None
+
+
 def interface_states() -> Optional[dict[str, str]]:
     """Read back every interface / service and its state right now.
 
@@ -335,8 +358,11 @@ def interface_states() -> Optional[dict[str, str]]:
     """
     try:
         if sys.platform.startswith("linux"):
-            out = subprocess.check_output(_abs(["ip", "-o", "link", "show"]), text=True, timeout=5)
             states: dict[str, str] = {}
+            try:
+                out = subprocess.check_output(_abs(["ip", "-o", "link", "show"]), text=True, timeout=5)
+            except (subprocess.SubprocessError, OSError):
+                out = ""  # still try NetworkManager below
             for line in out.splitlines():
                 m = _IP_LINE.match(line)
                 if m:
@@ -351,8 +377,6 @@ def interface_states() -> Optional[dict[str, str]]:
                     name, state = loose.group(1), "unknown"
                 if name != "lo":
                     states[name] = state
-            if not states:
-                return None
             if sbin_which("nmcli"):
                 # Separate try: NetworkManager not answering must not discard
                 # the interface states; its own state is then "unknown".
@@ -361,7 +385,7 @@ def interface_states() -> Optional[dict[str, str]]:
                 except (subprocess.SubprocessError, OSError):
                     nm = ""
                 states[SENTINEL_LINUX_NMCLI] = nm if nm in ("enabled", "disabled") else "unknown"
-            return states
+            return states or None
         if sys.platform == "darwin":
             out = subprocess.check_output(_abs(["networksetup", "-listallnetworkservices"]), text=True, timeout=5)
             states = {}
@@ -375,7 +399,7 @@ def interface_states() -> Optional[dict[str, str]]:
         if sys.platform == "win32":
             cmd = sbin_which("powershell") or sbin_which("pwsh")
             if not cmd:
-                return None
+                return _windows_states_via_netsh()
             out = subprocess.check_output(
                 [cmd, "-NoProfile", "-Command",
                  "Get-NetAdapter | Select-Object Name,Status | ConvertTo-Json -Compress"],

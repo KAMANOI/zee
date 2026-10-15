@@ -209,6 +209,7 @@ def test_emergency_linux_does_not_hide_one_failed_firewall_removal(monkeypatch):
 
 def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     def run(cmd):
         if cmd[0] == "nft":
             return False, "Error: Could not process rule: No such file or directory"
@@ -461,14 +462,14 @@ def test_nmcli_failure_is_kept_unless_networking_is_confirmed_on(monkeypatch, st
     assert _t == (full_mod.SENTINEL_LINUX_NMCLI, "eth0")
 
 
-def test_nmcli_success_touches_only_the_sentinel(monkeypatch):
+def test_nmcli_success_still_touches_every_interface(monkeypatch):
     monkeypatch.setattr(restore_mod, "_which", lambda n: f"/x/{n}")
     monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
     calls: list = []
     monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or _absent_on_show(cmd))
     _ok, _d, touched = restore_mod._restore_linux_compat()
-    assert touched == (full_mod.SENTINEL_LINUX_NMCLI,)
-    assert not any(c[:2] == ["ip", "link"] for c in calls)
+    assert touched == (full_mod.SENTINEL_LINUX_NMCLI, "eth0")
+    assert ["ip", "link", "set", "eth0", "up"] in calls
 
 
 class _BrokenLedger(CutStateLog):
@@ -481,6 +482,7 @@ def test_ledger_write_failure_is_reported_not_raised(tmp_path, monkeypatch, mod_
     import importlib
     mod = importlib.import_module(f"zee.responder.{mod_name}")
     monkeypatch.setattr(mod, f"_{mod_name}_dispatch", lambda: (True, "os cut done", ["eth0"]))
+    monkeypatch.setattr(full_mod, "interface_states", lambda: {"eth0": "disabled"})
     ok, detail = getattr(mod, mod_name)(asset_id="t-host", cut_state=_BrokenLedger(tmp_path / "c.jsonl"))
     assert ok is False
     assert "os=ok" in detail and "ledger=FAILED" in detail and "--all-interfaces" in detail
@@ -925,3 +927,96 @@ def test_kinds_follow_the_cut_method(tmp_path):
     log.record_cut(asset_id="a", method="full", platform="win32", modified=[RULE_NAME, "Ethernet"])
     rec = log.latest_unresolved_for("a")
     assert rec.entries() == (("firewall", RULE_NAME), ("iface", RULE_NAME), ("iface", "Ethernet"))
+
+
+
+# ── seventh external review + branch table (appendix A of the design doc) ──
+
+
+def _linux_nmcli_ok(monkeypatch, *, tools=("nmcli", "ip", "nft", "iptables")):
+    monkeypatch.setattr(restore_mod.sys, "platform", "linux")
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}" if n in tools else None)
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    calls: list = []
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: calls.append(cmd) or _absent_on_show(cmd))
+    return calls
+
+
+@pytest.mark.parametrize("state, code", [("disabled", "Z601"), ("unknown", "Z606"), (None, "Z606")])
+def test_emergency_nmcli_success_still_sweeps_and_reads_back_interfaces(tmp_path, monkeypatch, quiet, state, code):
+    """Row L-E: `nmcli networking on` succeeding must not skip the per-interface
+    sweep or its read-back (a ledger-less cut may have used `ip link down`)."""
+    calls = _linux_nmcli_ok(monkeypatch)
+    states = {full_mod.SENTINEL_LINUX_NMCLI: "enabled"}
+    if state:
+        states["eth0"] = state
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: states)
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)
+    assert ei.value.code == code
+    assert ["ip", "link", "set", "eth0", "up"] in calls
+
+
+def test_emergency_nmcli_success_without_ip_is_unverified(monkeypatch):
+    _linux_nmcli_ok(monkeypatch, tools=("nmcli", "nft", "iptables"))
+    ok, detail, touched = restore_mod._restore_linux_compat()
+    assert ok is None and "ip:not-found" in detail
+    assert touched == (full_mod.SENTINEL_LINUX_NMCLI,)
+
+
+def test_unknown_state_outside_record_is_reported(monkeypatch):
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled", "wlan9": "unknown"})
+    ok, detail = restore_mod._readback(("eth0",))
+    assert ok is True and "wlan9" in detail
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+@pytest.mark.parametrize("state, expect", [("disabled", True), ("enabled", False), ("unknown", False), (None, False)])
+def test_full_cut_is_confirmed_by_read_back(tmp_path, monkeypatch, platform, state, expect):
+    """Row C-F: a full cut reports success only if every changed interface /
+    service reads back as disabled (command exit codes alone are not enough)."""
+    monkeypatch.setattr(full_mod.sys, "platform", platform)
+    monkeypatch.setattr(full_mod, "_cut_full_dispatch", lambda: (True, "cut", ["eth0"]))
+    monkeypatch.setattr(full_mod, "interface_states", lambda: {"eth0": state} if state else {})
+    ok, detail = full_mod.cut_full(asset_id="t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"))
+    assert ok is expect
+    if not expect:
+        assert "not confirmed" in detail
+
+
+def test_full_cut_unreadable_state_is_not_confirmed(tmp_path, monkeypatch):
+    monkeypatch.setattr(full_mod, "_cut_full_dispatch", lambda: (True, "cut", ["eth0"]))
+    monkeypatch.setattr(full_mod, "interface_states", lambda: None)
+    assert full_mod.cut_full(asset_id="t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"))[0] is False
+
+
+def test_sweep_command_failure_after_working_nmcli_is_decided_by_read_back(monkeypatch):
+    """A vanished veth failing `ip link set up` is not a restore failure by
+    itself; the read-back decides (missing -> unverified, never success)."""
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0", "veth1234"])
+    def run(cmd):
+        if cmd == ["ip", "link", "set", "veth1234", "up"]:
+            return False, "Cannot find device"
+        return _absent_on_show(cmd)
+    monkeypatch.setattr(restore_mod, "_run", run)
+    ok, detail, touched = restore_mod._restore_linux_compat()
+    assert ok is None and "veth1234:unverified" in detail
+    assert "veth1234" in touched  # still read back
+
+
+def test_linux_states_keep_nmcli_when_ip_fails(monkeypatch):
+    monkeypatch.setattr(full_mod.sys, "platform", "linux")
+    _stub_check_output(monkeypatch, {"ip": OSError("no ip"), "nmcli": "disabled\n"})
+    assert full_mod.interface_states() == {full_mod.SENTINEL_LINUX_NMCLI: "disabled"}
+
+
+def test_windows_states_fall_back_to_netsh(monkeypatch):
+    monkeypatch.setattr(full_mod.sys, "platform", "win32")
+    netsh = ("\nAdmin State    State          Type             Interface Name\n"
+             "-------------------------------------------------------------------------\n"
+             "Enabled        Connected      Dedicated        Ethernet 2\n"
+             "Disabled       Disconnected   Dedicated        Wi-Fi\n"
+             "Activé         Connecté       Dédié            Local\n")
+    _stub_check_output(monkeypatch, {"netsh": netsh})
+    assert full_mod.interface_states() == {"Ethernet 2": "enabled", "Wi-Fi": "disabled", "Local": "unknown"}

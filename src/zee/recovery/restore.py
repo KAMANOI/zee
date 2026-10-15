@@ -202,14 +202,21 @@ def _restore_linux_compat() -> tuple[Optional[bool], str, tuple[str, ...]]:
         nm_ok = on_ok or _run(["nmcli", "networking"])[1].strip() == "enabled"
         steps.append(("nmcli", nm_ok))
         touched.append(SENTINEL_LINUX_NMCLI)
-    if not on_ok:
-        if _which("ip"):
-            ifaces = list_linux_interfaces()
-            touched += ifaces
-            steps += [(i, _run(["ip", "link", "set", i, "up"])[0])
-                      for i in ifaces] or [("interfaces:none-found", False)]
-        else:
-            steps.append(("ip:not-found", False))
+    # Always sweep every interface too, whatever nmcli did: a cut (or an
+    # attacker) may have used `ip link down`, which NetworkManager's switch
+    # does not undo. Each swept interface is read back afterwards.
+    if _which("ip"):
+        ifaces = list_linux_interfaces()
+        touched += ifaces
+        # After a working nmcli, a failing `ip link set up` (e.g. a vanished
+        # veth) is not a failure by itself: the read-back of that name
+        # decides (disabled = failure, missing = unverified).
+        steps += [(i, _run(["ip", "link", "set", i, "up"])[0] or (None if on_ok else False))
+                  for i in ifaces] or [("interfaces:none-found", False)]
+    else:
+        # Cannot enumerate interfaces: after a working nmcli this is
+        # unverified; with nothing restored at all it is a failure.
+        steps.append(("ip:not-found", None if on_ok else False))
     return (*_summary("linux all-interfaces restore", steps + _firewall_steps("linux")), tuple(touched))
 
 
@@ -329,13 +336,13 @@ def _readback(targets: Optional[tuple[str, ...]]) -> tuple[Optional[bool], str]:
     verdicts = {t: states.get(t) for t in wanted}
     still = [t for t, v in verdicts.items() if v == "disabled"]
     unsure = [t for t, v in verdicts.items() if v not in ("enabled", "disabled")]
-    others = sorted(n for n, v in states.items() if v == "disabled" and n not in wanted)
+    others = sorted(f"{n} ({v})" for n, v in states.items() if v != "enabled" and n not in wanted)
     parts = ["readback: " + ("; ".join(filter(None, [
         f"still disabled {', '.join(still)}" if still else "",
         f"not confirmed {', '.join(unsure)}" if unsure else "",
     ])) or ("recorded targets enabled" if wanted else "no recorded targets to verify"))]
     if others:
-        parts.append(f"warning: also disabled (not in the record): {', '.join(others)}")
+        parts.append(f"warning: not enabled (not in the record): {', '.join(others)}")
     return _combine(*[False if v == "disabled" else None if t in unsure else True
                       for t, v in verdicts.items()]), "; ".join(parts)
 

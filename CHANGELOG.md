@@ -46,7 +46,9 @@ Not in any tagged release yet.
   still enabled and verified; an empty or all-unconfirmed check is never success. A
   truncated or malformed `ip -o link` line reads as unknown.
   Tools are looked up on PATH plus `/usr/sbin:/sbin` and run by absolute
-  path (made absolute even if PATH holds a relative entry). The emergency restore also no longer stops after `nmcli`
+  path (made absolute even if PATH holds a relative entry). The
+  emergency restore always sweeps and reads back every Linux interface,
+  even when `nmcli networking on` succeeds, and no longer stops after `nmcli`
   (keeping a failed `nmcli networking on` unless NetworkManager reports
   networking enabled) and re-enables macOS services the cut disabled.
   Restore notifications state that the cut ledger is writable by the
@@ -54,7 +56,9 @@ Not in any tagged release yet.
 - **A failed or empty cut is no longer reported as success.** The cut
   notification title says `Zee cut FAILED` when the cut failed (it said
   `applied`). `full` cut with no interface / service to disable returns
-  failure, and so does a macOS egress cut whose `pfctl -e` fails (other
+  failure, and so does a full cut whose changed interfaces / services
+  do not read back as disabled, and so does a macOS egress cut whose
+  `pfctl -e` fails (other
   than "already enabled"). A partial cut records the interfaces / rules
   it did change (full cut; Windows egress; iptables once the chain
   exists), so restore can undo them. If the cut record cannot be

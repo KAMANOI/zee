@@ -136,7 +136,7 @@ OS の権限を変える操作・root での実行・実機の pf 有効化は�
 
 **意図して入れなかったもの**：`permission.py` の配線（10/13 に未配線のまま入れる判断がされている）、心拍・監督（同じユーザーで動く監督は、監督対象と一緒に止められるので意味がない。第二段で別ユーザーとして作る）、ソケット・別プロセス化（§7 の承認後）。
 
-テスト：`tests/test_self_defense.py` 110件。段階ごとに、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。最後の「OS を読み直して決める」変更では、記録したバックエンドだけで判定していた前回のテスト7件を書き換え、追加分（偽の台帳でも規則を削除して読み直す・記録済みの nft が無ければ未確認・台帳なしで nft が無く iptables は ok なら未確認・片方が権限エラーでも続行して最後に失敗、ほか）は修正前のコードで全件失敗した。レビューで足した読み直しの解析・/sbin の探索・通常復旧の macOS／Windows 分岐の確認7件を含め、3回目の外部レビューの指摘（NetworkManager の状態の取り違え・「無効一覧に無い＝有効」の扱い・相対パス）に対するテストも修正前に失敗することを確認し、4回目の外部レビューの指摘（台帳なしの全面復旧で検証対象が空でも成功・`ip` の途中で切れた行を有効と読む）に対するテストも修正前に失敗することを確認し、5回目の外部レビューの指摘（「:」を含む名前が検証から抜ける）に対するテストも修正前に失敗することを確認し、6回目の外部レビューの指摘（Zee の規則と同じ名前のサービスが検証から外れる）に対するテストも修正前に失敗することを確認し、全体 646 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
+テスト：`tests/test_self_defense.py` 131件。段階ごと（独立チェック2回・外部レビュー7回・討論の結論・付録Aの分岐点検）に、追加したテストが修正前のコードで失敗することを確認してから実装した（元から通る確認用の数件を除く）。全体 667 passed / 1 skipped（分岐前の main は 536 passed / 1 skipped）。
 
 <a id="privileged-deployment"></a>
 ## 7. 【代表承認事項】権限分離を実地に適用する手順案
@@ -190,3 +190,55 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 - 台帳の検査は形だけ。同じユーザーの攻撃者が**形の正しい偽の記録**を書けば、通常の復旧はその記録どおりにインターフェースを戻す（戻すのは記録に書かれた名前だけで、トークンも要る）。台帳は判定を厳しくする材料にだけ使い、緩める材料にはしない：Zee 固有名の規則は台帳に関係なく削除・確認するので、偽の台帳で規則を隠すことはできない。ただし Zee 固有名ではない遮断（攻撃者が別名で入れた規則など）は対象外で、台帳から抜かれたインターフェースは「記録外」の警告として表示されるだけ。完全に閉じるのは §7 の権限分離。
 - 別モデルによる独立チェックを2回受けた（1回目 62点・11件、修正後の再チェック 68点・7件）。その後の外部レビュー2回（高2中1、高2）と、2つのモデルによる討論の結論（OS を読み直して決める・台帳は厳しくする材料にだけ使う）も反映した。**最終版への独立チェックはまだ受けていない**。同じユーザーの攻撃者はトークンを読めるので、通常の復旧も `--all-interfaces` も実行できる点は、文書を正しただけで、根本は §7 の権限分離でしか解けない。
 - 「既に無いルール」の判定は各ツールの応答の文字列で行う。ツールの版や表示言語で文言が違えば、既に無いルールが「失敗」と表示される（失敗を成功と誤認する向きにはしていない）。
+
+## 付録A. 復旧・遮断の分岐表（2026-10-15、7回目の外部レビュー後の全分岐の点検）
+
+対象：`src/zee/recovery/restore.py`・`src/zee/responder/cut_full.py`。観点は「ある手順の成功で、別の手順や検証を省いていないか」。判定の記号：✅ 成功、❌ 失敗（Z601／遮断なら FAILED）、❓ 未確認（Z606）。テスト列は `tests/test_self_defense.py` の該当テスト。
+
+### A-1. 復旧の経路と台帳
+
+| OS | 経路 | 台帳 | 何をするか | 判定 | テスト |
+|---|---|---|---|---|---|
+| 全OS | 通常 | なし／壊れている | 何もしない | Z605（拒否） | `test_restore_without_record_refuses…`・`test_normal_restore_refuses_any_ledger_damage` |
+| 全OS | 通常 | あり | 記録の種別ごとに操作（規則以外）→全バックエンドの規則を削除・読み直し→記録した対象を読み直し | 下表 | `test_forged_ledger_*`・`test_normal_restore_enables_and_verifies_service_named_like_a_rule` |
+| 全OS | 通常 | あり（egress の規則だけ） | インターフェースの読み直しは行わない（変えていない）。規則の削除・読み直しが検証 | 規則の結果どおり | `test_egress_only_record_restore_still_succeeds` |
+| 全OS | 全面 | あり／なし／壊れている | 台帳を読まずに全部を有効化→規則を削除・読み直し→**操作した全対象**と使える記録の対象を読み直し | 下表 | `test_emergency_without_ledger_*`・`test_emergency_restore_works_with_any_ledger_damage` |
+
+### A-2. 手順ごとの成否と読み直し
+
+| 手順 | 結果 | 判定 | テスト |
+|---|---|---|---|
+| インターフェース・サービスの有効化（全面） | 列挙0件・ツールなし | ❌（Linux で nmcli が成功している時の `ip` なしは ❓） | `test_firewall_success_alone_is_not_a_full_restore`・`test_emergency_nmcli_success_without_ip_is_unverified` |
+| Linux の `nmcli networking on`（全面） | 成功 | **個別インターフェースの有効化と読み直しを省かない**（7回目の指摘で修正） | `test_emergency_nmcli_success_still_sweeps_and_reads_back_interfaces` |
+| 同上 | 失敗 | 失敗を残す。NM が enabled と答えた時だけ ✅ | `test_nmcli_failure_is_kept_unless_networking_is_confirmed_on` |
+| Linux の `ip link set <if> up`（全面） | nmcli が成功した後で失敗（消えた veth など） | その手順は ❓。最終判定はその名前の読み直し（無効 ❌・一覧に無い ❓） | `test_sweep_command_failure_after_working_nmcli_is_decided_by_read_back` |
+| 規則の削除（nft・iptables・pfctl・netsh） | 削除の終了コード | 判定に使わない（読み直しで決める） | `test_forged_ledger_rule_removed_then_success` |
+| 規則の読み直し | 無い | ✅ | `test_both_backends_absent_is_success` |
+| 同上 | 残っている・読めない | ❌（他のバックエンドも続けて処理） | `test_one_backend_permission_error_continues_then_fails`・`test_rule_still_listed_after_removal_is_failure` |
+| 同上 | ツールなし | ❓ | `test_no_ledger_nft_missing_iptables_ok_is_unverified`・`test_recorded_nft_with_nft_missing_is_unverified` |
+| 対象の読み直し | 有効 | ✅ | `test_readback_needs_positive_enabled` |
+| 同上 | 無効 | ❌ | 同上・`test_colon_named_service_is_read_back` |
+| 同上 | 不明・一覧に無い・一覧が読めない・空 | ❓ | 同上・`test_interface_states_*`・`test_linux_malformed_ip_line_is_unknown` |
+| 同上 | 検証する対象が0件 | ❓（空の検証は成功にしない） | `test_empty_verification_is_never_success` |
+| 記録外で有効でないもの | 無効・不明 | 警告として表示（判定は変えない） | `test_readback_outside_record_is_only_a_warning`・`test_unknown_state_outside_record_is_reported` |
+| 解決済みの記録 | ✅ の時だけ | ❌・❓ では未解決のまま | `test_recorded_nft_with_nft_missing_is_unverified` |
+
+### A-3. 遮断（`cut_full`）
+
+| 手順 | 結果 | 判定 | テスト |
+|---|---|---|---|
+| 対象0件 | — | FAILED | `test_cut_with_nothing_to_disable_is_not_success` |
+| 一部だけ成功 | — | FAILED（成功した分は記録） | `test_partial_cut_records_the_interfaces_that_went_down` |
+| 全部のコマンドが成功 | 読み直しで全対象が無効 | 成功 | `test_full_cut_is_confirmed_by_read_back` |
+| 同上 | 有効・不明・一覧に無い・読めない | **FAILED**（コマンドの成功だけでは遮断と言わない。点検で見つけて修正） | 同上・`test_full_cut_unreadable_state_is_not_confirmed` |
+| 読み直しの道具 | Linux で `ip` が無い・Windows で PowerShell が無い | 遮断で使える代わりの道具（nmcli・netsh）でも読み直す。netsh の Admin State が英語以外なら「不明」 | `test_linux_states_keep_nmcli_when_ip_fails`・`test_windows_states_fall_back_to_netsh` |
+| 台帳に書けない | — | FAILED（`os=… ledger=FAILED` と戻し方を表示） | `test_ledger_write_failure_is_reported_not_raised` |
+
+### A-4. 点検で見つけた追加の穴
+
+1. **full 遮断を読み直していなかった**（コマンドの終了コードだけで「applied」）。修正済み：対象が無効と読めなければ FAILED。
+2. **記録外で状態が「不明」のものは警告にも出ていなかった**。修正済み：無効・不明とも警告に出す。
+3. **（今回の修正で入れた退行）全面復旧で nmcli が成功した後の個別インターフェースの失敗が、全体を FAILED にしていた**（消えた veth 1つで「復旧失敗」と誤報）。修正済み：その手順は未確認にし、名前ごとの読み直しで決める。
+4. **遮断の読み直しが、遮断と同じ代わりの道具を持っていなかった**（Linux で `ip` が無い・Windows で PowerShell が無いと、遮断できていても FAILED）。修正済み：nmcli・netsh でも読み直す。
+5. **未対応**：Linux の full 遮断は `nmcli networking off` が成功すると `ip link down` を行わず、確認も NetworkManager の状態だけ。NetworkManager の管理外のインターフェースは止まらない可能性がある（実機での確認が要る。§7.3 の隔離環境で確かめる）。
+6. **未対応**：egress 遮断（`cut_egress.py`）は規則を入れたあと読み直していない（コマンドの終了コードで判定）。復旧側と同じ読み直しを入れるのが次の手。
