@@ -200,18 +200,27 @@ def _restore_linux_compat() -> tuple[bool, str]:
     # have done either (full = nmcli / ip link, egress = nft / iptables).
     # An interface step is always counted: no tool / nothing enumerated is a
     # failure, never silently dropped.
+    # A missing tool is never read as "no rule": the step fails.
     results: list[tuple[str, bool]] = []
-    if shutil.which("nmcli") and _run(["nmcli", "networking", "on"])[0]:
-        results.append(("nmcli", True))
-    elif shutil.which("ip"):
-        results += [(i, _run(["ip", "link", "set", i, "up"])[0])
-                    for i in list_linux_interfaces()] or [("interfaces:none-found", False)]
-    else:
-        results.append(("interfaces:no-nmcli-or-ip", False))
-    if shutil.which("nft"):
-        results.append(("nft", _run_removal(["nft", "delete", "table", "inet", "zee_egress"])[0]))
-    if shutil.which("iptables"):
-        results.append(("iptables", _remove_iptables_chain()))
+    on_ok = False
+    if shutil.which("nmcli"):
+        # A failed `networking on` stays a failure unless NetworkManager
+        # itself then reports networking enabled (the nmcli cut is undone).
+        # The ip sweep still runs whenever `on` itself failed: the cut may
+        # have fallen back to `ip link down` without touching nmcli.
+        on_ok = _run(["nmcli", "networking", "on"])[0]
+        nm_ok = on_ok or _run(["nmcli", "networking"])[1].strip() == "enabled"
+        results.append(("nmcli", nm_ok))
+    if not on_ok:
+        if shutil.which("ip"):
+            results += [(i, _run(["ip", "link", "set", i, "up"])[0])
+                        for i in list_linux_interfaces()] or [("interfaces:none-found", False)]
+        else:
+            results.append(("ip:not-found", False))
+    results.append(("nft", _run_removal(["nft", "delete", "table", "inet", "zee_egress"])[0])
+                   if shutil.which("nft") else ("nft:not-found", False))
+    results.append(("iptables", _remove_iptables_chain())
+                   if shutil.which("iptables") else ("iptables:not-found", False))
     return _summary("linux all-interfaces restore", results)
 
 
@@ -224,9 +233,8 @@ def _restore_macos_compat() -> tuple[bool, str]:
             or [("services:none-found", False)]
     else:
         results.append(("services:no-networksetup", False))
-    if shutil.which("pfctl"):
-        ok, _ = _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])
-        results.append(("pfctl", ok))
+    results.append(("pfctl", _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])[0])
+                   if shutil.which("pfctl") else ("pfctl:not-found", False))
     return _summary("macos all-interfaces restore", results)
 
 
@@ -239,6 +247,8 @@ def _restore_windows_compat() -> tuple[bool, str]:
         for rule in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local"):
             ok, _ = _run_removal(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule}"])
             results.append((f"rule({rule})", ok))
+    else:
+        results.append(("netsh:not-found", False))
     return _summary("windows all-interfaces restore", results)
 
 

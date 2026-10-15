@@ -404,3 +404,66 @@ def test_cuts_from_different_platforms_are_not_merged(tmp_path):
     p.write_text(_line(**{**CUT, "platform": "darwin"}, asset_id="a", modified=["Wi-Fi"])
                  + _line(**CUT, asset_id="a", modified=["eth0"]))
     assert CutStateLog(p).unresolved_for("a")[1] is True
+
+
+# ── coordinator external review (Codex), 2026-10-15 ───────────────────
+
+
+@pytest.mark.parametrize("present", [{"ip"}, {"ip", "nft"}, {"ip", "iptables"}])
+def test_linux_missing_firewall_tool_is_not_rule_absent(monkeypatch, present):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"/x/{n}" if n in present else None)
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    ok, detail = restore_mod._restore_linux_compat()
+    assert ok is False and "not-found" in detail
+
+
+def test_macos_missing_pfctl_is_not_rule_absent(monkeypatch):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: "/x/networksetup" if n == "networksetup" else None)
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: ["Wi-Fi"])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    assert restore_mod._restore_macos_compat()[0] is False
+
+
+@pytest.mark.parametrize("state, expect", [("disabled", False), ("enabled", True)])
+def test_nmcli_failure_is_kept_unless_networking_is_confirmed_on(monkeypatch, state, expect):
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda n: f"/x/{n}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: ["eth0"])
+    def run(cmd):
+        if cmd == ["nmcli", "networking", "on"]:
+            return False, "not authorized"
+        if cmd == ["nmcli", "networking"]:
+            return True, state
+        return True, ""
+    monkeypatch.setattr(restore_mod, "_run", run)
+    ok, detail = restore_mod._restore_linux_compat()
+    assert ok is expect and "nmcli" in detail
+    # A cut may have used `ip link down` (nmcli off failed): sweep regardless.
+    assert "eth0:ok" in detail
+
+
+class _BrokenLedger(CutStateLog):
+    def record_cut(self, **kw):
+        raise OSError(28, "No space left on device")
+
+
+@pytest.mark.parametrize("mod_name", ["cut_full", "cut_egress"])
+def test_ledger_write_failure_is_reported_not_raised(tmp_path, monkeypatch, mod_name):
+    import importlib
+    mod = importlib.import_module(f"zee.responder.{mod_name}")
+    monkeypatch.setattr(mod, f"_{mod_name}_dispatch", lambda: (True, "os cut done", ["eth0"]))
+    ok, detail = getattr(mod, mod_name)(asset_id="t-host", cut_state=_BrokenLedger(tmp_path / "c.jsonl"))
+    assert ok is False
+    assert "os=ok" in detail and "ledger=FAILED" in detail and "--all-interfaces" in detail
+
+
+def test_handle_shows_ledger_failure_and_remedy(tmp_path, monkeypatch):
+    import zee.responder.cut_egress as egress_mod
+    bodies: list = []
+    monkeypatch.setattr(seq, "notify_local", lambda t, b: bodies.append((t, b)) or True)
+    monkeypatch.setattr(egress_mod, "_cut_egress_dispatch", lambda: (True, "rules installed", ["r"]))
+    monkeypatch.setattr(seq, "cut_egress", egress_mod.cut_egress)
+    seq.handle(_event(), _asset(), dry_run=False, event_log=EventLog(log_dir=tmp_path),
+               cut_state=_BrokenLedger(tmp_path / "c.jsonl"))
+    title, body = bodies[-1]
+    assert "FAILED" in title and "ledger=FAILED" in body and "--all-interfaces" in body

@@ -21,6 +21,7 @@ from .cut_full import (
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_MACOS_PFCTL_EGRESS,
+    record_or_report,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,12 +38,8 @@ def cut_egress(
     ok, detail, modified = _cut_egress_dispatch()
     # Same as cut_full: record partial changes too (restore needs the record).
     if asset_id and cut_state is not None and modified:
-        cut_state.record_cut(
-            asset_id=asset_id,
-            method="egress",
-            platform=sys.platform,
-            modified=modified,
-        )
+        return record_or_report(cut_state, ok, detail, asset_id=asset_id,
+                                method="egress", modified=modified)
     return ok, detail
 
 

@@ -48,11 +48,29 @@ def cut_full(
     # refuses without a record, so an unrecorded partial cut could only be
     # undone by the broad emergency restore.
     if asset_id and cut_state is not None and modified:
-        cut_state.record_cut(
-            asset_id=asset_id,
-            method="full",
-            platform=sys.platform,
-            modified=modified,
+        return record_or_report(cut_state, ok, detail, asset_id=asset_id,
+                                method="full", modified=modified)
+    return ok, detail
+
+
+def record_or_report(cut_state, ok: bool, detail: str, *, asset_id: str,
+                     method: str, modified: list[str]) -> tuple[bool, str]:
+    """Write the cut record; a write failure turns the result into a failure.
+
+    The OS cut and the ledger write are reported separately in ``detail``
+    (``os=ok|FAILED ledger=ok|FAILED``) so a cut without a record is never
+    announced as applied and the operator sees the only way back.
+    """
+    try:
+        cut_state.record_cut(asset_id=asset_id, method=method,
+                             platform=sys.platform, modified=modified)
+    except OSError as e:
+        logger.error("cut_state write failed for %s: %s", asset_id, e)
+        return False, (
+            f"os={'ok' if ok else 'FAILED'} ledger=FAILED ({e}) — {detail}. "
+            f"Changed but not recorded: {', '.join(modified)}. "
+            f"`zee restore {asset_id}` may refuse (Z605) or miss them; undo with "
+            f"`zee restore {asset_id} --all-interfaces`."
         )
     return ok, detail
 

@@ -26,8 +26,12 @@ Not in any tagged release yet.
   independently (Linux no longer stops after `nmcli`; macOS now
   re-enables services the cut disabled), treats a Zee rule the tool
   itself reports as absent as removed, counts the interface step even
-  when nothing could be enumerated, and fails (Z601) unless every step
-  succeeded. **Behaviour
+  when nothing could be enumerated, treats a missing removal tool (nft,
+  iptables, pfctl, netsh) as a failed step rather than "no rule", keeps
+  a failed `nmcli networking on` unless NetworkManager then reports
+  networking enabled, and fails (Z601) unless every step succeeded. On
+  Linux hosts with only one of nft / iptables it therefore always
+  reports failure; read the per-step detail. **Behaviour
   change:** deployments whose cuts predate the cut record, or whose
   record was cleared, need `--all-interfaces` once.
 - **A failed or empty cut is no longer reported as success.** The cut
@@ -36,7 +40,9 @@ Not in any tagged release yet.
   failure, and so does a macOS egress cut whose `pfctl -e` fails (other
   than "already enabled"). A partial cut records the interfaces / rules
   it did change (full cut; Windows egress; iptables once the chain
-  exists), so restore can undo them.
+  exists), so restore can undo them. If the cut record cannot be
+  written, the cut is reported as failed with `os=ok ledger=FAILED`, what
+  was changed, and the `--all-interfaces` way back (no exception).
 - **Cut boundary (`zee.responder.blocker`).** Every automatic cut is
   re-validated against a fixed three-field request (asset, op_class,
   confidence) right before the cut runs. Same rules as before; it does

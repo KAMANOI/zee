@@ -207,7 +207,8 @@ def handle(
                         f"reason: {event.detail}\n"
                         f"decoy_ref: {event.decoy_ref or '-'}\n"
                         f"{reason_line(tier, action='contain' if ok else 'contain_failed')}\n"
-                        f"recover with: zee restore {event.asset_id}"
+                        + ("" if ok else f"detail: {detail}\n")
+                        + f"recover with: zee restore {event.asset_id}"
                     ),
                 )
 
