@@ -8,7 +8,7 @@ name: Real cut (virtual runners)
 on:
   workflow_dispatch:
   push:
-    branches: [main, feat/self-defense-20261015]
+    branches: [main, feat/self-defense-20261015, feat/privsep-stage2]
     paths:
       - .github/workflows/real-cut.yml
       - scripts/real_cut_check.py

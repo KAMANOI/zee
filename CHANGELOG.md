@@ -35,6 +35,8 @@ releases.
   quote and backslash could escape the string and run AppleScript (found by
   the external review of the privsep daemon, which sends notifications as
   root; the in-process path ran it as the operator's user).
+  The Windows toast is still built as a PowerShell command string with the
+  same escaping; it runs as the operator's own user and is not changed here.
 
 ### Verification
 
