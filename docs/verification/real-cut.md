@@ -45,11 +45,11 @@ main（と `feat/self-defense-20261015` の枝）への push のうち、遮断�
 | 2026-10-15 | 同上 | Linux ランナー・名前空間（iptables nf_tables 版・legacy 版） | egress | はい | はい | confirmed（復旧は iptables・iptables-legacy・iptables-nft をそれぞれ読み直して不存在を確認） |
 | 2026-10-15 | 同上 | macOS ランナー（pf、quick 付きの規則・`pfctl -E`） | egress | はい | はい | confirmed（復旧の `pfctl -X` で、遮断前に無効だった pf が Zee の復旧だけで無効に戻った） |
 | 2026-10-15 | 同上 | Windows ランナー（netsh、en-US） | egress | はい | はい | confirmed |
-| 2026-10-16 | 5d1ca43（run 38755882154、v0.13.1 の IPv6 対応。全ジョブ合格） | Linux ランナー・名前空間（nft・iptables nf_tables 版・legacy 版の egress、nft の full） | egress / full | はい（IPv4・IPv6 とも） | はい（IPv4・IPv6 とも） | confirmed（iptables の経路は ip6tables の規則も読み直し、復旧は ip6tables・ip6tables-legacy・ip6tables-nft で不存在を確認）。IPv6 は `2001:db8::1` 宛て（ULA でもリンクローカルでもない）で、合格に必須 |
+| 2026-10-16 | 5d1ca43（run 38755882154）・fc17c99（run 38758531786、Codex レビュー4回の修正後）。v0.13.1 の IPv6 対応、いずれも全ジョブ合格 | Linux ランナー・名前空間（nft・iptables nf_tables 版・legacy 版の egress、nft の full） | egress / full | はい（IPv4・IPv6 とも） | はい（IPv4・IPv6 とも） | confirmed（iptables の経路は ip6tables の規則も読み直し、復旧は ip6tables・ip6tables-legacy・ip6tables-nft で不存在を確認）。IPv6 は `2001:db8::1` 宛て（ULA でもリンクローカルでもない）で、合格に必須 |
 | 2026-10-16 | 同上 | macOS ランナー（pf） | egress | はい（IPv4）／IPv6 未測定 | はい（IPv4） | confirmed。ランナーに IPv6 の外向き経路が無い |
 | 2026-10-16 | 同上 | Windows ランナー（netsh、en-US） | egress | はい（IPv4）／**IPv6 未測定** | はい（IPv4） | confirmed（IPv4・IPv6 の範囲を入れた規則を netsh が受け付け、読み直しで一致）。**IPv6 の通信が止まることは未確認**（ランナーに IPv6 の外向き経路が無い） |
 
-**IPv6 の測り方（v0.13.1 から）**：`--url6` に IPv6 だけの URL を渡し、IPv4 と同じく遮断前・遮断中・復旧後に到達を測ります。Linux の名前空間では `2001:db8::1`／`::2` を用意し（`keep_addr_on_down=1`。full 遮断で静的な IPv6 アドレスが消えるのを防ぐ）、`--require-ipv6` で IPv6 が止まって戻ることを合格の条件にしています。macOS・Windows のランナーは遮断前に IPv6 で届かないので「未測定（unmeasured）」と記録し、合格には数えません（ジョブの合否は IPv4 で決まります。ただし IPv6 を測れて止まらなかった・戻らなかった場合は、どのジョブも不合格です）。
+**IPv6 の測り方（v0.13.1 から）**：`--url6` に URL を渡し、IPv4 と同じく遮断前・遮断中・復旧後に到達を測ります。どちらも遮断の前に一度だけ名前解決したアドレスへ、その版（IPv4／IPv6）のソケットで直接つなぎます（プロキシを使わない。遮断中の名前解決の失敗を「止まった」と数えない）。Linux の名前空間では `2001:db8::1`／`::2` を用意し（`keep_addr_on_down=1`。full 遮断で静的な IPv6 アドレスが消えるのを防ぐ）、`--require-ipv6` で IPv6 が止まって戻ることを合格の条件にしています。macOS・Windows のランナーは遮断前に IPv6 で届かないので「未測定（unmeasured）」と記録し、合格には数えません（ジョブの合否は IPv4 で決まります。ただし IPv6 を測れて止まらなかった・戻らなかった場合は、どのジョブも不合格です）。
 
 **実機の行の注（「元どおり」は誰が戻したか）**：この回（commit 1c79265）は、実行後の pf 主ルールセット・pf の無効状態・ネットワークサービスが実行前と同一でしたが、比較の前にスクリプトの後始末（Zee のアンカーを空にする・実行前に有効だったサービスを有効にする・`pfctl -d`）が走っていました。**pf を無効に戻したのはスクリプトで、Zee 自身ではありません**（当時の Zee は `pfctl -e` で有効にし、復旧で無効に戻していませんでした）。サービスについても、Zee の復旧で戻ったのかスクリプトで戻ったのかは、この回の記録では区別できません（Zee の復旧自体は成功を返しています）。v0.13.0 では、Zee の復旧が `pfctl -X` で自分の有効化の参照だけを返し、スクリプトは Zee の復旧の直後とスクリプトの後始末の後を分けて比べます。v0.13.0 の規則（quick 付き・`pfctl -E`／`-X`）は、公開後に同じ実機で流し直しました（下の表の 7c70c9d の行）。
 

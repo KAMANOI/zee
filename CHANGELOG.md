@@ -31,7 +31,7 @@ update.** Up to v0.13.0 those two paths did not stop outbound IPv6.
 ### Verification
 
 - `scripts/real_cut_check.py --url6` measures IPv6 the same way as IPv4;
-  `--require-ipv6` makes it part of the pass. Run 38755882154 (commit
+  `--require-ipv6` makes it part of the pass; a measured IPv6 failure always fails. Probes connect to the address resolved before the cut, without a proxy. Runs 38758531786 (commit fc17c99) and 38755882154 (commit
   5d1ca43, all jobs passed): in the Linux namespace (nft, iptables
   nf_tables and legacy egress; nft full) IPv6 to `2001:db8::1` stopped
   during the cut and came back after Zee's restore. **Not measured on
