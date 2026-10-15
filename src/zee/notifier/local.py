@@ -7,6 +7,7 @@ survives even when the desktop notification backend is missing.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -63,27 +64,31 @@ def _notify_macos(title: str, body: str) -> bool:
         return False
 
 
+# Fixed script: title/body are read from the environment, never pasted into
+# the script, so `"`, `$(...)` or a backtick in an asset id stays text.
+_WIN_SCRIPT = (
+    '[reflection.assembly]::loadwithpartialname("System.Windows.Forms")|Out-Null;'
+    '[reflection.assembly]::loadwithpartialname("System.Drawing")|Out-Null;'
+    '$n=New-Object System.Windows.Forms.NotifyIcon;'
+    '$n.Icon=[System.Drawing.SystemIcons]::Information;'
+    '$n.Visible=$true;'
+    '$n.BalloonTipIcon=[System.Windows.Forms.ToolTipIcon]::Info;'
+    '$n.BalloonTipTitle=$env:ZEE_TITLE;'
+    '$n.BalloonTipText=$env:ZEE_BODY;'
+    '$n.ShowBalloonTip(5000);'
+)
+
+
 def _notify_windows(title: str, body: str) -> bool:
-    ps = (
-        '[reflection.assembly]::loadwithpartialname("System.Windows.Forms")|Out-Null;'
-        '[reflection.assembly]::loadwithpartialname("System.Drawing")|Out-Null;'
-        '$n=New-Object System.Windows.Forms.NotifyIcon;'
-        '$n.Icon=[System.Drawing.SystemIcons]::Information;'
-        '$n.Visible=$true;'
-        f'$n.ShowBalloonTip(5000,"{_escape(title)}","{_escape(body)}",'
-        '[System.Windows.Forms.ToolTipIcon]::Info);'
-    )
     try:
         subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps],
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WIN_SCRIPT],
+            env={**os.environ, "ZEE_TITLE": title, "ZEE_BODY": body},
             check=False,
             timeout=5,
         )
         return True
-    except (subprocess.SubprocessError, OSError) as e:
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        # ValueError: a NUL in the value can't go into an environment block.
         logger.warning("powershell toast failed: %s", e)
         return False
-
-
-def _escape(s: str) -> str:
-    return s.replace('"', '\\"').replace("\n", " ")

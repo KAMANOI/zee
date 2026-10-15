@@ -74,6 +74,23 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
 - `.github/workflows/privsep.yml` + `scripts/privsep_ci.sh` on disposable
   runners only (results in docs/design/privsep.md §11).
 
+## [0.13.3] — 2026-10-16
+
+### Security
+
+- **Windows notifications no longer build PowerShell from the asset id or
+  message.** The same pattern fixed for macOS in v0.13.2: up to v0.13.2 the
+  balloon title and body were pasted into a double-quoted PowerShell
+  string, where `$(...)` is evaluated and a quote ends the string, so an
+  asset id could run PowerShell as the user running Zee — confirmed on a
+  real Windows runner with the v0.13.2 code (both a `$(...)` and a quote
+  breakout created a file). The asset id comes from `assets.toml`, which
+  only the user running Zee can write, so this gives no extra privilege
+  today. A fixed script now reads the title and body from environment
+  variables (`$env:ZEE_TITLE`, `$env:ZEE_BODY`); a test round-trips quotes,
+  `$(...)`, backticks and newlines through the real PowerShell and checks
+  nothing ran.
+
 ## [0.13.2] — 2026-10-16
 
 ### Security
