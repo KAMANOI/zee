@@ -475,16 +475,20 @@ def test_serve_end_to_end(tmp_path):
             break
         time.sleep(0.02)
     assert oct(sock.stat().st_mode & 0o777) == "0o600"
-    assert call(sock, {"op": "status"})["ok"]
-    assert privsep_cut(sock)(CutRequest("ws", "change", "high")) == (False, "cut daemon: no_permission (Z715)")
+    me = os.geteuid()
+    assert call(sock, {"op": "status"}, server_uid=me)["ok"]
+    r = privsep_cut(sock)(CutRequest("ws", "change", "high"))  # expects root: refuses this server
+    assert r[0] is False and "not the cut daemon" in r[1] and "nothing was sent" in r[1]
+    assert privsep_cut(sock, server_uid=me)(CutRequest("ws", "change", "high")) == (
+        False, "cut daemon: no_permission (Z715)")
     d.engine.state["keys"]["k1"] = "s1"
-    ch = call(sock, {"op": "challenge", "admin_op": "stop", "args": {}})
+    ch = call(sock, {"op": "challenge", "admin_op": "stop", "args": {}}, server_uid=me)
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
     assert call(sock, {"op": "submit", "payload": ch["payload"], "entered": ch["code"],
-                       "key_id": "k1", "signature": sig})["ok"]
+                       "key_id": "k1", "signature": sig}, server_uid=me)["ok"]
     t.join(5)
     assert not t.is_alive()
-    assert privsep_cut(sock)(CutRequest("ws", "change", "high"))[0] is False  # gone: never "applied"
+    assert privsep_cut(sock, server_uid=me)(CutRequest("ws", "change", "high"))[0] is False  # gone
 
 
 @pytest.mark.skipif(not shutil.which("openssl"), reason="openssl not available")
@@ -543,7 +547,7 @@ def test_slow_and_excess_connections_cannot_block_the_daemon(tmp_path, monkeypat
         c.settimeout(2)
         assert b"malformed" in c.recv(200)
     assert time.monotonic() - t0 < 2
-    assert call(sock, {"op": "status"})["ok"]  # slots were released
+    assert call(sock, {"op": "status"}, server_uid=os.geteuid())["ok"]  # slots were released
 
 
 # ---- 4-persona review (2026-10-16)
@@ -624,3 +628,42 @@ def test_heartbeat_announces_loss_and_return_once_each(monkeypatch):
     assert notes == ["Zee cut daemon UNREACHABLE (Z710)", "Zee cut daemon reachable again",
                      "Zee cut daemon UNREACHABLE (Z710)"]
     assert hooks == notes
+
+
+# ---- Codex 6
+def test_submit_is_rate_limited_per_uid(env):
+    d, _, _, _ = env
+    bogus = {"op": "submit", "payload": {"req": "x"}, "entered": "00", "key_id": "k1", "signature": ""}
+    for _ in range(10):
+        assert req(d, **bogus)["refused"] == "unknown_request"
+    assert req(d, **bogus)["refused"] == "rate_limited"
+
+
+def test_socket_dir_under_a_replaceable_parent_is_refused():
+    from zee.privsep.daemon import check_socket_dir
+    parent = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    child = parent / "run"
+    child.mkdir(mode=0o755)
+    check_socket_dir(child)
+    os.chmod(parent, 0o777)  # others could rename "run" and plant their own socket
+    with pytest.raises(ValueError, match="replaceable"):
+        check_socket_dir(child)
+    os.chmod(parent, 0o1777)  # sticky (like /tmp): others can't rename our directory
+    check_socket_dir(child)
+
+
+def test_cut_result_unknown_after_the_request_was_sent():
+    from zee.privsep.client import privsep_cut
+    from zee.responder.blocker import CutRequest
+    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "s"
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(sock))
+    srv.listen(1)
+
+    def accept_and_hang_up():
+        c, _ = srv.accept()
+        c.recv(1000)
+        c.close()  # took the request, never answered
+    threading.Thread(target=accept_and_hang_up, daemon=True).start()
+    ok, detail = privsep_cut(sock, server_uid=os.geteuid())(CutRequest("ws", "change", "high"))
+    assert ok is False and "UNKNOWN" in detail and "nothing was sent" not in detail

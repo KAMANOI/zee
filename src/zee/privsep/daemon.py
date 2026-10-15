@@ -25,7 +25,6 @@ import re
 import socket
 import socketserver
 import stat
-import struct
 import sys
 import threading
 import time
@@ -44,6 +43,7 @@ from ..responder import blocker, permission
 from ..responder.cut_egress import cut_egress
 from ..responder.cut_full import cut_full
 from ..telemetry.cut_state import CutStateLog
+from .client import peer_uid
 
 logger = logging.getLogger(__name__)
 
@@ -120,27 +120,6 @@ def reply_code(reply: dict) -> str:
     return "Z718"  # the signature was accepted but the operation itself failed (see detail)
 
 
-def peer_uid(sock: socket.socket) -> int:
-    """Effective uid of the connected peer, as recorded by the kernel at connect().
-
-    Linux: SO_PEERCRED returns struct ucred {pid, uid, gid} (unix(7)).
-    macOS: LOCAL_PEERCRED at level SOL_LOCAL (0, sys/un.h) returns struct xucred
-    {u_int cr_version; uid_t cr_uid; ...} with cr_version == XUCRED_VERSION (0)
-    (unix(4), sys/ucred.h). Anything else is refused, never guessed.
-    """
-    if hasattr(socket, "SO_PEERCRED"):
-        _pid, uid, _gid = struct.unpack(
-            "3i", sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
-        return uid
-    if hasattr(socket, "LOCAL_PEERCRED"):
-        raw = sock.getsockopt(0, socket.LOCAL_PEERCRED, struct.calcsize("IIh16I"))
-        version, uid = struct.unpack_from("II", raw)
-        if version != 0:
-            raise OSError(f"unknown xucred version {version}")
-        return uid
-    raise OSError("no peer credentials on this platform")
-
-
 class AdminEngine(Engine):
     """The egress approval engine with the daemon's admin operations instead of egress config.
 
@@ -196,7 +175,7 @@ class CutDaemon:
         self.last_seen: Optional[float] = None
         self.findings: list[str] = []
         self._strikes = 0
-        self._asked: dict[int, list[float]] = {}  # uid -> challenge times (last minute)
+        self._asked: dict[tuple[int, str], list[float]] = {}  # (uid, op) -> request times (last minute)
         self._owner: dict[str, int] = {}  # pending request id -> uid that asked for it
         self._tamper_acted = False
 
@@ -276,7 +255,7 @@ class CutDaemon:
                 if op == "challenge":
                     return self._challenge(req, uid)
                 if op == "submit":
-                    return self._submit(req)
+                    return self._submit(req, uid)
                 return self._bootstrap(req, uid)
         except ZeeError as e:
             return {"ok": False, "error": str(e)}
@@ -334,11 +313,8 @@ class CutDaemon:
         if why:
             return {"ok": False, "refused": why}
         args = {**args, **self.bindings(req["admin_op"])}
-        now = self.clock()
-        recent = [t for t in self._asked.get(uid, []) if t > now - 60]
-        if len(recent) >= CHALLENGES_PER_MIN:  # bounds root's disk use (admin.jsonl) too
+        if self._rate_limited(uid, "challenge"):
             return {"ok": False, "refused": "rate_limited"}
-        self._asked[uid] = recent + [now]
         mine = [r for r, u in self._owner.items() if u == uid and r in self.engine.pending]
         self._owner = {r: u for r, u in self._owner.items() if r in self.engine.pending}
         while len(mine) >= PENDING_PER_UID:  # a uid only ever displaces its own requests
@@ -367,7 +343,18 @@ class CutDaemon:
                 return "bad_sha256"
         return None
 
-    def _submit(self, req: dict) -> dict:
+    def _rate_limited(self, uid: int, op: str) -> bool:
+        """At most CHALLENGES_PER_MIN per uid and op: bounds root's admin.jsonl growth too."""
+        now = self.clock()
+        recent = [t for t in self._asked.get((uid, op), []) if t > now - 60]
+        if len(recent) >= CHALLENGES_PER_MIN:
+            return True
+        self._asked[(uid, op)] = recent + [now]
+        return False
+
+    def _submit(self, req: dict, uid: int) -> dict:
+        if self._rate_limited(uid, "submit"):
+            return {"ok": False, "refused": "rate_limited"}
         if set(req) != {"op", "payload", "entered", "key_id", "signature"} \
                 or not isinstance(req["signature"], str):
             return {"ok": False, "error": "malformed"}
@@ -525,6 +512,28 @@ def _read_line(sock: socket.socket) -> Optional[bytes]:
     return line + nl if nl and len(line) < MAX_LINE else None
 
 
+def check_socket_dir(d: Path) -> None:
+    """Whoever can rename or write any directory on the way could swap the socket for their own.
+    The socket directory must be a real directory owned by us (root), not group/other-writable;
+    every ancestor (after resolving system links such as macOS /var -> /private/var) must be
+    owned by root or us and not group/other-writable, unless sticky (like /tmp)."""
+    if os.path.islink(d):
+        raise ValueError(f"socket directory is a symlink: {d}")
+    me = os.geteuid()
+    real = Path(os.path.realpath(d))
+    for i, p in enumerate([real, *real.parents]):
+        st = os.lstat(p)
+        writable = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        if i == 0:
+            ok = stat.S_ISDIR(st.st_mode) and st.st_uid == me and not writable
+        else:
+            ok = stat.S_ISDIR(st.st_mode) and st.st_uid in (0, me) and (
+                not writable or st.st_mode & stat.S_ISVTX)
+        if not ok:
+            raise ValueError(f"socket directory must be owned by uid {me} and not group/other-writable, "
+                             f"and no directory above it replaceable by others: {p}")
+
+
 def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
           check_every: float = 30) -> int:
     """Bind, then serve until a signed ``stop``. Exit 0 so `KeepAlive.SuccessfulExit=false`
@@ -533,11 +542,7 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
     if not socket_path.parent.exists():  # e.g. /var/run/zee on macOS (systemd's RuntimeDirectory on Linux)
         socket_path.parent.mkdir(parents=True)
         os.chmod(socket_path.parent, 0o755)  # the daemon's umask (077) would make it untraversable
-    st = os.lstat(socket_path.parent)  # whoever can write here could swap the socket for their own
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() \
-            or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise ValueError(f"socket directory must be a real directory owned by uid {os.geteuid()} "
-                         f"and not group/other-writable: {socket_path.parent}")
+    check_socket_dir(socket_path.parent)
     if socket_path.is_symlink():
         raise ValueError(f"symlink refused: {socket_path}")
     if socket_path.exists():

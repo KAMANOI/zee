@@ -25,7 +25,11 @@
      │ 管理（復旧・設定変更・自動遮断の切替・自己防衛の切替・停止・鍵の追加削除）
      │   = {"op":"challenge"} で請求を受け取り → 別端末で署名 → {"op":"submit"}
      ▼ Unix ドメインソケット（/var/run/zee/cutd.sock。root 所有・業務ユーザーだけの専用グループに 0660。
-     │   親ディレクトリが root 所有・グループ／他から書けない時だけ起動する）
+     │   ソケットのディレクトリが root 所有・グループ／他から書けず、その上のどのディレクトリも
+     │   他人が名前を変えられない（root 所有で書けない、または /tmp のような sticky）時だけ起動する。
+     │   業務側も、接続した相手の uid が 0 であることをカーネルから確かめてから送る（差し替えたソケットに
+     │   「遮断した」と嘘をつかせない）。送った後に返事が来なければ「遮断の結果は不明」と通知し、
+     │   「何も遮断していない」とは言わない）
 遮断部（root の常駐。src/zee/privsep/daemon.py）
   1. 相手の uid をカーネルから得る（§2）。cut／status／challenge／submit は --allow-uid の uid（と root）だけ
   2. 要求の形を検査（1行 16KiB まで・JSON オブジェクト・項目と型を固定。余分な項目は拒否）
@@ -35,7 +39,7 @@
   5. 台帳（cut_state.jsonl）・管理の記録（admin.jsonl）は遮断部の状態ディレクトリにだけ書く
 ```
 
-受け付ける要求は **`cut`・`status`（署名なし）** と、**`challenge`・`submit`（署名の経路）**、**`bootstrap_key`（相手が root の時だけ）** の5つ。`challenge`・`submit` も許可された uid と root だけ（4ペルソナ・レビュー：誰でも請求を作れると、他人の承認待ちを追い出し、root の記録でディスクを埋められた）。請求は uid ごとに未処理4件まで（超えたらその uid 自身の古いものを捨てる）・1分に10件まで。`status` は全体のロックの外で答える（遅い遮断・復旧の間も watch の心拍が詰まらない）。返答の失敗には `code`（Z711〜Z718、`docs/maintenance/privsep_install.md` §7）を付ける。`restore`・`stop`・`auto_set` 等を署名なしで送っても `unknown_op`（テストと CI で確認）。
+受け付ける要求は **`cut`・`status`（署名なし）** と、**`challenge`・`submit`（署名の経路）**、**`bootstrap_key`（相手が root の時だけ）** の5つ。`challenge`・`submit` も許可された uid と root だけ（4ペルソナ・レビュー：誰でも請求を作れると、他人の承認待ちを追い出し、root の記録でディスクを埋められた）。請求は uid ごとに未処理4件まで（超えたらその uid 自身の古いものを捨てる）・`challenge` と `submit` はそれぞれ uid ごとに1分に10件まで（Codex 6回目：署名なしの偽の `submit` で root の記録を増やせたため）。`status` は全体のロックの外で答える（遅い遮断・復旧の間も watch の心拍が詰まらない）。返答の失敗には `code`（Z711〜Z718、`docs/maintenance/privsep_install.md` §7）を付ける。`restore`・`stop`・`auto_set` 等を署名なしで送っても `unknown_op`（テストと CI で確認）。
 
 業務側（`zee watch`）は、assets.toml に `[privsep] socket = "..."` がある時**だけ**遮断部へ要求を送る。無ければ従来どおり同じプロセスで遮断する（`Config.privsep_socket` が None。既定の動作は変えていない。`tests/test_privsep.py::test_handle_uses_privsep_only_when_given`）。遮断部に届かなければ通知の題名は「Zee cut FAILED」になり、「届かなかった・Zee は何も遮断していない」と本文に出す（成功とは言わない）。
 

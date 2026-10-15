@@ -24,8 +24,11 @@ ProtectSystem=strict
 # openssl signature checks write temporary files: a private, writable /tmp
 PrivateTmp=yes
 ProtectHome=read-only
-# the socket directory, and the iptables lock when the iptables backend is used
-ReadWritePaths=/run/zee -/run/xtables.lock
+# The socket directory, and the iptables lock. iptables creates /run/xtables.lock
+# on first use, which a read-only /run refuses (seen on the CI runner: restore was
+# then unverifiable, Z606), so it is created before the sandbox applies ("+").
+ExecStartPre=+/usr/bin/touch /run/xtables.lock
+ReadWritePaths=/run/zee /run/xtables.lock
 
 [Install]
 WantedBy=multi-user.target

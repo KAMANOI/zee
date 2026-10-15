@@ -33,7 +33,7 @@ signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the 
   zee_as "$WATCH_USER" challenge "$op" "$@" >"$X/req.json" 2>"$X/code.txt" || { cat "$X/req.json" "$X/code.txt" >&2; return 1; }
   local code
   code=$(sed -n 's/.*: \([0-9][0-9]\)$/\1/p' "$X/code.txt")
-  jq -r '.payload | "approving: op=\(.op) args=\(.args|tostring)"' "$X/req.json"  # the approver looks first
+  jq -r '.payload | "approving: op=\(.op) args=\(.args|tostring)"' "$X/req.json" >&2  # the approver looks first
   echo yes | PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep digest --request "$X/req.json" --entered "$code" --out "$X/d.bin"
   openssl pkeyutl -sign -inkey "$KEY" -in "$X/d.bin" -out "$X/sig.der"
   chmod 644 "$X"/req.json "$X"/sig.der

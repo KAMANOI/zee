@@ -24,14 +24,18 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   number matching and replay ledger; requests carry `aud`, and `auto_set` /
   `restore` are bound to the approved config / cut ledger at issue time).
   Signed requests (`challenge` / `submit`) are also limited to those uids
-  and root, at most 4 pending and 10 per minute per uid. Every admin
+  and root, at most 4 pending per uid, and `challenge` / `submit` each at
+  most 10 per minute per uid. The client checks that the socket is served
+  by root (kernel peer credentials) and reports "result unknown", never
+  "nothing was cut", when a request was sent but no answer came back. Every admin
   request is bound to an applied-operation generation, so a newer approval
   voids older unused ones. Replies carry codes Z710–Z719
   (docs/maintenance/privsep_install.md §7); `zee privsep digest` shows what
   is being approved and asks for "yes". Root commands and the shipped
   launchd / systemd definitions run Python with `-P -s` (never import from
   the working directory or the user site). The daemon refuses to start if
-  its socket directory is not root-owned or is group/other-writable.
+  its socket directory is not root-owned or is group/other-writable, or if
+  any directory above it could be renamed by another user.
   `zee watch` uses it only when `assets.toml` has `[privsep] socket = ...`;
   without it the in-process cut is unchanged. With it, losing the daemon is
   announced once (local notification + webhook), and once when it is back.
@@ -47,6 +51,10 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   quote and backslash could escape the string and run AppleScript (found by
   the external review of the privsep daemon, which sends notifications as
   root; the in-process path ran it as the operator's user).
+- **iptables lock under the shipped systemd unit.** A read-only `/run`
+  made iptables-legacy fail to open `/run/xtables.lock`; Zee then reported
+  the restore as unverified (Z606), never as done. The unit now creates the
+  lock before the sandbox applies.
   The Windows toast is still built as a PowerShell command string with the
   same escaping; it runs as the operator's own user and is not changed here.
 
