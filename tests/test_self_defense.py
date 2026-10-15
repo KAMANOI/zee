@@ -343,3 +343,64 @@ def test_handle_does_not_cut_when_boundary_refuses(tmp_path, monkeypatch, quiet)
     assert cuts == []
     assert result.cut_executed is False
     assert result.cut_skipped_reason == "boundary:asset_mismatch"
+
+
+# ── independent re-check findings (fix commit), 2026-10-15 ────────────
+
+
+def test_missing_binary_is_not_an_absent_rule(monkeypatch):
+    def launch_fails(*a, **k):
+        raise FileNotFoundError(2, "No such file or directory", "nft")
+    monkeypatch.setattr(restore_mod.subprocess, "run", launch_fails)
+    assert restore_mod._run_removal(["nft", "delete", "table", "inet", "zee_egress"])[0] is False
+
+
+@pytest.mark.parametrize("platform_fn", ["_restore_linux_compat", "_restore_macos_compat", "_restore_windows_compat"])
+def test_firewall_success_alone_is_not_a_full_restore(monkeypatch, platform_fn):
+    """Interface enumeration failed (empty): firewall steps alone must not pass."""
+    monkeypatch.setattr(restore_mod.shutil, "which", lambda name: None if name == "nmcli" else f"/x/{name}")
+    monkeypatch.setattr(restore_mod, "list_linux_interfaces", lambda: [])
+    monkeypatch.setattr(restore_mod, "list_macos_services", lambda **k: [])
+    monkeypatch.setattr(restore_mod, "list_windows_interfaces", lambda **k: [])
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    assert getattr(restore_mod, platform_fn)()[0] is False
+
+
+def _line(**kw) -> str:
+    import json
+    return json.dumps(kw) + "\n"
+
+
+CUT = dict(type="cut", cut_at="2026-10-15T00:00:00+00:00", method="full", platform="linux")
+
+
+def test_malformed_resolved_line_is_damage_and_does_not_erase_earlier_cut(tmp_path):
+    p = tmp_path / "cut_state.jsonl"
+    p.write_text(_line(**CUT, asset_id="a", modified=["eth0"])
+                 + _line(type="resolved", asset_id="a")
+                 + _line(**CUT, asset_id="a", modified=["eth1"]))
+    rec, damaged = CutStateLog(p).unresolved_for("a")
+    assert damaged is True
+
+
+def test_other_assets_lines_are_validated_too(tmp_path):
+    p = tmp_path / "cut_state.jsonl"
+    p.write_text(_line(**CUT, asset_id="a", modified=["eth0"]) + _line(type="cut", asset_id="b"))
+    assert CutStateLog(p).unresolved_for("a")[1] is True
+
+
+@pytest.mark.parametrize("bad", [{"platform": None}, {"method": "nuke"}, {"platform": "plan9"}])
+def test_cut_record_field_types_are_validated(tmp_path, monkeypatch, quiet, bad):
+    _no_compat(monkeypatch)
+    p = tmp_path / "cut_state.jsonl"
+    p.write_text(_line(**{**CUT, **bad}, asset_id="a", modified=["eth0"]))
+    with pytest.raises(ZeeError) as ei:
+        restore_mod.restore("a", cut_state=CutStateLog(p))
+    assert ei.value.code == "Z605"
+
+
+def test_cuts_from_different_platforms_are_not_merged(tmp_path):
+    p = tmp_path / "cut_state.jsonl"
+    p.write_text(_line(**{**CUT, "platform": "darwin"}, asset_id="a", modified=["Wi-Fi"])
+                 + _line(**CUT, asset_id="a", modified=["eth0"]))
+    assert CutStateLog(p).unresolved_for("a")[1] is True

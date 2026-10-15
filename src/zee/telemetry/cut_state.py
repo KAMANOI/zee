@@ -45,6 +45,37 @@ class CutRecord:
     modified: tuple[str, ...]
 
 
+_PLATFORMS = ("linux", "darwin", "win32")
+
+
+def _parse(raw: object) -> "CutRecord | str":
+    """Validate one ledger line. Returns a CutRecord for ``cut``, the asset_id
+    (str) for ``resolved``; raises ValueError/KeyError/TypeError otherwise."""
+    if not isinstance(raw, dict):
+        raise TypeError("record must be an object")
+    asset_id = raw["asset_id"]
+    if not isinstance(asset_id, str) or not asset_id:
+        raise ValueError("asset_id must be a non-empty string")
+    if raw.get("type") == "resolved":
+        if datetime.fromisoformat(raw["resolved_at"]).tzinfo is None:
+            raise ValueError("resolved_at must include timezone")
+        return asset_id
+    if raw.get("type") != "cut":
+        raise ValueError("unknown record type")
+    cut_at = datetime.fromisoformat(raw["cut_at"])
+    if raw["method"] not in ("full", "egress"):
+        raise ValueError("invalid method")
+    platform = raw["platform"]
+    if not isinstance(platform, str) or not platform.startswith(_PLATFORMS):
+        raise ValueError("invalid platform")
+    modified = raw["modified"]
+    if not isinstance(modified, list) or not modified or \
+            not all(isinstance(m, str) and m for m in modified):
+        raise ValueError("modified must be a non-empty list of names")
+    return CutRecord(asset_id=asset_id, cut_at=cut_at, method=raw["method"],
+                     platform=platform, modified=tuple(modified))
+
+
 class CutStateLog:
     """Append-only JSON Lines log of ``cut`` and ``resolved`` events."""
 
@@ -110,42 +141,25 @@ class CutStateLog:
             if not line:
                 continue
             try:
-                rec = json.loads(line)
-            except (json.JSONDecodeError, RecursionError) as e:
-                logger.warning(
-                    "cut_state %s:%d malformed line, skipping (%s)",
-                    self.path, line_no, e,
-                )
+                rec = _parse(json.loads(line))
+            except (json.JSONDecodeError, RecursionError, KeyError, ValueError, TypeError) as e:
+                logger.warning("cut_state %s:%d malformed line (%s)", self.path, line_no, e)
                 damaged = True
                 continue
-            if not isinstance(rec, dict) or rec.get("type") not in ("cut", "resolved") \
-                    or not isinstance(rec.get("asset_id"), str):
-                damaged = True
-                continue
-            if rec["asset_id"] != asset_id:
-                continue
-            if rec["type"] == "cut":
-                try:
-                    modified = rec["modified"]
-                    if not isinstance(modified, list) or not modified or \
-                            not all(isinstance(m, str) and m for m in modified):
-                        raise ValueError("modified must be a non-empty list of names")
-                    prev = candidate.modified if candidate else ()
-                    candidate = CutRecord(
-                        asset_id=asset_id,
-                        cut_at=datetime.fromisoformat(rec["cut_at"]),
-                        method=rec.get("method", ""),
-                        platform=rec.get("platform", ""),
-                        modified=prev + tuple(m for m in modified if m not in prev),
-                    )
-                except (KeyError, ValueError, TypeError) as e:
-                    logger.warning(
-                        "cut_state %s:%d malformed cut record (%s)",
-                        self.path, line_no, e,
-                    )
-                    damaged = True
+            # Every line is validated above, whatever its asset; only then filter.
+            if isinstance(rec, CutRecord):
+                if rec.asset_id != asset_id:
                     continue
-            else:
+                if candidate is not None and candidate.platform != rec.platform:
+                    logger.warning("cut_state %s:%d platform differs from earlier cut", self.path, line_no)
+                    damaged = True
+                prev = candidate.modified if candidate else ()
+                candidate = CutRecord(
+                    asset_id=asset_id, cut_at=rec.cut_at, method=rec.method,
+                    platform=rec.platform,
+                    modified=prev + tuple(m for m in rec.modified if m not in prev),
+                )
+            elif rec == asset_id:
                 candidate = None
         return candidate, damaged
 

@@ -198,17 +198,16 @@ def _restore_compat() -> tuple[bool, str]:
 def _restore_linux_compat() -> tuple[bool, str]:
     # Interfaces and the egress rule are restored independently: a cut may
     # have done either (full = nmcli / ip link, egress = nft / iptables).
+    # An interface step is always counted: no tool / nothing enumerated is a
+    # failure, never silently dropped.
     results: list[tuple[str, bool]] = []
-    nm_ok = False
-    if shutil.which("nmcli"):
-        nm_ok = _run(["nmcli", "networking", "on"])[0]
-        results.append(("nmcli", nm_ok))
-    if not nm_ok and shutil.which("ip"):
-        if results:
-            results.pop()  # nmcli failed but ip link is the fallback that decides
-        for ifname in list_linux_interfaces():
-            ok, _ = _run(["ip", "link", "set", ifname, "up"])
-            results.append((ifname, ok))
+    if shutil.which("nmcli") and _run(["nmcli", "networking", "on"])[0]:
+        results.append(("nmcli", True))
+    elif shutil.which("ip"):
+        results += [(i, _run(["ip", "link", "set", i, "up"])[0])
+                    for i in list_linux_interfaces()] or [("interfaces:none-found", False)]
+    else:
+        results.append(("interfaces:no-nmcli-or-ip", False))
     if shutil.which("nft"):
         results.append(("nft", _run_removal(["nft", "delete", "table", "inet", "zee_egress"])[0]))
     if shutil.which("iptables"):
@@ -220,9 +219,11 @@ def _restore_macos_compat() -> tuple[bool, str]:
     results: list[tuple[str, bool]] = []
     if shutil.which("networksetup"):
         # include_disabled: a full cut leaves the services disabled ('*').
-        for svc in list_macos_services(include_disabled=True):
-            ok, _ = _run(["networksetup", "-setnetworkserviceenabled", svc, "on"])
-            results.append((svc, ok))
+        results += [(svc, _run(["networksetup", "-setnetworkserviceenabled", svc, "on"])[0])
+                    for svc in list_macos_services(include_disabled=True)] \
+            or [("services:none-found", False)]
+    else:
+        results.append(("services:no-networksetup", False))
     if shutil.which("pfctl"):
         ok, _ = _run(["pfctl", "-a", ZEE_RULE_TAG, "-F", "all"])
         results.append(("pfctl", ok))
@@ -232,9 +233,9 @@ def _restore_macos_compat() -> tuple[bool, str]:
 def _restore_windows_compat() -> tuple[bool, str]:
     results: list[tuple[str, bool]] = []
     if shutil.which("netsh"):
-        for ifname in list_windows_interfaces(only_enabled=False):
-            ok, _ = _run(["netsh", "interface", "set", "interface", ifname, "admin=enable"])
-            results.append((ifname, ok))
+        results += [(i, _run(["netsh", "interface", "set", "interface", i, "admin=enable"])[0])
+                    for i in list_windows_interfaces(only_enabled=False)] \
+            or [("interfaces:none-found", False)]
         for rule in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local"):
             ok, _ = _run_removal(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={rule}"])
             results.append((f"rule({rule})", ok))
@@ -245,6 +246,7 @@ def _restore_windows_compat() -> tuple[bool, str]:
 # ponytail: substring match on tool output (these tools print English
 # regardless of locale on the hosts we test; netsh may be localized —
 # then an absent rule shows as a failed step).
+_LAUNCH_FAILED = "launch failed: "
 _ABSENT_MARKERS = (
     "No such file or directory",          # nft delete table (absent)
     "No chain/target/match by that name",  # iptables (absent chain)
@@ -254,9 +256,13 @@ _ABSENT_MARKERS = (
 
 
 def _run_removal(cmd: list[str]) -> tuple[bool, str]:
-    """Run a removal; an already-absent target counts as removed."""
+    """Run a removal; an already-absent target counts as removed.
+
+    Only an answer from the tool itself counts: a launch failure (missing
+    binary also says "No such file or directory") stays a failure.
+    """
     ok, msg = _run(cmd)
-    if not ok and any(m in msg for m in _ABSENT_MARKERS):
+    if not ok and not msg.startswith(_LAUNCH_FAILED) and any(m in msg for m in _ABSENT_MARKERS):
         return True, f"absent: {msg}"
     return ok, msg
 
@@ -283,7 +289,7 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
     try:
         cp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
-        return False, str(e)
+        return False, f"{_LAUNCH_FAILED}{e}"
     if cp.returncode != 0:
         return False, (cp.stderr or cp.stdout or "").strip()
     return True, (cp.stdout or "").strip()

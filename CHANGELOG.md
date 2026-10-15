@@ -17,14 +17,17 @@ Not in any tagged release yet.
   back to enabling every interface / service and report success without
   checking the OS commands. Now restore refuses and re-enables nothing
   (Z605) when there is no unresolved record for the asset or when any
-  ledger line is malformed. Cuts since the last restore are merged, so a
+  ledger line (for any asset) fails validation, including cuts for one
+  asset recorded on different platforms. Cuts since the last restore are merged, so a
   second cut no longer hides what the first one disabled. The broad
   restore is an explicit emergency path,
   `zee restore <asset_id> --all-interfaces` (token still required); it
   does not read the ledger, restores interfaces and Zee's firewall rules
   independently (Linux no longer stops after `nmcli`; macOS now
-  re-enables services the cut disabled), treats an already-absent Zee
-  rule as removed, and fails (Z601) unless every step succeeded. **Behaviour
+  re-enables services the cut disabled), treats a Zee rule the tool
+  itself reports as absent as removed, counts the interface step even
+  when nothing could be enumerated, and fails (Z601) unless every step
+  succeeded. **Behaviour
   change:** deployments whose cuts predate the cut record, or whose
   record was cleared, need `--all-interfaces` once.
 - **A failed or empty cut is no longer reported as success.** The cut
