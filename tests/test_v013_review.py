@@ -265,3 +265,18 @@ def test_recover_hint_only_with_an_unresolved_record(tmp_path):
     log.record_cut(asset_id="a", method="egress", platform="linux", modified=[NFT])
     assert recover_hint(log, "a") == "recover with: zee restore a"
     assert "recover with" not in recover_hint(None, "a")
+
+
+def test_iptables_nft_warning_line_before_the_absent_answer():
+    """Seen on GitHub's Ubuntu runner (2026-10-15 real-cut run)."""
+    msg = ("# Warning: iptables-legacy tables present, use iptables-legacy to see them\n"
+           "iptables: No chain/target/match by that name.")
+    import zee.recovery.restore as r
+    orig = r._run
+    try:
+        r._run = lambda cmd: (False, msg)
+        assert r._verify_absent("iptables-nft", ["iptables-nft", "-S", "ZEE_EGRESS"]) is True
+        r._run = lambda cmd: (False, "# Warning: iptables-legacy tables present")
+        assert r._verify_absent("iptables-nft", ["iptables-nft", "-S", "ZEE_EGRESS"]) is None
+    finally:
+        r._run = orig

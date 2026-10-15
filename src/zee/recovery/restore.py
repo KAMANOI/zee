@@ -358,6 +358,10 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
         absent = (msg.startswith("Error:") and "No such file or directory" in msg
                   and "zee_egress" in msg)
     elif tool in _IPTABLES:
+        # iptables-nft first prints "# Warning: iptables-legacy tables
+        # present, ..." when the other backend has tables (seen on GitHub's
+        # Ubuntu runner); the answer is the line after it.
+        msg = "\n".join(ln for ln in msg.splitlines() if not ln.startswith("# Warning:")).strip()
         # "Table does not exist": that backend's filter table was never set
         # up, so no chain of Zee's can be in it.
         absent = msg.startswith("iptables") and (
