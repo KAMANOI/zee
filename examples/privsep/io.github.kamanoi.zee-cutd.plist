@@ -10,6 +10,8 @@
   <key>ProgramArguments</key>
   <array>
     <string>PYTHON_BIN</string>
+    <!-- -P: never import from the working directory; -s: no user site-packages -->
+    <string>-P</string><string>-s</string>
     <string>-m</string><string>zee</string>
     <string>privsep</string><string>daemon</string>
     <string>--state-dir</string><string>/Library/Application Support/Zee/cutd</string>

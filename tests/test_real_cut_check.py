@@ -34,7 +34,7 @@ WF = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "real-c
 
 
 def test_workflow_runs_on_main_with_path_filter_and_never_on_prs():
-    assert "branches: [main, feat/self-defense-20261015, feat/privsep-stage2]" in WF
+    assert "branches: [main]" in WF
     assert "paths:" in WF and "src/zee/responder/**" in WF and "src/zee/recovery/**" in WF
     assert "pull_request" not in WF
 

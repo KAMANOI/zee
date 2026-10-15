@@ -15,7 +15,7 @@ fail() { echo "FAIL: $*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; fails=$((
 check() { local what=$1; shift; if "$@"; then pass "$what"; else fail "$what"; fi; }
 zee_as() {  # zee privsep <sub> ... as $1
   local u=$1 sub=$2; shift 2
-  sudo -u "$u" env PYTHONPATH="$ZEE_SRC" "$PY" -m zee privsep "$sub" "$@" --socket "$SOCK"
+  sudo -u "$u" env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep "$sub" "$@" --socket "$SOCK"
 }
 ok() { jq -e '.ok == true' >/dev/null; }
 # A refusal must be the OS saying no: non-zero exit AND a permission message
@@ -33,7 +33,8 @@ signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the 
   zee_as "$WATCH_USER" challenge "$op" "$@" >"$X/req.json" 2>"$X/code.txt" || { cat "$X/req.json" "$X/code.txt" >&2; return 1; }
   local code
   code=$(sed -n 's/.*: \([0-9][0-9]\)$/\1/p' "$X/code.txt")
-  PYTHONPATH="$ZEE_SRC" "$PY" -m zee privsep digest --request "$X/req.json" --entered "$code" --out "$X/d.bin"
+  jq -r '.payload | "approving: op=\(.op) args=\(.args|tostring)"' "$X/req.json"  # the approver looks first
+  echo yes | PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep digest --request "$X/req.json" --entered "$code" --out "$X/d.bin"
   openssl pkeyutl -sign -inkey "$KEY" -in "$X/d.bin" -out "$X/sig.der"
   chmod 644 "$X"/req.json "$X"/sig.der
   echo "$code" >"$X/last_code"
@@ -42,6 +43,18 @@ signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the 
 
 online() { sudo ip netns exec zt curl -sS -m 3 -o /dev/null "$TEST_URL"; }
 offline() { ! online; }  # a function: `bash -c "! online"` would not see it (and "pass")
+
+echo "== root commands never import from the working directory (-P -s)"
+EVIL=/tmp/zee-evil
+sudo -u "$WATCH_USER" mkdir -p "$EVIL/zee"
+sudo -u "$WATCH_USER" sh -c 'printf "import os\nopen(\"/tmp/zee-hijacked\", \"w\").write(str(os.geteuid()))\n" > "$1/zee/__main__.py"; : > "$1/zee/__init__.py"' _ "$EVIL"
+(cd "$EVIL" && sudo env PYTHONPATH="$ZEE_SRC" "$PY" -m zee --version) >/dev/null 2>&1
+check "control: without -P a planted ./zee runs as root (the attack is real)" test "$(cat /tmp/zee-hijacked 2>/dev/null)" = 0
+sudo mv /tmp/zee-hijacked /tmp/zee-hijacked.control 2>/dev/null
+out=$(cd "$EVIL" && sudo env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee --version 2>&1)
+echo "  -> $out"
+check "with -P -s the planted ./zee is not read" test ! -e /tmp/zee-hijacked
+check "with -P -s the root-owned zee runs" grep -q '^zee [0-9]' <<<"$out"
 
 echo "== status from the watch user (peer uid from the kernel)"
 st=$(zee_as "$WATCH_USER" status)
@@ -69,7 +82,7 @@ sleep 1
 check "daemon still running after both" bash -c "$ACTIVE_CMD"
 
 echo "== unsigned management is refused"
-r=$(sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -c "
+r=$(sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -c "
 import json; from zee.privsep.client import call
 print(json.dumps([call('$SOCK', {'op': o, 'asset_id': 'ws'}) for o in ('restore', 'stop', 'auto_set')]))")
 echo "$r"
@@ -82,7 +95,7 @@ check "restore with a forged signature: bad_signature" test "$(field .refused <<
 check "status is still alive" bash -c "$ACTIVE_CMD"
 
 echo "== cut before the signed auto switch"
-cutreq() { sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -c "
+cutreq() { sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -c "
 from zee.privsep.client import privsep_cut; from zee.responder.blocker import CutRequest
 print(privsep_cut('$SOCK')(CutRequest('ws', 'change', 'high')))"; }
 r=$(cutreq); echo "$r"
@@ -99,7 +112,7 @@ if [ "${REAL_CUT:-0}" = 1 ]; then
   check "baseline: test server reachable" online
   st=$(zee_as "$WATCH_USER" status); echo "$st"
   check "watch config equals the approved copy (no findings)" test "$(field '.findings | length' <<<"$st")" = 0
-  sudo -u "$WATCH_USER" bash -c "cd ~ && nohup env PYTHONPATH='$ZEE_SRC' '$PY' -m zee -c '$WATCH_CONFIG' watch >~/watch.log 2>&1 &"
+  sudo -u "$WATCH_USER" bash -c "cd ~ && nohup env PYTHONPATH='$ZEE_SRC' '$PY' -P -m zee -c '$WATCH_CONFIG' watch >~/watch.log 2>&1 &"
   for _ in $(seq 30); do sudo grep -q 'running' "/home/$WATCH_USER/watch.log" && break; sleep 1; done
   sudo -u "$WATCH_USER" sh -c "echo touched >> '$DECOY'"
   # the seeding itself logs a read-class "[event] decoy open": wait for the change event's result
@@ -109,7 +122,22 @@ if [ "${REAL_CUT:-0}" = 1 ]; then
   check "test server unreachable during the cut" offline
   st=$(zee_as "$WATCH_USER" status); echo "$st"
   check "daemon ledger has the cut" test "$(field '.unresolved | join(",")' <<<"$st")" = ws
-  check "still unreachable after the refused unsigned restores" offline
+  echo "== while cut: the watch user tries to undo it (inside the cut namespace)"
+  in_cut() { sudo ip netns exec zt sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$@"; }
+  r=$(in_cut "$PY" -P -c "
+import json; from zee.privsep.client import call
+print(json.dumps(call('$SOCK', {'op': 'restore', 'asset_id': 'ws', 'scope': 'all'})))"); echo "$r"
+  check "while cut: unsigned restore request refused (unknown_op)" test "$(field .error <<<"$r")" = unknown_op
+  check "while cut: still unreachable after (1)" offline
+  sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -m zee init-restore-token >/dev/null 2>&1
+  tok=$(sudo cat "/home/$WATCH_USER/.zee/restore_token")
+  out=$(in_cut "$PY" -P -m zee -c "$WATCH_CONFIG" restore ws --all-interfaces --token "$tok" 2>&1); rc=$?
+  echo "  -> rc=$rc $(tail -c 400 <<<"$out")"
+  check "while cut: watch user's own zee restore --all-interfaces fails (Z60x)" \
+    bash -c "[ $rc -ne 0 ] && grep -q 'Z60[16]' <<<\"\$1\"" _ "$out"
+  check "while cut: still unreachable after (2)" offline
+  check "while cut: watch user's nft delete table is refused by the OS" denied in_cut nft delete table inet zee_egress
+  check "while cut: still unreachable after (3)" offline
   r=$(signed restore asset_id=ws scope=recorded); echo "$r"
   check "signed restore accepted and verified" ok <<<"$r"
   check "test server reachable after restore" online

@@ -1,14 +1,14 @@
 name: Real cut (virtual runners)
 
 # Real cut -> measure -> restore -> measure with Zee's own code on GitHub's
-# virtual runners. Runs on every push to main (and the self-defense branch)
+# virtual runners. Runs on every push to main
 # that touches the cut / restore code, this file or the check script, so a
 # change there is never released without a real cut. Never on PRs (a PR from
 # a fork must not get to change the runner's firewall).
 on:
   workflow_dispatch:
   push:
-    branches: [main, feat/self-defense-20261015, feat/privsep-stage2]
+    branches: [main]
     paths:
       - .github/workflows/real-cut.yml
       - scripts/real_cut_check.py
