@@ -102,7 +102,8 @@ if [ "${REAL_CUT:-0}" = 1 ]; then
   sudo -u "$WATCH_USER" bash -c "cd ~ && nohup env PYTHONPATH='$ZEE_SRC' '$PY' -m zee -c '$WATCH_CONFIG' watch >~/watch.log 2>&1 &"
   for _ in $(seq 30); do sudo grep -q 'running' "/home/$WATCH_USER/watch.log" && break; sleep 1; done
   sudo -u "$WATCH_USER" sh -c "echo touched >> '$DECOY'"
-  for _ in $(seq 30); do sudo grep -q '\[event\]' "/home/$WATCH_USER/watch.log" && break; sleep 1; done
+  # the seeding itself logs a read-class "[event] decoy open": wait for the change event's result
+  for _ in $(seq 60); do sudo grep -q 'decoy modify →' "/home/$WATCH_USER/watch.log" && break; sleep 1; done
   sudo cat "/home/$WATCH_USER/watch.log"
   check "watch reports cut=yes" sudo grep -q 'cut=yes' "/home/$WATCH_USER/watch.log"
   check "test server unreachable during the cut" offline

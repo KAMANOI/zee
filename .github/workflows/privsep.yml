@@ -155,7 +155,8 @@ jobs:
           set -eux
           Z="/Library/Application Support/Zee"
           sudo install -d -m 700 -o root -g wheel "$Z/cutd"
-          printf '[[assets]]\nid = "ws"\nresponse_mode = "auto"\ncut_method = "egress"\n' > /tmp/assets.toml
+          # dry_run=false only so the "no permission yet" refusal is reached; nothing sends a cut here
+          printf 'dry_run = false\n[[assets]]\nid = "ws"\nresponse_mode = "auto"\ncut_method = "egress"\n' > /tmp/assets.toml
           sudo install -m 600 -o root -g wheel /tmp/assets.toml "$Z/cutd/assets.toml"
           # staff (20): the runner user can open the socket too, but its uid is not allowed
           sed -e "s#PYTHON_BIN#$PY#" -e "s/WATCH_UID/550/" -e "s/WATCH_GROUP/20/" \
