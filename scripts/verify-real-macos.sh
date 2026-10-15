@@ -90,11 +90,17 @@ for method in egress full; do
 done
 cut_rc=$rc
 
-snapshot() {  # $1 = suffix; returns non-zero if any read fails
-  pfctl -s info > "$OUT/pf-info.$1.txt" 2>&1 &&
-  pfctl -s rules > "$OUT/pf-rules.$1.txt" 2>&1 &&
-  networksetup -listallnetworkservices > "$OUT/services.$1.txt" 2>&1 &&
-  { for a in $ANCHORS; do pfctl -a "$a" -s rules 2>/dev/null | grep -v ALTQ || true; done; } > "$OUT/zee-anchors.$1.txt"
+snapshot() {  # $1 = suffix; returns non-zero if any read fails (never "empty")
+  local a r
+  pfctl -s info > "$OUT/pf-info.$1.txt" 2>&1 || return 1
+  pfctl -s rules > "$OUT/pf-rules.$1.txt" 2>&1 || return 1
+  networksetup -listallnetworkservices > "$OUT/services.$1.txt" 2>&1 || return 1
+  : > "$OUT/zee-anchors.$1.txt"
+  for a in $ANCHORS; do
+    r="$(pfctl -a "$a" -s rules 2>/dev/null)" || return 1
+    printf '%s\n' "$r" | grep -v ALTQ | grep . >> "$OUT/zee-anchors.$1.txt"
+  done
+  return 0
 }
 same_as_before() {  # $1 = suffix -> prints true/false for pf status, main rules, services, Zee anchors empty
   local pf; pf="$(awk '/^Status:/ {print $2}' "$OUT/pf-info.$1.txt")"

@@ -281,7 +281,8 @@ def test_iptables_partial_install_is_recorded(monkeypatch):
     (0, "No ALTQ support in kernel\npf enabled\nToken : 12345678901234\n", True,
      [full_mod.SENTINEL_MACOS_PFCTL_EGRESS, full_mod.PF_TOKEN_PREFIX + "12345678901234"]),
     (0, "pf enabled\n", True, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]),  # no token: nothing to release
-    (1, "pfctl: permission denied", False, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]),
+    (1, "pfctl: permission denied", False,   # reference unknown: restore says unverified
+     [full_mod.SENTINEL_MACOS_PFCTL_EGRESS, full_mod.PF_TOKEN_PREFIX + "unknown"]),
 ])
 def test_pf_enable_takes_a_reference_and_records_its_token(monkeypatch, rc, err, expect_ok, expect_mod):
     from zee.responder import cut_egress as egress_mod
@@ -1053,8 +1054,10 @@ import json as _json
 
 
 def _egress_setup(monkeypatch, tmp_path, modified, *, outputs, tools=None):
-    """outputs: {tuple(cmd): (ok, text)}; unlisted commands fail."""
+    """outputs: {tuple(cmd): (ok, text)}; unlisted commands fail, except the
+    pf sibling-anchor listing, which defaults to Zee's own anchor only."""
     from zee.responder import cut_egress as egress_mod
+    outputs = {PF_ANCHORS: (True, "  com.apple/zee-egress-cut"), **outputs}
     monkeypatch.setattr(egress_mod, "_cut_egress_dispatch", lambda: (True, "rules installed", list(modified)))
     monkeypatch.setattr(egress_mod, "sbin_which",
                         lambda n: f"/sbin/{n}" if tools is None or n in tools else None)
@@ -1072,6 +1075,7 @@ IPT_S = ("iptables", "-S", "ZEE_EGRESS")
 IPT_C = ("iptables", "-S", "OUTPUT")
 PF_RULES = ("pfctl", "-a", "com.apple/zee-egress-cut", "-s", "rules")
 PF_INFO = ("pfctl", "-s", "info")
+PF_ANCHORS = ("pfctl", "-a", "com.apple", "-s", "Anchors")
 
 
 def test_egress_cut_confirmed_when_rule_reads_back(tmp_path, monkeypatch):
@@ -1419,8 +1423,9 @@ def test_ip_fallback_cut_is_not_failed_by_the_unused_nmcli_switch(tmp_path, monk
     monkeypatch.setattr(full_mod.shutil, "which", lambda n: f"/sbin/{n}")
     monkeypatch.setattr(full_mod, "list_linux_interfaces", lambda: ["eth0", "wlan0"])
     monkeypatch.setattr(full_mod, "_run", lambda cmd: (cmd[0] == "ip", "not authorized"))
-    monkeypatch.setattr(full_mod, "interface_states",
-                        lambda: {"eth0": "disabled", "wlan0": "disabled", full_mod.SENTINEL_LINUX_NMCLI: "enabled"})
+    reads = iter([{"eth0": "enabled", "wlan0": "enabled"}])  # before the cut, then after it
+    monkeypatch.setattr(full_mod, "interface_states", lambda: next(
+        reads, {"eth0": "disabled", "wlan0": "disabled", full_mod.SENTINEL_LINUX_NMCLI: "enabled"}))
     log = CutStateLog(tmp_path / "c.jsonl")
     ok, _d = full_mod.cut_full(asset_id="t-host", cut_state=log)
     assert ok is True

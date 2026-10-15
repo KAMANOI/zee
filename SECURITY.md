@@ -172,12 +172,13 @@ honestly-published boundaries of what Zee is and is not:
   The Linux egress rules have no state exception, so open connections
   are stopped too. Use `cut_method: full` if that matters. The real-cut
   checks measured new connections only.
-- **macOS egress: other anchors under `com.apple/*` are not inspected.**
-  Zee's rules (all `quick`) sit in `com.apple/zee-egress-cut`. The cut
-  is confirmed only if the main ruleset references it unconditionally
-  with no other anchor or `pass ... quick` rule ahead of it, but a
-  `quick` pass rule that another program puts in a sibling anchor
-  evaluated before Zee's would still let that traffic through.
+- **macOS egress: what the read-back can and cannot see.** Zee's rules
+  (all `quick`) sit in `com.apple/zee-egress-cut`. The cut is confirmed
+  only if the main ruleset references it unconditionally with no other
+  anchor or `pass ... quick` rule ahead of it, and no other anchor under
+  `com.apple/` holds a `pass ... quick` rule that is not inbound-only or
+  a nested anchor (one level is read; anything it cannot read makes the
+  cut unconfirmed). Rules added after the check are not watched.
 - **Event logs grow without bound by default; rotate manually for
   long-running deployments.** `events.jsonl` and `metrics.jsonl`
   accumulate every trap event and latency record indefinitely. Zee

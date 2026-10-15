@@ -32,6 +32,20 @@ SENTINEL_MACOS_PFCTL_EGRESS = "__zee_pfctl_egress_anchor__"
 # `pfctl -E` returns a token for the pf enable reference Zee took; recorded as
 # "<prefix><token>" so restore can release exactly that one (`pfctl -X`).
 PF_TOKEN_PREFIX = "__zee_pf_enable_token__:"
+# The kernel backend the cut's `iptables` used ("legacy" / "nf_tables"), so
+# restore can insist on a tool that reads that backend back.
+IPT_BACKEND_PREFIX = "__zee_iptables_backend__:"
+
+
+def iptables_backend(version_out: str) -> Optional[str]:
+    """Backend from `iptables --version` ("iptables v1.8.7 (nf_tables)").
+    Before 1.8 there was only legacy. None when the answer is not clear."""
+    if "nf_tables" in version_out:
+        return "nf_tables"
+    if "legacy" in version_out:
+        return "legacy"
+    m = re.search(r"\bv1\.(\d+)\.", version_out)
+    return "legacy" if m and int(m.group(1)) < 8 else None
 
 # Admin tools often live in /usr/sbin or /sbin, which a service / sudo PATH
 # may lack. Lookups add them, and commands then run by absolute path.
@@ -135,6 +149,7 @@ def _cut_full_linux() -> tuple[bool, str, list[str]]:
     # bring it back and read it back.
     attempted: list[str] = []
     nm_ok = False
+    before = interface_states() or {}  # read before anything changes
     if shutil.which("nmcli"):
         attempted.append(SENTINEL_LINUX_NMCLI)
         nm_ok, msg = _run(["nmcli", "networking", "off"])
@@ -145,9 +160,14 @@ def _cut_full_linux() -> tuple[bool, str, list[str]]:
     # every interface to be down.
     prefix = "nmcli networking off; " if nm_ok else ""
     if shutil.which("ip"):
-        ifaces = list_linux_interfaces()
-        if not ifaces:
+        listed = list_linux_interfaces()
+        # Only interfaces that were not down before the cut are taken down
+        # and recorded, so restore does not bring up one that was already down.
+        ifaces = [i for i in listed if before.get(i) != "disabled"]
+        if not listed:
             return False, prefix + "no non-loopback interfaces found via ip", attempted
+        if not ifaces:
+            return nm_ok, prefix + "every interface was already down", attempted
         all_ok = True
         details: list[str] = []
         for ifname in ifaces:

@@ -34,7 +34,9 @@ from ..errors import (
 from ..notifier.local import notify_local
 from ..responder.cut_egress import PF_ANCHOR, PF_LEGACY_ANCHOR, ZEE_RULE_TAG
 from ..responder.cut_full import (
+    IPT_BACKEND_PREFIX,
     PF_TOKEN_PREFIX,
+    iptables_backend,
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_LINUX_NMCLI,
@@ -317,9 +319,31 @@ def _firewall_steps(platform: str, recorded: tuple[str, ...] = ()) -> list[Step]
         for name, remove, show in present:
             remove()  # the verdict is the re-read below, not the remove's exit code
             steps.append((name, _verify_absent(show[0], show)))
+    if platform == "linux":
+        steps += _iptables_backend_coverage(recorded)
     if platform == "darwin":
         steps += _release_pf_tokens(recorded)
     return steps
+
+
+def _iptables_backend_coverage(recorded: tuple[str, ...]) -> list[Step]:
+    """An iptables cut must be read back by a tool of the same kernel
+    backend (legacy / nf_tables): `iptables` may point at the other one now.
+    The record names the backend; a record without it (before v0.13.0)
+    needs both. No tool for a needed backend = None (unverified)."""
+    need = {r.removeprefix(IPT_BACKEND_PREFIX) for r in recorded if r.startswith(IPT_BACKEND_PREFIX)}
+    if not need and SENTINEL_LINUX_IPTABLES_EGRESS in recorded:
+        need = {"legacy", "nf_tables"}
+    if not need:
+        return []
+    covered: set[str] = set()
+    for tool in _IPTABLES:
+        if _which(tool):
+            ok, out = _run([tool, "--version"])
+            backend = iptables_backend(out) if ok else None
+            if backend:
+                covered.add(backend)
+    return [(f"iptables {b} backend:not-found", None) for b in sorted(need - covered)]
 
 
 def _release_pf_tokens(recorded: tuple[str, ...]) -> list[Step]:
@@ -333,7 +357,9 @@ def _release_pf_tokens(recorded: tuple[str, ...]) -> list[Step]:
             continue
         token = entry.removeprefix(PF_TOKEN_PREFIX)
         if not token.isdigit():
-            steps.append((f"pf enable reference {token!r}", False))
+            # "unknown": `pfctl -E` failed or timed out without a token, so
+            # whether pf holds a reference of Zee's cannot be confirmed.
+            steps.append((f"pf enable reference {token}", None))
             continue
         ok, msg = _run(["pfctl", "-X", token])
         if ok or "token invalid" in msg or "pf not enabled" in msg:

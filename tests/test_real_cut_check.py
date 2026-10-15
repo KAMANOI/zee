@@ -83,3 +83,10 @@ def test_mac_script_exit_code_covers_the_after_state_and_stops_the_timer():
     assert '[ "$v" = true ] || rc=1' in SH and "exit $rc" in SH
     # Zee's own restore is judged before the script's cleanup touches anything.
     assert SH.index("snapshot after-zee") < SH.index("restore_everything || rc=1")
+
+
+def test_mac_script_snapshot_fails_when_an_anchor_read_fails():
+    """Codex re-review: a failed pfctl read must not look like an empty anchor."""
+    body = SH.split("snapshot() {", 1)[1].split("\n}\n", 1)[0]
+    assert 'r="$(pfctl -a "$a" -s rules 2>/dev/null)" || return 1' in body
+    assert "|| true" not in body

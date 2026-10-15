@@ -216,6 +216,7 @@ def test_token_entry_is_not_read_back_as_a_rule(tmp_path, monkeypatch):
         ("pfctl", "-a", "com.apple/zee-egress-cut", "-s", "rules"): (True, "block drop out quick all"),
         ("pfctl", "-s", "info"): (True, "Status: Enabled"),
         ("pfctl", "-s", "rules"): (True, 'anchor "com.apple/*" all'),
+        ("pfctl", "-a", "com.apple", "-s", "Anchors"): (True, "  com.apple/zee-egress-cut"),
     }
     monkeypatch.setattr(egress_mod, "sbin_which", lambda n: f"/sbin/{n}")
     monkeypatch.setattr(egress_mod, "_run",
@@ -280,3 +281,92 @@ def test_iptables_nft_warning_line_before_the_absent_answer():
         assert r._verify_absent("iptables-nft", ["iptables-nft", "-S", "ZEE_EGRESS"]) is None
     finally:
         r._run = orig
+
+
+# ── Codex re-review round 1 ───────────────────────────────────────────
+
+
+def test_iptables_cut_records_its_kernel_backend(monkeypatch):
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda n: "/sbin/iptables" if n == "iptables" else None)
+    monkeypatch.setattr(egress_mod, "_run", lambda cmd: (True, "iptables v1.8.7 (legacy)") if cmd[1] == "--version" else (True, ""))
+    assert egress_mod._cut_egress_linux()[2] == [IPT, full_mod.IPT_BACKEND_PREFIX + "legacy"]
+
+
+@pytest.mark.parametrize("out, backend", [
+    ("iptables v1.8.10 (nf_tables)", "nf_tables"), ("iptables v1.8.7 (legacy)", "legacy"),
+    ("iptables v1.6.1", "legacy"), ("iptables v1.8.7", None), ("", None)])
+def test_iptables_backend_from_version(out, backend):
+    assert full_mod.iptables_backend(out) == backend
+
+
+def _ipt_restore(monkeypatch, tools, versions):
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/usr/sbin/{n}" if n in tools else None)
+    def run(cmd):
+        if cmd[1:] == ["--version"]:
+            return True, versions[cmd[0]]
+        if cmd[1] == "-S" or cmd[1] == "list":
+            return False, ABSENT_IPT if cmd[0].startswith("iptables") else \
+                "Error: No such file or directory\nlist table inet zee_egress\n ^"
+        return True, ""
+    monkeypatch.setattr(restore_mod, "_run", run)
+
+
+def test_legacy_cut_with_no_legacy_tool_left_is_unverified(monkeypatch):
+    """Codex repro: legacy cut, iptables-legacy gone, `iptables` now nf_tables."""
+    _ipt_restore(monkeypatch, {"iptables", "iptables-nft"},
+                 {"iptables": "iptables v1.8.10 (nf_tables)", "iptables-nft": "iptables v1.8.10 (nf_tables)"})
+    steps = dict(restore_mod._firewall_steps("linux", (IPT, full_mod.IPT_BACKEND_PREFIX + "legacy")))
+    assert steps["iptables legacy backend:not-found"] is None
+
+
+def test_record_without_backend_needs_both_backends(monkeypatch):
+    _ipt_restore(monkeypatch, {"iptables"}, {"iptables": "iptables v1.8.10 (nf_tables)"})
+    steps = dict(restore_mod._firewall_steps("linux", (IPT,)))
+    assert steps["iptables legacy backend:not-found"] is None
+    assert "iptables nf_tables backend:not-found" not in steps
+
+
+def test_full_cut_leaves_interfaces_that_were_already_down(monkeypatch):
+    monkeypatch.setattr(full_mod.shutil, "which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(full_mod, "list_linux_interfaces", lambda: ["eth0", "isolated0"])
+    monkeypatch.setattr(full_mod, "interface_states", lambda: {"eth0": "enabled", "isolated0": "disabled"})
+    calls: list = []
+    monkeypatch.setattr(full_mod, "_run", lambda cmd: calls.append(cmd) or (True, ""))
+    ok, _d, modified = full_mod._cut_full_linux()
+    assert ok is True and "isolated0" not in modified and ["ip", "link", "set", "isolated0", "down"] not in calls
+
+
+def test_pf_enable_timeout_keeps_the_printed_token(monkeypatch):
+    monkeypatch.setattr(egress_mod.shutil, "which", lambda n: "/sbin/pfctl")
+    def run(argv, **k):
+        if argv == ["pfctl", "-E"]:
+            raise subprocess.TimeoutExpired(argv, 10, output=b"", stderr=b"pf enabled\nToken : 987654321\n")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(egress_mod.subprocess, "run", run)
+    ok, _d, modified = egress_mod._cut_egress_macos()
+    assert ok is False and modified == [PF, TOKEN]
+
+
+def test_unknown_pf_reference_is_unverified_on_restore(monkeypatch):
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: (True, ""))
+    steps = dict(restore_mod._firewall_steps("darwin", (PF, full_mod.PF_TOKEN_PREFIX + "unknown")))
+    assert steps["pf enable reference unknown"] is None
+
+
+@pytest.mark.parametrize("sibling_rules, verdict", [
+    ("", "confirmed"),
+    ("pass in quick on awdl0 all", "confirmed"),            # inbound only
+    ("block drop out quick on utun9 all", "confirmed"),
+    ("pass out quick all flags S/SA keep state", "unverified"),  # Codex repro
+    ("pass quick on en0 all", "unverified"),                 # no direction = both
+    ('anchor "nested/*" all', "unverified"),                 # not inspected
+    (None, "unverified"),                                    # unreadable
+])
+def test_pf_sibling_anchors_under_com_apple(monkeypatch, sibling_rules, verdict):
+    monkeypatch.setattr(egress_mod, "sbin_which", lambda n: f"/sbin/{n}")
+    monkeypatch.setattr(egress_mod, "_run", lambda cmd: (
+        (False, "pfctl: permission denied") if sibling_rules is None else (True, sibling_rules))
+        if cmd[1:3] == ["-a", "com.apple/aaa"] else (False, "unexpected"))
+    out = "  com.apple/aaa\n  com.apple/zee-egress-cut\n"
+    assert egress_mod._pf_siblings_clear(out, set()) == verdict

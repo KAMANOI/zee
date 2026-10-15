@@ -45,7 +45,10 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   then restore exits 1 with the new **Z606 (unverified)** and the cut
   stays unresolved. On Linux, `iptables`, `iptables-legacy` and
   `iptables-nft` are each removed and re-read (each talks to its own
-  kernel backend, and `iptables` may have been switched since the cut). Recorded interfaces / services are re-read afterwards and must
+  kernel backend, and `iptables` may have been switched since the cut);
+  the iptables cut records its kernel backend (legacy / nf_tables, from
+  `iptables --version`) and restore is unverified unless a tool of that
+  backend is installed (a record without it needs both). Recorded interfaces / services are re-read afterwards and must
   be positively read back as enabled: disabled fails (Z601); not listed,
   unknown state (including NetworkManager not answering) or an unreadable
   / empty listing is unverified (Z606). Disabled ones outside the record
@@ -94,13 +97,19 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   the read-back requires nothing but Zee's own pass rules ahead of the
   block, and an unconditional reference to the anchor in the main ruleset
   with no other anchor or `pass ... quick` rule ahead of it (a reference
-  such as `anchor "com.apple/*" in on lo0` no longer counts). A partial cut records the interfaces / rules
+  such as `anchor "com.apple/*" in on lo0` no longer counts), and no
+  other anchor under `com.apple/` holding a `pass ... quick` rule that is
+  not inbound-only, or a nested anchor. If `pfctl -E` fails or times out,
+  any token it printed is still recorded, and a reference that cannot be
+  known is recorded as unknown (restore then says unverified). A partial cut records the interfaces / rules
   it did change (full cut: every target it attempted, including ones
   whose command failed or timed out; every egress backend when the
   outcome is uncertain — an nft or pf command that timed out, any failed
   Windows rule add, any failed iptables command), so restore can undo and
   re-check them. A Linux full cut now also takes every interface down
-  with `ip link` after `nmcli networking off` succeeds, and any interface
+  with `ip link` after `nmcli networking off` succeeds (only those not
+  already down before the cut, so restore does not bring up one that was
+  down), and any interface
   that does not read back as disabled (including one outside the record,
   e.g. not managed by NetworkManager) makes the cut fail. A Windows full
   cut targets every adapter not confirmed admin-disabled. Egress
@@ -143,9 +152,9 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
   and Windows Firewall let an existing connection continue; only new
   connections are stopped (the macOS cut result says so). Linux egress
   rules have no state exception. Not measured by the real-cut checks.
-- **macOS: other anchors under `com.apple/*`** are not inspected; a
-  `quick` pass rule another program puts there, evaluated before Zee's,
-  would let that traffic through.
+- **macOS: rules added after the cut are not watched**, and anchors
+  nested more than one level under `com.apple/` are not read (one found
+  makes the cut unconfirmed).
 - **The emergency restore (`--all-interfaces`) does not release the pf
   enable reference** (it does not use the ledger): rules are removed and
   traffic comes back, but pf may stay enabled.
