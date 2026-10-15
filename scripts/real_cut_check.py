@@ -1,9 +1,9 @@
 """Real cut -> measure -> restore -> measure, for one cut method.
 
 IPv6 (--url6, an IPv6-only URL so nothing falls back to IPv4) is measured
-the same way. With --require-ipv6 it is part of the pass; without it, a
-host with no IPv6 path before the cut records IPv6 as "unmeasured" (never
-as passed) and the verdict is the IPv4 one.
+the same way. Measured and failed always fails the run. A host with no
+IPv6 path before the cut records IPv6 as "unmeasured" (never as passed):
+that fails with --require-ipv6, otherwise the verdict is the IPv4 one.
 
 Used by .github/workflows/real-cut.yml (virtual runners) and by
 scripts/verify-real-macos.sh (a real Mac). Needs root (the cut changes the
@@ -49,15 +49,16 @@ def passed(result: dict, require_ipv6: bool = False) -> bool:
     """Zee's own cut and normal restore must both report success, the restore
     must be the normal one (not the safety timer), and the traffic must have
     stopped and come back. Reachability alone can come from a DNS blip or
-    an outer safety net, so it never passes by itself. With require_ipv6,
-    IPv6 must have stopped and come back too ("unmeasured" fails)."""
+    an outer safety net, so it never passes by itself. IPv6 measured and
+    failed always fails; require_ipv6 also fails "unmeasured"."""
     restore = result.get("restore") or {}
     ok = bool(
         (result.get("cut") or {}).get("ok") is True
         and restore.get("ok") is True and restore.get("by") == "finally"
         and result.get("stopped") and result.get("came_back"))
-    if require_ipv6:
-        ok = ok and (result.get("ipv6") or {}).get("status") == "passed"
+    v6 = (result.get("ipv6") or {}).get("status")
+    if v6 == "failed" or (require_ipv6 and v6 != "passed"):
+        return False
     return ok
 
 

@@ -110,7 +110,8 @@ def test_ipv6_status(change, status):
 @pytest.mark.parametrize("status, expect", [("passed", True), ("unmeasured", False), ("failed", False)])
 def test_required_ipv6_must_pass(status, expect):
     assert rcc.passed({**GOOD, "ipv6": {"status": status}}, require_ipv6=True) is expect
-    assert rcc.passed({**GOOD, "ipv6": {"status": status}}) is True  # not required: IPv4 verdict
+    # Not required: "unmeasured" leaves the IPv4 verdict; a measured failure still fails.
+    assert rcc.passed({**GOOD, "ipv6": {"status": status}}) is (status != "failed")
 
 
 def test_linux_jobs_require_ipv6_and_link_the_same_backend_ip6tables():
