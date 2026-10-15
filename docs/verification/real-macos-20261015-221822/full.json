@@ -15,7 +15,7 @@
   },
   "cut": {
     "ok": true,
-    "detail": "networksetup -setnetworkserviceenabled off: Wi-Fi:ok, Thunderbolt Bridge:ok, Tailscale:ok",
+    "detail": "networksetup -setnetworkserviceenabled off: Wi-Fi:ok, Thunderbolt Bridge:ok, VPN (name withheld):ok",
     "seconds": 0.39
   },
   "during": {
@@ -25,7 +25,7 @@
   "restore": {
     "by": "finally",
     "ok": true,
-    "detail": "darwin restore: Wi-Fi:ok, Thunderbolt Bridge:ok, Tailscale:ok, pfctl com.apple/zee-egress-cut:ok, pfctl zee-egress-cut:ok; readback: recorded targets enabled"
+    "detail": "darwin restore: Wi-Fi:ok, Thunderbolt Bridge:ok, VPN (name withheld):ok, pfctl com.apple/zee-egress-cut:ok, pfctl zee-egress-cut:ok; readback: recorded targets enabled"
   },
   "after": {
     "reachable": true,
