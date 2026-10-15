@@ -23,9 +23,12 @@ def test_windows_title_and_body_are_env_not_script(monkeypatch):
     assert kw["env"]["ZEE_TITLE"] == title and kw["env"]["ZEE_BODY"] == body
 
 
-def test_nul_in_value_does_not_raise():
+def test_nul_in_value_does_not_raise(monkeypatch):
     # A NUL can't go into an environment block; the notifier must swallow it.
-    assert local._notify_windows("a\x00b", "c") in (True, False)
+    def boom(cmd, **kw):
+        raise ValueError("embedded null byte")
+    monkeypatch.setattr(local.subprocess, "run", boom)
+    assert local._notify_windows("a\x00b", "c") is False
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not shutil.which("powershell"), reason="Windows only")

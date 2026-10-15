@@ -7,6 +7,10 @@ releases.
 
 ## [Unreleased]
 
+Not in any tagged release yet.
+
+## [0.13.3] — 2026-10-16
+
 ### Security
 
 - **Windows notifications no longer build PowerShell from the asset id or

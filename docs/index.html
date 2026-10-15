@@ -195,7 +195,7 @@
       <b>PROJECT STATUS</b> — Early Public / Research Project<br />
       Zee is not a production-ready security product.<br />
       Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.<br />
-      Implemented (v0.13.2): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.<br />
+      Implemented (v0.13.3): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.<br />
       What has been verified, under which conditions, and what has not: <a href="https://github.com/KAMANOI/zee/blob/main/docs/verification/README.md" style="color:var(--accent)">docs/verification/</a>
     </div>
   </div>
@@ -300,7 +300,7 @@ zee gate audit</div>
     <h2>既定 dry_run。明示昇格まで実遮断はしない。</h2>
     <p class="lead" style="margin-bottom:6px">Zee は侵入を防ぐ層ではなく、侵入後に<b>狭く高信頼な検知信号（囮への接触）</b>を1本足す層です。「あなたの検知体制全般」を肩代わりするものではありません。</p>
     <div class="code"><span class="c"># 1. インストール（タグを固定して1行で）</span>
-uv tool install "git+https://github.com/KAMANOI/zee@v0.13.2"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.13.3"
 <span class="c"># 手元で開発する場合: git clone https://github.com/KAMANOI/zee.git &amp;&amp; cd zee &amp;&amp; pip install -e .</span>
 <span class="c"># ※ pip install zee / npx zee は別の作者の無関係なパッケージです。使わないでください</span>
 
@@ -532,7 +532,7 @@ zee restore &lt;asset_id&gt; --token &lt;TOKEN&gt;
     <h2 style="max-width:760px">万能ではありません。Zee は“もう一層”です。</h2>
     <div class="feat">
       <ul>
-        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b>（v0.13.2）の段階で、MIT ライセンス・無保証で提供します。本番導入の前に、ご自身の環境での検証を推奨します。</li>
+        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b>（v0.13.3）の段階で、MIT ライセンス・無保証で提供します。本番導入の前に、ご自身の環境での検証を推奨します。</li>
         <li>侵入そのものを防ぐものでも、すべての攻撃を検知できるものでもありません。</li>
       </ul>
       <ul>
