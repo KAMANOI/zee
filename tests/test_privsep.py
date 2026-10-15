@@ -178,6 +178,67 @@ def test_failed_restore_is_reported_and_daemon_keeps_serving(env):
     assert req(d, op="status")["ok"]
 
 
+def test_old_auto_on_signature_cannot_approve_a_newer_config(env, tmp_path):
+    d, cuts, _, _ = env
+    ch = req(d, OTHER, op="challenge", admin_op="auto_set", args={"state": "on"})
+    assert len(ch["payload"]["args"]["config_sha256"]) == 64  # bound by the daemon
+    new = tmp_path / "full.toml"
+    new.write_text(CFG.replace('"egress"', '"full"'))
+    assert signed(d, "config_set", path=str(new), sha256=hashlib.sha256(new.read_bytes()).hexdigest())["ok"]
+    sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
+    r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
+    assert r["ok"] is False and "config changed" in r["detail"]
+    assert cut(d)["refused"] == "auto_off" and cuts.calls == []
+
+
+def test_old_restore_signature_cannot_undo_a_newer_cut(env):
+    d, cuts, restores, _ = env
+    ch = req(d, OTHER, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
+    d.cut_state.record_cut(asset_id="ws", method="egress", platform=sys.platform, modified=["x"])
+    sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
+    r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
+    assert r["ok"] is False and "ledger changed" in r["detail"] and restores == []
+
+
+def test_bound_fields_cannot_be_supplied_by_the_requester(env):
+    d, _, _, _ = env
+    for op, args in (("auto_set", {"state": "on", "config_sha256": "0" * 64}),
+                     ("restore", {"asset_id": "ws", "scope": "all", "ledger_sha256": "absent"})):
+        assert req(d, OTHER, op="challenge", admin_op=op, args=args)["refused"] == "bad_args"
+
+
+def test_auto_off_is_never_blocked_by_binding(env, tmp_path):
+    d, _, _, _ = env
+    signed(d, "auto_set", state="on")
+    ch = req(d, OTHER, op="challenge", admin_op="auto_set", args={"state": "off"})
+    (d.dir / "assets.toml").write_text(CFG + "\n")
+    sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
+    assert req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)["ok"]
+
+
+def test_cut_asset_removed_from_config_stays_restorable_and_visible(env, tmp_path):
+    d, _, restores, _ = env
+    d.cut_state.record_cut(asset_id="old", method="egress", platform=sys.platform, modified=["x"])
+    assert "old" in req(d, op="status")["unresolved"]
+    assert signed(d, "restore", asset_id="old", scope="recorded")["ok"]
+    assert restores == [("old", False)]
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+def test_watch_config_fifo_or_huge_file_never_blocks(env, tmp_path):
+    d, _, _, _ = env
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo)
+    d.watch_config = fifo
+    d.check_tamper()  # returns at once (O_NONBLOCK + regular-file check)
+    assert d.findings == ["watch_config_unreadable"]
+    big = tmp_path / "big.toml"
+    big.write_bytes(b"#" * (300 * 1024))
+    d.watch_config = big
+    d.check_tamper()
+    assert d.findings == ["watch_config_unreadable"]
+
+
 @pytest.mark.parametrize("tamper,why", [
     (lambda p, c: (p, "xx" if c != "xx" else "yy"), "code_mismatch"),
     (lambda p, c: ({**p, "args": {"asset_id": "ws", "scope": "all"}}, c), "payload_mismatch"),
@@ -257,8 +318,8 @@ def test_config_set_needs_matching_sha_and_regular_file(env, tmp_path):
     assert signed(d, "config_set", path=str(link), sha256=sha)["ok"] is False
     assert signed(d, "config_set", path=str(new), sha256=sha)["ok"] is True
     assert Config.load(d.config_path).find("ws2") is not None
-    assert req(d, op="status")["auto"] == "policy_mismatch"  # a new policy needs a new auto_set
-    assert cut(d, asset_id="ws2")["refused"] == "policy_mismatch"
+    assert req(d, op="status")["auto"] == "off"  # a new config is never covered by the old switch
+    assert cut(d, asset_id="ws2")["refused"] == "auto_off"
 
 
 def test_config_set_rejects_invalid_config_and_keeps_the_old(env, tmp_path):

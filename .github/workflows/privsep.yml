@@ -101,7 +101,7 @@ jobs:
           WATCH_USER: zeework
           OUTSIDER: zeeother
           DAEMON_PID_CMD: systemctl show -p MainPID --value zee-cutd
-          STOP_AS_USER_CMD: sudo -u zeework systemctl --no-ask-password stop zee-cutd 2>/dev/null
+          STOP_AS_USER_CMD: sudo -u zeework systemctl --no-ask-password stop zee-cutd
           ACTIVE_CMD: systemctl is-active --quiet zee-cutd
           REAL_CUT: '1'
           TEST_URL: http://198.51.100.1:8080/
@@ -184,7 +184,7 @@ jobs:
           WATCH_USER: zeework
           OUTSIDER: runner
           DAEMON_PID_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd | awk '/^\tpid = /{print $3; exit}'
-          STOP_AS_USER_CMD: sudo -u zeework launchctl bootout system/io.github.kamanoi.zee-cutd 2>/dev/null
+          STOP_AS_USER_CMD: sudo -u zeework launchctl bootout system/io.github.kamanoi.zee-cutd
           ACTIVE_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd 2>/dev/null | grep -q 'state = running'
         run: |
           export KEY="$RUNNER_TEMP/approver/k.pem"

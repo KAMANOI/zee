@@ -51,11 +51,35 @@ TAMPER_ASSET = "zee-tamper"  # ledger id of a cut made by the tamper response
 MAX_LINE = 16 * 1024
 MAX_CONFIG = 256 * 1024
 MAX_PENDING = 16
-ADMIN_OPS = {"restore": ("asset_id", "scope"), "config_set": ("path", "sha256"),
-             "auto_set": ("state",), "tamper_set": ("action",), "stop": (),
+ADMIN_OPS = {"restore": ("asset_id", "scope", "ledger_sha256"), "config_set": ("path", "sha256"),
+             "auto_set": ("state", "config_sha256"), "tamper_set": ("action",), "stop": (),
              "key_add": ("key_id", "public_key"), "key_remove": ("key_id",)}
 _CHOICES = {"scope": ("recorded", "all"), "state": ("on", "off"),
             "action": ("off", "egress", "full")}
+# Filled in by the daemon when it issues the request (never by the requester) and
+# re-checked right before applying: an old, unused signature can't approve another
+# config or undo a newer cut (a restore removes host-wide rules, so the whole ledger counts).
+_BOUND = {"auto_set": ("config_sha256", "config_path"), "restore": ("ledger_sha256", "ledger_path")}
+
+
+def read_bounded(path: Path, limit: int = MAX_CONFIG) -> bytes:
+    """A regular file, not through a final symlink, at most ``limit`` bytes; else OSError.
+    Never blocks on a FIFO and never reads a device."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError(f"not a regular file: {path}")
+        data = f.read(limit + 1)
+    if len(data) > limit:
+        raise OSError(f"too large: {path}")
+    return data
+
+
+def file_sha256(path: Path) -> str:
+    try:
+        return hashlib.sha256(read_bounded(path, 64 * 1024 * 1024)).hexdigest()
+    except FileNotFoundError:
+        return "absent"
 
 
 def peer_uid(sock: socket.socket) -> int:
@@ -138,6 +162,10 @@ class CutDaemon:
         return self.dir / "assets.toml"
 
     @property
+    def ledger_path(self) -> Path:
+        return self.cut_state.path
+
+    @property
     def perm_path(self) -> Path:
         return self.dir / "auto_containment.json"
 
@@ -215,8 +243,7 @@ class CutDaemon:
             auto = "policy_mismatch"  # on, but for another config: refuses every cut
         else:
             auto = "on"
-        ids = [a.id for a in cfg.assets] if cfg else []
-        unresolved = [a for a in ids + [TAMPER_ASSET] if self.cut_state.unresolved_for(a)[0] is not None]
+        unresolved = sorted(a for a in self._restorable() if self.cut_state.unresolved_for(a)[0] is not None)
         return {"ok": True, "version": __version__, "config_error": cfg_error,
                 "dry_run": cfg.dry_run if cfg else None, "auto": auto,
                 "tamper_action": self.tamper_action(), "findings": list(self.findings),
@@ -231,6 +258,9 @@ class CutDaemon:
         why = self._check_args(req["admin_op"], args)
         if why:
             return {"ok": False, "refused": why}
+        if req["admin_op"] in _BOUND:
+            field, attr = _BOUND[req["admin_op"]]
+            args = {**args, field: file_sha256(getattr(self, attr))}
         try:
             r = self.engine.request_config(req["admin_op"], **args)
         except (ValueError, PermissionError, TypeError) as e:
@@ -238,15 +268,15 @@ class CutDaemon:
         return {"ok": True, "payload": r.payload, "code": r.code}
 
     def _check_args(self, op: str, args: dict) -> Optional[str]:
-        if op not in ADMIN_OPS or set(args) != set(ADMIN_OPS[op]) \
+        bound = {_BOUND[op][0]} if op in _BOUND else set()
+        if op not in ADMIN_OPS or set(args) != set(ADMIN_OPS[op]) - bound \
                 or not all(type(v) is str and 0 < len(v) <= 4096 for v in args.values()):
             return "bad_args"
         for k, choices in _CHOICES.items():
             if k in args and args[k] not in choices:
                 return f"bad_{k}"
         if op == "restore":
-            cfg = self.config()
-            if args["asset_id"] != TAMPER_ASSET and (cfg is None or cfg.find(args["asset_id"]) is None):
+            if args["asset_id"] not in self._restorable():
                 return "unknown_asset"
         if op == "config_set":
             if not os.path.isabs(args["path"]):
@@ -282,7 +312,30 @@ class CutDaemon:
         return {"ok": True}
 
     # ---- signed operations (called by the engine only after every check passed)
+    def _restorable(self) -> set[str]:
+        """Assets in the approved config, the tamper id, and any asset with an
+        unresolved cut (one removed from the config by config_set stays restorable)."""
+        ids = {TAMPER_ASSET}
+        try:
+            cfg = self.config()
+        except ZeeError:
+            cfg = None
+        ids |= {a.id for a in cfg.assets} if cfg else set()
+        try:
+            for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
+                rec = json.loads(line) if line.strip() else None
+                if isinstance(rec, dict) and isinstance(rec.get("asset_id"), str):
+                    ids.add(rec["asset_id"])
+        except (OSError, ValueError, RecursionError):
+            pass  # unreadable ledger: restore itself refuses (Z605) or goes by --all
+        return ids
+
     def _apply_admin(self, op: str, a: dict) -> tuple[bool, str]:
+        if op in _BOUND and not (op == "auto_set" and a["state"] == "off"):  # off is always safe
+            field, attr = _BOUND[op]
+            if file_sha256(getattr(self, attr)) != a[field]:
+                return False, (f"refused: {'config' if op == 'auto_set' else 'cut ledger'} changed since "
+                               "this request was issued; ask for a new one")
         if op == "restore":
             try:
                 return self.restore_fn(a["asset_id"], cut_state=self.cut_state,
@@ -305,15 +358,9 @@ class CutDaemon:
 
     def _config_set(self, path: str, sha256: str) -> tuple[bool, str]:
         try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-            with os.fdopen(fd, "rb") as f:
-                if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
-                    return False, "not a regular file"
-                data = f.read(MAX_CONFIG + 1)
+            data = read_bounded(Path(path))
         except OSError as e:
-            return False, f"unreadable: {e.strerror}"
-        if len(data) > MAX_CONFIG:
-            return False, "too large"
+            return False, f"unreadable or not a regular file of at most {MAX_CONFIG} bytes: {e}"
         if hashlib.sha256(data).hexdigest() != sha256:
             return False, "sha256 differs from the signed value"
         try:
@@ -327,7 +374,8 @@ class CutDaemon:
             tmp.unlink(missing_ok=True)
             return False, f"invalid config: {e}"
         os.replace(tmp, self.config_path)
-        return True, "config replaced (auto-cut needs a new signed auto_set on: policy changed)"
+        self._auto_set(False)  # a new config is never covered by the old switch
+        return True, "config replaced; auto-cut is now OFF until a new signed auto_set on"
 
     def _auto_set(self, on: bool) -> tuple[bool, str]:
         cfg = self.config()
@@ -344,16 +392,18 @@ class CutDaemon:
 
     # ---- condition (2): unapproved config change / protection destroyed (default OFF)
     def check_tamper(self) -> None:
+        theirs = None
+        if self.watch_config is not None:  # user-controlled file: bounded read, outside the lock
+            try:
+                theirs = hashlib.sha256(read_bounded(self.watch_config)).hexdigest()
+            except OSError:
+                theirs = "unreadable"
         with self.lock:
             found = []
-            if self.watch_config is not None:
-                try:
-                    theirs = hashlib.sha256(self.watch_config.read_bytes()).hexdigest()
-                    ours = hashlib.sha256(self.config_path.read_bytes()).hexdigest()
-                    if theirs != ours:
-                        found.append("watch_config_unapproved")
-                except OSError:
-                    found.append("watch_config_unreadable")
+            if theirs == "unreadable":
+                found.append("watch_config_unreadable")
+            elif theirs is not None and theirs != file_sha256(self.config_path):
+                found.append("watch_config_unapproved")
             if self.last_seen is not None and self.clock() - self.last_seen > self.grace:
                 found.append("watch_silent")
             self.findings = found

@@ -18,6 +18,14 @@ zee_as() {  # zee privsep <sub> ... as $1
   sudo -u "$u" env PYTHONPATH="$ZEE_SRC" "$PY" -m zee privsep "$sub" "$@" --socket "$SOCK"
 }
 ok() { jq -e '.ok == true' >/dev/null; }
+# A refusal must be the OS saying no: non-zero exit AND a permission message
+# (a missing command or a typo must never count as "denied").
+denied() {
+  local err rc
+  err=$("$@" 2>&1 >/dev/null); rc=$?
+  echo "  -> rc=$rc ${err:0:200}"
+  [ $rc -ne 0 ] && grep -Eqi 'permission denied|not permitted|authentication required|access denied|not privileged|must be run as root|requires root' <<<"$err"
+}
 field() { jq -r "$1"; }
 
 signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the approver, submit
@@ -33,6 +41,7 @@ signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the 
 }
 
 online() { sudo ip netns exec zt curl -sS -m 3 -o /dev/null "$TEST_URL"; }
+offline() { ! online; }  # a function: `bash -c "! online"` would not see it (and "pass")
 
 echo "== status from the watch user (peer uid from the kernel)"
 st=$(zee_as "$WATCH_USER" status)
@@ -46,16 +55,16 @@ echo "$r"
 check "other uid refused by the uid check (not by file mode)" test "$(field .error <<<"$r")" = peer_not_allowed
 
 echo "== the watch user cannot read or write the daemon's state"
-check "state dir not listable" bash -c "! sudo -u '$WATCH_USER' ls '$STATE' >/dev/null 2>&1"
-check "ledger not writable" bash -c "! sudo -u '$WATCH_USER' sh -c 'echo forged >> \"$STATE/cut_state.jsonl\"' 2>/dev/null"
-check "approved config not writable" bash -c "! sudo -u '$WATCH_USER' sh -c 'echo x >> \"$STATE/assets.toml\"' 2>/dev/null"
-check "approver key not readable" bash -c "! sudo -u '$WATCH_USER' cat '$KEY' >/dev/null 2>&1"
-check "daemon code not writable" bash -c "! sudo -u '$WATCH_USER' sh -c 'echo x >> \"$ZEE_SRC/zee/privsep/daemon.py\"' 2>/dev/null"
+check "state dir not listable" denied sudo -u "$WATCH_USER" ls "$STATE"
+check "ledger not writable" denied sudo -u "$WATCH_USER" sh -c 'echo forged >> "$1"' _ "$STATE/cut_state.jsonl"
+check "approved config not writable" denied sudo -u "$WATCH_USER" sh -c 'echo x >> "$1"' _ "$STATE/assets.toml"
+check "approver key not readable" denied sudo -u "$WATCH_USER" cat "$KEY"
+check "daemon code not writable" denied sudo -u "$WATCH_USER" sh -c 'echo x >> "$1"' _ "$ZEE_SRC/zee/privsep/daemon.py"
 
 echo "== the watch user cannot stop the daemon"
 pid=$(eval "$DAEMON_PID_CMD")
-check "kill as watch user fails" bash -c "! sudo -u '$WATCH_USER' kill -TERM $pid 2>/dev/null"
-check "service stop as watch user fails" bash -c "! $STOP_AS_USER_CMD"
+check "kill as watch user fails" denied sudo -u "$WATCH_USER" kill -TERM "$pid"
+check "service stop as watch user fails" denied bash -c "$STOP_AS_USER_CMD"
 sleep 1
 check "daemon still running after both" bash -c "$ACTIVE_CMD"
 
@@ -96,10 +105,10 @@ if [ "${REAL_CUT:-0}" = 1 ]; then
   for _ in $(seq 30); do sudo grep -q '\[event\]' "/home/$WATCH_USER/watch.log" && break; sleep 1; done
   sudo cat "/home/$WATCH_USER/watch.log"
   check "watch reports cut=yes" sudo grep -q 'cut=yes' "/home/$WATCH_USER/watch.log"
-  check "test server unreachable during the cut" bash -c "! online"
+  check "test server unreachable during the cut" offline
   st=$(zee_as "$WATCH_USER" status); echo "$st"
   check "daemon ledger has the cut" test "$(field '.unresolved | join(",")' <<<"$st")" = ws
-  check "forged-signature restore leaves it cut" bash -c "! online"
+  check "still unreachable after the refused unsigned restores" offline
   r=$(signed restore asset_id=ws scope=recorded); echo "$r"
   check "signed restore accepted and verified" ok <<<"$r"
   check "test server reachable after restore" online
@@ -112,6 +121,7 @@ r=$(signed stop); echo "$r"
 check "signed stop accepted" ok <<<"$r"
 sleep 5
 check "daemon stopped and not restarted by the supervisor" bash -c "! $ACTIVE_CMD"
+check "socket no longer answers" bash -c "! sudo -u '$WATCH_USER' env PYTHONPATH='$ZEE_SRC' '$PY' -m zee privsep status --socket '$SOCK' >/dev/null 2>&1"
 
 echo "failures: $fails"
 exit $((fails > 0))

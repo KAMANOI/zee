@@ -20,6 +20,8 @@ StateDirectoryMode=0700
 UMask=0077
 NoNewPrivileges=yes
 ProtectSystem=strict
+# openssl signature checks write temporary files: a private, writable /tmp
+PrivateTmp=yes
 ProtectHome=read-only
 ReadWritePaths=/run
 
