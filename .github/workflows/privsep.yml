@@ -126,6 +126,23 @@ jobs:
         run: |
           export KEY="$RUNNER_TEMP/approver/k.pem"
           bash scripts/privsep_ci.sh
+      - name: A real POSIX ACL on a trusted directory is refused (Z721)
+        run: |
+          set -eux
+          command -v setfacl || sudo apt-get install -y -qq acl
+          D=/var/lib/zee-acl
+          refused() {
+            out=$(cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -m zee privsep daemon \
+                    --state-dir $D/state --socket $D/s.sock --allow-uid 1 2>&1) && return 1
+            echo "$out"; grep -q Z721 <<<"$out" && grep -q "extended ACL" <<<"$out" && test ! -e $D/state
+          }
+          sudo install -d -m 755 -o root -g root $D
+          # access ACL (mask r-x, so the mode stays 0755: only the ACL check can refuse it)
+          sudo setfacl -m u:zeework:rwx,m::rx $D && getfacl $D && stat -c %a $D
+          refused
+          # default ACL only (what new entries inherit)
+          sudo setfacl -b $D && sudo setfacl -d -m u:zeework:rwx $D && getfacl $D
+          refused
       - name: Logs
         if: always()
         run: |
@@ -232,6 +249,16 @@ jobs:
         run: |
           export KEY="$RUNNER_TEMP/approver/k.pem"
           bash scripts/privsep_ci.sh
+      - name: A real macOS ACL on a trusted directory is refused (Z721)
+        run: |
+          set -eux
+          D=/private/var/db/zee-acl
+          sudo install -d -m 755 -o root -g wheel $D
+          sudo chmod +a "zeework allow add_file,add_subdirectory,delete_child" $D
+          ls -lde $D && test "$(stat -f %Lp $D)" = 755
+          out=$(cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -m zee privsep daemon \
+                  --state-dir $D/state --socket $D/s.sock --allow-uid 1 2>&1) && exit 1
+          echo "$out"; grep -q Z721 <<<"$out"; grep -q "extended ACL" <<<"$out"; test ! -e $D/state
       - name: Logs
         if: always()
         run: |

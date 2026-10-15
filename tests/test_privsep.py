@@ -966,6 +966,8 @@ def test_check_runtime_takes_the_code_location_as_imported_not_resolved(monkeypa
     root = rtmp()
     exe, pkg = _tree(root)
     (pkg / "privsep").mkdir(mode=0o755)
+    (pkg / "privsep" / "daemon.py").write_text("")
+    os.chmod(pkg / "privsep" / "daemon.py", 0o644)
     (root / "alias").symlink_to(root)
     monkeypatch.setattr(daemon, "__file__", str(root / "alias" / "zee" / "privsep" / "daemon.py"))
     with pytest.raises(ValueError, match="no symlink"):
@@ -1012,3 +1014,106 @@ def test_socket_is_bound_inside_the_checked_directory_with_the_umask_mode(tmp_pa
     c.close()
     t.join(5)
     assert not t.is_alive()
+
+
+# ---- Codex 14: extended ACLs, and __file__ checked whole before any .parent
+def test_check_runtime_refuses_dotdot_dropped_by_parent(monkeypatch):
+    """/x/zee/privsep/../daemon.py: .parent.parent alone would drop the '..' (Codex 14)."""
+    from zee.privsep import daemon
+    root = rtmp()
+    exe, pkg = _tree(root)
+    (pkg / "privsep").mkdir(mode=0o755)
+    (pkg / "daemon.py").write_text("")
+    os.chmod(pkg / "daemon.py", 0o644)
+    monkeypatch.setattr(daemon, "__file__", str(pkg / "privsep" / ".." / "daemon.py"))
+    with pytest.raises(ValueError, match="no symlink and no '..'"):
+        daemon.check_runtime(str(exe))
+    (pkg / "privsep" / "daemon.py").symlink_to(pkg / "daemon.py")  # the module file itself a link
+    monkeypatch.setattr(daemon, "__file__", str(pkg / "privsep" / "daemon.py"))
+    with pytest.raises(ValueError, match="no symlink"):
+        daemon.check_runtime(str(exe))
+
+
+def _fake_acl(monkeypatch, target: Path):
+    """Pretend ``target`` carries an extended ACL (adding a real one needs chmod +a / setfacl:
+    done for real on the CI runners)."""
+    from zee.privsep import daemon
+    want = os.stat(target)
+    real = daemon._acl_reader()
+
+    def reader(fd):
+        st = os.fstat(fd)
+        return (st.st_dev, st.st_ino) == (want.st_dev, want.st_ino) or real(fd)
+    monkeypatch.setattr(daemon, "_acl_reader", lambda: reader)
+
+
+@pytest.mark.parametrize("where", ["ancestor", "target", "state_entry", "code_file"])
+def test_check_runtime_and_state_dir_refuse_an_extended_acl(monkeypatch, tmp_path, where):
+    from zee.privsep import daemon
+    root = rtmp()
+    exe, pkg = _tree(root)
+    (root / "a" / "state").mkdir(parents=True, mode=0o755)
+    os.chmod(root / "a" / "state", 0o700)
+    (root / "a" / "state" / "admin_keys.json").write_text("{}")
+    os.chmod(root / "a" / "state" / "admin_keys.json", 0o600)
+    daemon.check_state_dir(root / "a" / "state")
+    daemon.check_runtime(str(exe), pkg)
+    target = {"ancestor": root / "a", "target": root / "a" / "state",
+              "state_entry": root / "a" / "state" / "admin_keys.json", "code_file": pkg / "a.py"}[where]
+    _fake_acl(monkeypatch, target)
+    with pytest.raises(ValueError, match="extended ACL"):
+        if where == "code_file":
+            daemon.check_runtime(str(exe), pkg)
+        else:
+            daemon.check_state_dir(root / "a" / "state")
+
+
+def test_an_acl_inherited_on_creation_is_refused(monkeypatch):
+    """The new directory is checked for an ACL right after mkdirat, before fchmod."""
+    from zee.privsep import daemon
+    root = rtmp()
+    real_mkdir, real = os.mkdir, daemon._acl_reader()
+    made = []
+
+    def mkdir(name, mode=0o777, *, dir_fd=None):
+        real_mkdir(name, mode, dir_fd=dir_fd)
+        made.append(os.stat(name, dir_fd=dir_fd))
+    monkeypatch.setattr(daemon.os, "mkdir", mkdir)
+    monkeypatch.setattr(daemon, "fd_ops_ok", lambda: True)
+
+    def reader(fd):
+        st = os.fstat(fd)
+        return any((st.st_dev, st.st_ino) == (m.st_dev, m.st_ino) for m in made) or real(fd)
+    monkeypatch.setattr(daemon, "_acl_reader", lambda: reader)
+    with pytest.raises(ValueError, match="extended ACL"):
+        os.close(daemon.open_dir(root / "run", "socket directory", create_mode=0o755))
+
+
+def test_no_acl_check_means_no_start(monkeypatch):
+    from zee.privsep import daemon
+    monkeypatch.setattr(daemon, "_acl_reader", lambda: None)
+    with pytest.raises(ValueError, match="ACL check"):
+        daemon.check_socket_dir(rtmp())
+
+
+def test_an_unreadable_acl_is_a_refusal(monkeypatch):
+    from zee.privsep import daemon
+
+    def broken(fd):
+        raise OSError(5, "I/O error")
+    monkeypatch.setattr(daemon, "_acl_reader", lambda: broken)
+    with pytest.raises(ValueError, match="can't read its ACL"):
+        daemon.check_socket_dir(rtmp())
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="chmod +a is macOS")
+def test_a_real_macos_acl_is_refused():
+    """A real ACL on a directory the test owns (no root needed): refused; removed: accepted."""
+    from zee.privsep import daemon
+    d = rtmp()
+    daemon.check_socket_dir(d)
+    subprocess.run(["chmod", "+a", "everyone allow add_file,delete_child", str(d)], check=True)
+    with pytest.raises(ValueError, match="extended ACL"):
+        daemon.check_socket_dir(d)
+    subprocess.run(["chmod", "-N", str(d)], check=True)
+    daemon.check_socket_dir(d)

@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ctypes
 import errno
+import functools
 import hashlib
 import json
 import logging
@@ -523,11 +525,73 @@ def _replaceable_by_others(st: os.stat_result, *, sticky_ok: bool) -> bool:
 _DIR = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
 
 
+_ACL_TYPE_EXTENDED = 0x100  # macOS <sys/acl.h>
+
+
+@functools.cache
+def _acl_reader() -> Optional[Callable[[int], bool]]:
+    """fd -> "has an extended ACL", or None when this platform's check is unavailable.
+
+    An ACL can let others add, remove or rename entries in a root-owned 0755 directory (or
+    write a 0644 file), which the mode bits don't show (Codex 14). macOS: acl_get_fd_np(fd,
+    ACL_TYPE_EXTENDED) returns NULL with errno ENOENT when there is none (acl_get(3); checked
+    on a real directory before and after chmod +a); any other failure is an error. Linux:
+    the ACL lives in the system.posix_acl_access xattr, and a directory's default ACL (which
+    new entries inherit, acl(5)) in system.posix_acl_default; ENODATA = no such attribute,
+    ENOTSUP = the filesystem has no xattrs (getxattr(2))."""
+    if sys.platform == "darwin":
+        try:
+            lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+            get, free = lib.acl_get_fd_np, lib.acl_free
+        except (OSError, AttributeError):
+            return None
+        get.restype, get.argtypes = ctypes.c_void_p, [ctypes.c_int, ctypes.c_int]
+        free.restype, free.argtypes = ctypes.c_int, [ctypes.c_void_p]
+
+        def mac(fd: int) -> bool:
+            ctypes.set_errno(0)
+            acl = get(fd, _ACL_TYPE_EXTENDED)
+            if acl:
+                free(acl)
+                return True
+            e = ctypes.get_errno()
+            if e == errno.ENOENT:
+                return False
+            raise OSError(e, f"acl_get_fd_np: {os.strerror(e)}")
+        return mac
+    if sys.platform.startswith("linux") and hasattr(os, "getxattr"):
+        def linux(fd: int) -> bool:
+            names = ["system.posix_acl_access"]
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                names.append("system.posix_acl_default")
+            for n in names:
+                try:
+                    os.getxattr(fd, n)
+                    return True
+                except OSError as e:
+                    if e.errno not in (errno.ENODATA, errno.ENOTSUP, errno.EOPNOTSUPP):
+                        raise
+            return False
+        return linux
+    return None
+
+
 def fd_ops_ok() -> bool:
     """Everything the placement check needs, or the daemon refuses to start (Z721)."""
     return (all(hasattr(os, n) for n in ("O_NOFOLLOW", "O_DIRECTORY", "fwalk", "fchdir", "fchmod"))
             and {os.open, os.mkdir, os.unlink, os.chown, os.stat} <= os.supports_dir_fd
-            and {os.stat, os.chown} <= os.supports_follow_symlinks)
+            and {os.stat, os.chown} <= os.supports_follow_symlinks
+            and _acl_reader() is not None)
+
+
+def _no_acl(fd: int, what: str, shown: str) -> None:
+    try:
+        has = _acl_reader()(fd)
+    except OSError as e:
+        raise ValueError(f"{what}: {shown}: can't read its ACL ({e})") from None
+    if has:
+        raise ValueError(f"{what}: {shown} has an extended ACL (none allowed: it can let others "
+                         "write what the mode bits forbid)")
 
 
 def _open_at(name: str, flags: int, parent: Optional[int], what: str, shown: str) -> int:
@@ -557,7 +621,8 @@ def _walk_parent(p, what: str) -> tuple[int, str]:
     swapped by anyone but root. Returns the checked parent's descriptor (caller closes) and
     the last name."""
     if not fd_ops_ok():
-        raise ValueError(f"{what}: this Python lacks openat/O_NOFOLLOW/O_DIRECTORY; refusing to start")
+        raise ValueError(f"{what}: this Python lacks openat/O_NOFOLLOW/O_DIRECTORY or an ACL check; "
+                         "refusing to start")
     s = os.fspath(p)
     parts = s.split("/")[1:]
     if not s.startswith("/") or s == "/" or any(c in ("", ".", "..") for c in parts):
@@ -569,6 +634,7 @@ def _walk_parent(p, what: str) -> tuple[int, str]:
             if st.st_uid not in (0, me) or _replaceable_by_others(st, sticky_ok=True):
                 raise ValueError(f"{what}: {shown or '/'} must be a directory owned by root "
                                  "that no one else can write")
+            _no_acl(fd, what, shown or "/")
             if i == len(parts) - 1:
                 return fd, name
             shown += "/" + name
@@ -608,6 +674,7 @@ def open_dir(p, what: str, *, create_mode: Optional[int] = None) -> int:
             fd = _open_at(name, _DIR, parent, what, os.fspath(p))
             try:
                 _ours(os.fstat(fd), what, os.fspath(p))
+                _no_acl(fd, what, os.fspath(p))  # an ACL inherited from the parent included
                 os.fchmod(fd, create_mode)  # the umask may have narrowed it
             except BaseException:
                 os.close(fd)
@@ -616,10 +683,53 @@ def open_dir(p, what: str, *, create_mode: Optional[int] = None) -> int:
         os.close(parent)
     try:
         _ours(os.fstat(fd), what, os.fspath(p))
+        _no_acl(fd, what, os.fspath(p))
     except BaseException:
         os.close(fd)
         raise
     return fd
+
+
+def _check_file(p: str, what: str) -> None:
+    """A regular file placed by the rule above, ours, writable by no one else, no ACL."""
+    parent, name = _walk_parent(p, what)
+    try:
+        try:
+            fd = _open_at(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, parent, what, p)
+        except FileNotFoundError:
+            raise ValueError(f"{what}: {p} does not exist") from None
+    finally:
+        os.close(parent)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise ValueError(f"{what}: {p} is not a regular file")
+        _ours(st, what, p)
+        _no_acl(fd, what, p)
+    finally:
+        os.close(fd)
+
+
+def _check_tree(top: int, what: str, base) -> None:
+    """Every entry under a checked directory: no link, ours, writable by no one else, no ACL
+    (each directory through the descriptor fwalk opened, each other entry opened O_NOFOLLOW)."""
+    for root, dirs, files, rfd in os.fwalk(".", dir_fd=top, follow_symlinks=False):
+        _no_acl(rfd, what, os.path.join(base, root))
+        for n in dirs + files:
+            shown = os.path.join(base, root, n)
+            st = os.stat(n, dir_fd=rfd, follow_symlinks=False)
+            _ours(st, what, shown)
+            if n in dirs:
+                continue  # fwalk opens it (above) on its own turn
+            try:
+                fd = os.open(n, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0),
+                             dir_fd=rfd)
+            except OSError as e:
+                raise ValueError(f"{what}: {shown} can't be opened to check its ACL ({e.strerror})") from None
+            try:
+                _no_acl(fd, what, shown)
+            finally:
+                os.close(fd)
 
 
 def check_runtime(executable: Optional[str] = None, tree: Optional[Path] = None) -> None:
@@ -627,28 +737,15 @@ def check_runtime(executable: Optional[str] = None, tree: Optional[Path] = None)
     by no one else, and no symlink anywhere in the zee tree. The zee location is __file__ as
     imported, never resolved first (a link or '..' in it is refused, not folded away). The
     interpreter's own library is trusted like any root service's (the runbook checks it)."""
-    exe = os.fspath(executable or sys.executable)
-    parent, name = _walk_parent(exe, "python executable")
-    try:
-        try:
-            fd = _open_at(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, parent, "python executable", exe)
-        except FileNotFoundError:
-            raise ValueError(f"python executable: {exe} does not exist") from None
-    finally:
-        os.close(parent)
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            raise ValueError(f"python executable: {exe} is not a regular file")
-        _ours(st, "python executable", exe)
-    finally:
-        os.close(fd)
-    tree = tree or Path(__file__).parent.parent
+    _check_file(os.fspath(executable or sys.executable), "python executable")
+    if tree is None:
+        # the module file itself, as imported, before any .parent: "x/privsep/../daemon.py"
+        # would otherwise lose its ".." to .parent (Codex 14)
+        _check_file(__file__, "zee code")
+        tree = Path(__file__).parent.parent
     top = open_dir(tree, "zee code")
     try:
-        for root, dirs, files, rfd in os.fwalk(".", dir_fd=top, follow_symlinks=False):
-            for n in dirs + files:
-                _ours(os.stat(n, dir_fd=rfd, follow_symlinks=False), "zee code", os.path.join(tree, root, n))
+        _check_tree(top, "zee code", tree)
     finally:
         os.close(top)
 
@@ -663,9 +760,7 @@ def check_state_dir(d: Path) -> Path:
     try:
         if stat.S_IMODE(os.fstat(fd).st_mode) & 0o077:
             raise ValueError(f"state directory must be a directory owned by uid {os.geteuid()}, mode 0700: {d}")
-        for root, dirs, files, rfd in os.fwalk(".", dir_fd=fd, follow_symlinks=False):
-            for n in dirs + files:
-                _ours(os.stat(n, dir_fd=rfd, follow_symlinks=False), "state entry", os.path.join(d, root, n))
+        _check_tree(fd, "state entry", d)
     finally:
         os.close(fd)
     return d

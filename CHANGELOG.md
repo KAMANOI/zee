@@ -44,7 +44,9 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   `O_DIRECTORY|O_NOFOLLOW` relative to the checked one above it), creates
   directories only inside a checked parent (`mkdirat` + `fchmod` on the new
   descriptor), takes the zee code location as imported (never resolved first)
-  and binds the socket relative to the checked directory's descriptor. The Python
+  and binds the socket relative to the checked directory's descriptor; any
+  extended ACL (macOS `acl_get_fd_np`, Linux `system.posix_acl_*` xattrs) on
+  anything it checks refuses the start, as does a platform without that check. The Python
   installation's own library is trusted, as for any root service; the
   runbook checks it with `find` before enabling. The macOS socket is
   `/private/var/db/zee/cutd.sock` (`/var/run` is root:daemon 0775, `/var` is
