@@ -1,0 +1,38 @@
+{
+  "label": "macos-real",
+  "method": "egress",
+  "url": "https://www.apple.com/library/test/success.html",
+  "host": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "machine": "arm64",
+    "mac_ver": "26.6.2"
+  },
+  "started_at": "2026-10-15T13:18:22.604830+00:00",
+  "before": {
+    "reachable": true,
+    "detail": "HTTP 200"
+  },
+  "cut": {
+    "ok": true,
+    "detail": "pfctl anchor com.apple/zee-egress-cut loaded",
+    "seconds": 0.03
+  },
+  "during": {
+    "reachable": false,
+    "detail": "URLError: <urlopen error timed out>"
+  },
+  "restore": {
+    "by": "finally",
+    "ok": true,
+    "detail": "darwin restore: pfctl com.apple/zee-egress-cut:ok, pfctl zee-egress-cut:ok; readback: no interface in the record (egress cut)"
+  },
+  "after": {
+    "reachable": true,
+    "detail": "HTTP 200"
+  },
+  "stopped": true,
+  "came_back": true,
+  "passed": true,
+  "finished_at": "2026-10-15T13:18:35.667794+00:00"
+}

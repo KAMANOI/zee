@@ -38,6 +38,6 @@ sudo bash scripts/verify-real-macos.sh
 | 2026-10-15 | 同上 | Linux ランナー・名前空間（iptables legacy 版） | egress | はい | はい | confirmed |
 | 2026-10-15 | 同上 | macOS ランナー（pf、`com.apple/zee-egress-cut`） | egress | はい | はい | confirmed |
 | 2026-10-15 | 同上 | Windows ランナー（netsh） | egress | はい | はい | confirmed |
-| （未実施） | — | macOS 実機 | egress / full | | | |
+| 2026-10-15 | 1c79265（MacBookPro17,1・macOS 26.6.2・`real-macos-20261015-221822/`） | macOS 実機 | egress / full | はい / はい | はい / はい | 成功 / 成功（実行後の pf 主ルールセット・pf 無効状態・ネットワークサービスは実行前と同一） |
 
 ランナーは GitHub が用意する仮想マシンで、実機ではありません。Windows・macOS の full 遮断（全インターフェースの停止）はランナーの接続を失うため行っていません。
