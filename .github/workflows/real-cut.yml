@@ -1,13 +1,14 @@
 name: Real cut (virtual runners)
 
 # Real cut -> measure -> restore -> measure with Zee's own code on GitHub's
-# virtual runners. Never runs on an ordinary push to main or on PRs.
-# workflow_dispatch needs the file on the default branch, so while this
-# lives on a feature branch the run is started by a push to that branch only.
+# virtual runners. Runs on every push to main (and the self-defense branch)
+# that touches the cut / restore code, this file or the check script, so a
+# change there is never released without a real cut. Never on PRs (a PR from
+# a fork must not get to change the runner's firewall).
 on:
   workflow_dispatch:
   push:
-    branches: [feat/self-defense-20261015]
+    branches: [main, feat/self-defense-20261015]
     paths:
       - .github/workflows/real-cut.yml
       - scripts/real_cut_check.py
@@ -40,6 +41,8 @@ jobs:
             method: full
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c  # v5.0.0
         with:
           python-version: '3.12'
@@ -77,11 +80,11 @@ jobs:
         run: |
           set -x
           PY="$(command -v python)"
+          rc=0  # the default shell is bash -e: capture the exit code instead of stopping here
           sudo ip netns exec zt env PATH=/tmp/zee-bin:/usr/bin:/bin PYTHONPATH="$GITHUB_WORKSPACE/src" \
             "$PY" scripts/real_cut_check.py --method "${{ matrix.method }}" \
             --url http://198.51.100.1:8080/ --label "linux-${{ matrix.backend }}" \
-            --out result.json --safety-seconds 45
-          rc=$?
+            --out result.json --safety-seconds 45 || rc=$?
           cat result.json
           { echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           exit $rc
@@ -98,23 +101,32 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c  # v5.0.0
         with:
           python-version: '3.12'
       - name: Record pf state before
         run: |
-          sudo pfctl -s info | head -3 || true
+          sudo pfctl -s info | grep '^Status:' | awk '{print $2}' > /tmp/pf-status.before
+          test -s /tmp/pf-status.before
+          cat /tmp/pf-status.before
           sudo pfctl -s rules || true
       - name: Cut -> measure -> restore -> measure
         run: |
           set -x
           sudo sh -c '(sleep 120; pfctl -a com.apple/zee-egress-cut -F all) >/dev/null 2>&1 &'
           PY="$(command -v python)"
+          rc=0
           sudo env PYTHONPATH="$GITHUB_WORKSPACE/src" "$PY" scripts/real_cut_check.py --method egress \
-            --url http://example.com/ --label macos-runner --out result.json --safety-seconds 45
-          rc=$?
+            --url http://example.com/ --label macos-runner --out result.json --safety-seconds 45 || rc=$?
           cat result.json
           { echo '```json'; cat result.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # Zee's restore releases its pf enable reference (pfctl -X): pf must
+          # be back to the state it had before (the outer timer never runs pfctl -d).
+          after="$(sudo pfctl -s info | grep '^Status:' | awk '{print $2}')"
+          echo "pf status before=$(cat /tmp/pf-status.before) after=$after" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$after" = "$(cat /tmp/pf-status.before)" ] || rc=1
           exit $rc
       - name: pf state after
         if: always()
@@ -130,6 +142,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11  # v4.1.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c  # v5.0.0
         with:
           python-version: '3.12'
@@ -142,6 +156,9 @@ jobs:
           $when = (Get-Date).AddMinutes(3)
           schtasks /create /f /tn zee-safety /sc once /sd $when.ToString("MM/dd/yyyy") /st $when.ToString("HH:mm") /ru SYSTEM `
             /tr "cmd /c netsh advfirewall firewall delete rule name=zee-egress-cut-block & netsh advfirewall firewall delete rule name=zee-egress-cut-allow-local"
+          if ($LASTEXITCODE -ne 0) { throw "safety task not created: no cut without it" }
+          $task = schtasks /query /tn zee-safety /v /fo list | Out-String
+          if ($LASTEXITCODE -ne 0 -or $task -notmatch "zee-egress-cut-block") { throw "safety task not as expected: no cut without it" }
           $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\src"
           python scripts/real_cut_check.py --method egress --url http://example.com/ `
             --label windows-runner --out result.json --safety-seconds 45
@@ -150,7 +167,14 @@ jobs:
           "``````json" | Out-File -Append $env:GITHUB_STEP_SUMMARY
           Get-Content result.json | Out-File -Append $env:GITHUB_STEP_SUMMARY
           "``````" | Out-File -Append $env:GITHUB_STEP_SUMMARY
-          schtasks /delete /f /tn zee-safety
+          # Remove the safety task only once both Zee rules are confirmed gone;
+          # otherwise keep it (it is the way back) and fail.
+          $gone = $true
+          foreach ($r in "zee-egress-cut-block", "zee-egress-cut-allow-local") {
+            $out = netsh advfirewall firewall show rule name=$r | Out-String
+            if ($out -notmatch "No rules match the specified criteria") { $gone = $false }
+          }
+          if ($gone) { schtasks /delete /f /tn zee-safety } else { "Zee rule still present: safety task kept"; $rc = 1 }
           exit $rc
       - name: Rules after
         if: always()

@@ -2,8 +2,9 @@
 
 Used by .github/workflows/real-cut.yml (virtual runners) and by
 scripts/verify-real-macos.sh (a real Mac). Needs root (the cut changes the
-OS firewall / interfaces). Writes one JSON result and exits 0 only if the
-traffic stopped during the cut AND came back after the restore.
+OS firewall / interfaces). Writes one JSON result and exits 0 only if Zee's
+cut and its normal restore both reported success AND the traffic stopped
+during the cut AND came back after the restore (see passed()).
 
 Safety: a timer restores (Zee's normal restore for this cut) after
 --safety-seconds even if this process is stuck, and `finally` restores on
@@ -37,6 +38,18 @@ def reachable(url: str, timeout: float) -> tuple[bool, str]:
         return True, f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001 - every failure is "not reachable"
         return False, f"{type(e).__name__}: {e}"
+
+
+def passed(result: dict) -> bool:
+    """Zee's own cut and normal restore must both report success, the restore
+    must be the normal one (not the safety timer), and the traffic must have
+    stopped and come back. Reachability alone can come from a DNS blip or
+    an outer safety net, so it never passes by itself."""
+    restore = result.get("restore") or {}
+    return bool(
+        (result.get("cut") or {}).get("ok") is True
+        and restore.get("ok") is True and restore.get("by") == "finally"
+        and result.get("stopped") and result.get("came_back"))
 
 
 def main() -> int:
@@ -103,7 +116,7 @@ def main() -> int:
     result["after"] = dict(zip(("reachable", "detail"), after))
     result["stopped"] = result["before"]["reachable"] and not result["during"]["reachable"]
     result["came_back"] = result["after"]["reachable"]
-    result["passed"] = bool(result["stopped"] and result["came_back"])
+    result["passed"] = passed(result)
     result["finished_at"] = datetime.now(timezone.utc).isoformat()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
