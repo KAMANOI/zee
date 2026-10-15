@@ -134,10 +134,19 @@ def test_ipv6_probe_uses_an_ipv6_socket_only():
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         port = srv.server_address[1]
-        ok, detail = rcc.reachable6(f"http://[::1]:{port}/", 2)
-        assert ok and "via [::1]" in detail  # any HTTP answer (here 501) counts
-        assert rcc.reachable6(f"http://127.0.0.1:{port}/", 2)[0] is False
+        ok, detail = rcc.reachable(f"http://[::1]:{port}/", 2, socket.AF_INET6)
+        assert ok and "via ::1" in detail  # any HTTP answer (here 501) counts
+        assert rcc.reachable(f"http://127.0.0.1:{port}/", 2, socket.AF_INET6)[0] is False
+        assert rcc.resolve("http://127.0.0.1/", socket.AF_INET6)[0] is None  # never IPv4-mapped
     finally:
         srv.shutdown()
-    assert rcc._OPENER.handlers and not any(
-        getattr(h, "proxies", None) for h in rcc._OPENER.handlers)
+
+
+def test_probe_reuses_the_address_resolved_before_the_cut(monkeypatch):
+    """Codex round 3: a lookup failing during the cut is not "stopped"."""
+    import socket
+    monkeypatch.setattr(rcc.socket, "getaddrinfo", lambda *a, **k: (_ for _ in ()).throw(OSError("dns down")))
+    assert rcc.reachable("http://example.invalid/", 1)[1].startswith("resolve failed")
+    # With an address already resolved, getaddrinfo is not called at all.
+    ok, detail = rcc.reachable("http://example.invalid/", 0.5, socket.AF_INET, ("127.0.0.1", 9))
+    assert ok is False and not detail.startswith("resolve failed")

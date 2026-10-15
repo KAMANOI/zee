@@ -25,50 +25,58 @@ import json
 import os
 import platform
 import socket
+import ssl
 import sys
 import tempfile
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 ASSET = "verify-real-cut"
 
 
-# No proxy: a configured proxy would carry the probe over its own path.
-_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def _port(u) -> int:
+    return u.port or (443 if u.scheme == "https" else 80)
 
 
-def reachable(url: str, timeout: float) -> tuple[bool, str]:
-    try:
-        with _OPENER.open(url, timeout=timeout) as r:  # noqa: S310 - fixed test URL
-            return True, f"HTTP {r.status}"
-    except urllib.error.HTTPError as e:  # any HTTP answer means the network path works
-        return True, f"HTTP {e.code}"
-    except Exception as e:  # noqa: BLE001 - every failure is "not reachable"
-        return False, f"{type(e).__name__}: {e}"
-
-
-def reachable6(url: str, timeout: float) -> tuple[bool, str]:
-    """HTTP over IPv6 only: the socket is AF_INET6 (no IPv4 fallback, no
-    proxy, no redirect). Any HTTP answer means the IPv6 path works."""
+def resolve(url: str, family: int) -> tuple[object, str]:
+    """The destination address, resolved once before the cut and then
+    reused: a name lookup failing during the cut (the DNS server is outside
+    too) must not count as the traffic being stopped. IPv4-mapped IPv6 is
+    IPv4 on the wire, so it is refused for the IPv6 probe."""
     u = urllib.parse.urlsplit(url)
     try:
-        port = u.port or 80
-        addr = socket.getaddrinfo(u.hostname, port, socket.AF_INET6, socket.SOCK_STREAM)[0][4]
-        if addr[0].lower().startswith("::ffff:"):  # IPv4-mapped = IPv4 on the wire
-            return False, f"not an IPv6 destination: {addr[0]}"
-        sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        addr = socket.getaddrinfo(u.hostname, _port(u), family, socket.SOCK_STREAM)[0][4]
+    except Exception as e:  # noqa: BLE001
+        return None, f"resolve failed: {type(e).__name__}: {e}"
+    if family == socket.AF_INET6 and addr[0].lower().startswith("::ffff:"):
+        return None, f"not an IPv6 destination: {addr[0]}"
+    return addr, addr[0]
+
+
+def reachable(url: str, timeout: float, family: int = socket.AF_INET,
+              addr: object = None) -> tuple[bool, str]:
+    """HTTP GET over a socket of ``family`` to ``addr`` (resolved now if not
+    given): no proxy, no fallback to the other family, no redirect. Any
+    HTTP answer means the network path works."""
+    if addr is None:
+        addr, why = resolve(url, family)
+        if addr is None:
+            return False, why
+    u = urllib.parse.urlsplit(url)
+    try:
+        sock = socket.socket(family, socket.SOCK_STREAM)
         sock.settimeout(timeout)
-        conn = http.client.HTTPConnection(u.hostname, port, timeout=timeout)
+        conn = http.client.HTTPConnection(u.hostname, _port(u), timeout=timeout)
         try:
             sock.connect(addr)
-            conn.sock = sock  # http.client uses an already-set socket as is
+            # http.client uses an already-set socket as is (TLS for https).
+            conn.sock = (ssl.create_default_context().wrap_socket(sock, server_hostname=u.hostname)
+                         if u.scheme == "https" else sock)
             conn.request("GET", u.path or "/")
-            return True, f"HTTP {conn.getresponse().status} via [{addr[0]}]"
+            return True, f"HTTP {conn.getresponse().status} via {addr[0]}"
         finally:
             conn.close()
             sock.close()
@@ -115,8 +123,9 @@ def main() -> int:
     args = ap.parse_args()
     if args.require_ipv6 and not args.url6:
         ap.error("--require-ipv6 needs --url6")
-    if args.url6 and not args.url6.startswith("http://"):
-        ap.error("--url6 must be http:// (probed over a raw IPv6 socket)")
+    for u in filter(None, (args.url, args.url6)):
+        if not u.startswith(("http://", "https://")):
+            ap.error(f"{u}: only http:// and https:// URLs are probed")
 
     from zee.recovery.restore import restore
     from zee.responder.cut_egress import cut_egress
@@ -148,9 +157,15 @@ def main() -> int:
                     {"by": why, "error": f"{type(e).__name__}: {e}"})
                 result["restore"] = {"by": why, "ok": False, "error": f"{type(e).__name__}: {e}"}
 
+    # Resolved once, before the cut (see resolve()).
+    addr4, why4 = resolve(args.url, socket.AF_INET)
+    addr6, why6 = resolve(args.url6, socket.AF_INET6) if args.url6 else (None, "")
+
     def probe(url: str) -> dict:
-        check = reachable6 if url == args.url6 else reachable
-        return dict(zip(("reachable", "detail"), check(url, args.probe_timeout)))
+        family, addr, why = ((socket.AF_INET6, addr6, why6) if url == args.url6
+                             else (socket.AF_INET, addr4, why4))
+        ok, detail = reachable(url, args.probe_timeout, family, addr) if addr else (False, why)
+        return {"reachable": ok, "detail": detail}
 
     v6: dict = {"url": args.url6} if args.url6 else {}
     result["before"] = probe(args.url)
@@ -172,20 +187,20 @@ def main() -> int:
         do_restore("finally")
         safety.cancel()
     time.sleep(2.0)
-    after = reachable(args.url, args.probe_timeout)
+    after = tuple(probe(args.url).values())
     for _ in range(10):  # interfaces (Wi-Fi rejoin) may take a moment to come back
         if after[0]:
             break
         time.sleep(3.0)
-        after = reachable(args.url, args.probe_timeout)
+        after = tuple(probe(args.url).values())
     result["after"] = dict(zip(("reachable", "detail"), after))
     if args.url6:
-        after6 = reachable6(args.url6, args.probe_timeout)
+        after6 = tuple(probe(args.url6).values())
         for _ in range(5):
             if after6[0] or not v6["before"]["reachable"]:
                 break
             time.sleep(3.0)
-            after6 = reachable6(args.url6, args.probe_timeout)
+            after6 = tuple(probe(args.url6).values())
         v6["after"] = dict(zip(("reachable", "detail"), after6))
         v6.setdefault("during", {"reachable": None, "detail": "cut raised before the probe"})
         v6["status"] = ipv6_status(v6)
