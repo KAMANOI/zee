@@ -40,7 +40,7 @@ main（と `feat/self-defense-20261015` の枝）への push のうち、遮断�
 | 2026-10-15 | 同上 | macOS ランナー（pf、`com.apple/zee-egress-cut`） | egress | はい | はい | confirmed |
 | 2026-10-15 | 同上 | Windows ランナー（netsh） | egress | はい | はい | confirmed |
 | 2026-10-15 | 1c79265（MacBookPro17,1・macOS 26.6.2・`real-macos-20261015-221822/`） | macOS 実機 | egress / full | はい / はい | はい / はい | 成功 / 成功（下の注） |
-| 2026-10-15 | dcd2b18（run 38748098000・v0.13.0 の修正後。合格＝Zee の遮断と通常の復旧がどちらも成功＋止まって戻った） | Linux ランナー・名前空間（nft） | egress / full | はい / はい | はい / はい | confirmed / confirmed |
+| 2026-10-15 | dcd2b18（run 38748098000）と ae7d8f0（run 38750135590、再レビュー後。どちらも全ジョブ合格）・v0.13.0 の修正後。合格＝Zee の遮断と通常の復旧がどちらも成功＋止まって戻った） | Linux ランナー・名前空間（nft） | egress / full | はい / はい | はい / はい | confirmed / confirmed |
 | 2026-10-15 | 同上 | Linux ランナー・名前空間（iptables nf_tables 版・legacy 版） | egress | はい | はい | confirmed（復旧は iptables・iptables-legacy・iptables-nft をそれぞれ読み直して不存在を確認） |
 | 2026-10-15 | 同上 | macOS ランナー（pf、quick 付きの規則・`pfctl -E`） | egress | はい | はい | confirmed（復旧の `pfctl -X` で、遮断前に無効だった pf が Zee の復旧だけで無効に戻った） |
 | 2026-10-15 | 同上 | Windows ランナー（netsh、en-US） | egress | はい | はい | confirmed |
