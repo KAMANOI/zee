@@ -112,6 +112,8 @@ The MVP lives under `src/zee/`. **It runs dry_run by default and does not actual
 
 > **If you use `cut_method: egress` on macOS (2026-10-15)** — Up to v0.12.0, the macOS outbound cut loads its rules into an anchor that the stock `/etc/pf.conf` does not reference (it evaluates only `anchor "com.apple/*"`), so outbound traffic is not stopped even when the cut is reported. The fix uses an anchor under `com.apple/` and reads the ruleset back after cutting to confirm the rules are evaluated. Until the fix is released, please do not rely on the outbound cut on macOS.
 
+> **If you use `cut_method: egress` on Windows (2026-10-15)** — Up to v0.12.0, the Windows outbound cut never installs its rules: `netsh` rejects the all-addresses range, so outbound traffic is not stopped. In this case Zee reports the cut as failed (it does not claim success). The fix blocks every range except private addresses and loopback with a single block rule, and was confirmed to stop and restore traffic on a GitHub Windows runner. Until the fix is released, please do not rely on the outbound cut on Windows.
+
 ### Install
 
 ```bash
