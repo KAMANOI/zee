@@ -150,4 +150,11 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 ## 11. 実測の記録
 
-（CI の結果をここに追記する）
+**run 38770329531（commit 8ae9b5c、2026-10-16）：両ジョブ合格。**
+
+- Linux（job 116544141798、ubuntu-24.04・`/usr/bin/python3` 3.12.3・配布の systemd unit をそのまま使用）：29項目すべて PASS。業務ユーザー `zeework` の `zee watch` が囮への書き込みを検知 → root の遮断部が nft の egress 遮断 → 名前空間から試験サーバー（198.51.100.1）へ届かない → 署名なしの `restore`・偽の署名は拒否されたまま届かない → 署名付き復旧で届く・台帳が解決済みになる。拒否はどれも「終了コードが0でない」かつ「OS の権限エラーの文言」（`Permission denied`・`Operation not permitted`・`Interactive authentication required`）で判定した。
+- macOS（job 116544142097、macos-latest・`/opt/homebrew/bin/python3`）：20項目すべて PASS。配布の plist を LaunchDaemon として読み込めた（`state = running`）。`dscl` で作った業務ユーザー（uid 550）から LOCAL_PEERCRED 経由で status が通り、ソケットを開けるランナーのユーザー（uid が許可されていない）は `peer_not_allowed`。`kill`・`launchctl bootout` は Operation not permitted で通らず、署名付き停止の後は `state = not running` で再起動されない。**実遮断はしていない。**
+- 途中の run で見つかったこと：①配布の unit は `ProtectSystem=strict` だけだと一時ディレクトリが書けず、署名検証（openssl）が失敗した（run 38767533415。Codex 1回目の指摘と同じ。`PrivateTmp=yes` で解消）②CI の判定に「シェル関数を `bash -c` から呼んで常に PASS になる」誤りがあった（同 run。否定の確認は終了コードと権限エラーの文言の両方を要求する形に直した）。
+- **未検証**：代表の Mac を含む実機・Linux 実機・NetworkManager のある環境・スリープ／OS 更新後の復帰・macOS での遮断部経由の実遮断・遮断部経由の full 遮断。
+
+外部レビュー（Codex、`~/claude-bridge/outbox/20261016-zee-privsep/`）：1回目 高4・中1 → 2回目 高1・中2 → 3回目 中1 → 4回目 指摘なし。
