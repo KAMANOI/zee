@@ -38,7 +38,7 @@ from ..responder.cut_full import (
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_LINUX_NMCLI,
     SENTINEL_MACOS_PFCTL_EGRESS,
-    disabled_now,
+    interface_states,
     list_linux_interfaces,
     sbin_which as _which,
     list_macos_services,
@@ -311,18 +311,26 @@ def _remove_iptables_chain() -> tuple[bool, str]:
 
 
 def _readback(targets: Optional[tuple[str, ...]]) -> tuple[Optional[bool], str]:
-    """Re-read the OS: recorded interfaces / services must be enabled again.
-    Disabled ones outside the record are only reported (warning)."""
-    disabled = disabled_now()
-    if disabled is None:
-        return None, "readback: state unreadable"
+    """Re-read the OS. Each recorded interface / service must be positively
+    read back as enabled: disabled = failed; not enumerated, unknown or an
+    unreadable listing = unverified. Disabled ones outside the record are
+    only reported (warning)."""
     wanted = [t for t in (targets or ()) if t not in _FIREWALL_ENTRIES]
-    still = [t for t in wanted if t in disabled]
-    others = sorted(disabled - set(wanted))
-    parts = [f"readback: {'still disabled ' + ', '.join(still) if still else 'recorded targets enabled'}"]
+    states = interface_states()
+    if states is None:
+        return None, "readback: state unreadable"
+    verdicts = {t: states.get(t) for t in wanted}
+    still = [t for t, v in verdicts.items() if v == "disabled"]
+    unsure = [t for t, v in verdicts.items() if v not in ("enabled", "disabled")]
+    others = sorted(n for n, v in states.items() if v == "disabled" and n not in wanted)
+    parts = ["readback: " + ("; ".join(filter(None, [
+        f"still disabled {', '.join(still)}" if still else "",
+        f"not confirmed {', '.join(unsure)}" if unsure else "",
+    ])) or ("recorded targets enabled" if wanted else "no recorded targets to verify"))]
     if others:
         parts.append(f"warning: also disabled (not in the record): {', '.join(others)}")
-    return (not still), "; ".join(parts)
+    return _combine(*[False if v == "disabled" else None if t in unsure else True
+                      for t, v in verdicts.items()]), "; ".join(parts)
 
 
 def _summary(label: str, steps: list[Step]) -> tuple[Optional[bool], str]:

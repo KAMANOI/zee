@@ -35,9 +35,12 @@ Not in any tagged release yet.
   **Z606 (unverified)** and the cut stays unresolved — on a Linux host
   with only one of nft / iptables this is expected; read the per-step
   detail. Recorded interfaces / services are re-read afterwards and must
-  be enabled; disabled ones outside the record are shown as a warning.
+  be positively read back as enabled: disabled fails (Z601); not listed,
+  unknown state (including NetworkManager not answering) or an unreadable
+  / empty listing is unverified (Z606). Disabled ones outside the record
+  are shown as a warning.
   Tools are looked up on PATH plus `/usr/sbin:/sbin` and run by absolute
-  path. The emergency restore also no longer stops after `nmcli`
+  path (made absolute even if PATH holds a relative entry). The emergency restore also no longer stops after `nmcli`
   (keeping a failed `nmcli networking on` unless NetworkManager reports
   networking enabled) and re-enables macOS services the cut disabled.
   Restore notifications state that the cut ledger is writable by the

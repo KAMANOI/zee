@@ -51,12 +51,18 @@ def _event(op_class: str = "change", confidence: str = "high") -> TrapEvent:
     )
 
 
+class _AllEnabled(dict):
+    """interface_states stub: every name reads back as enabled."""
+    def get(self, key, default=None):
+        return "enabled"
+
+
 @pytest.fixture
 def quiet(monkeypatch):
     titles: list[str] = []
     monkeypatch.setattr(restore_mod, "notify_local", lambda t, b: titles.append(t) or True)
     monkeypatch.setattr(seq, "notify_local", lambda t, b: titles.append(t) or True)
-    monkeypatch.setattr(restore_mod, "disabled_now", lambda: set())  # readback: all enabled
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: _AllEnabled())  # readback: all enabled
     return titles
 
 
@@ -597,7 +603,7 @@ def test_tools_resolved_with_sbin_and_run_with_absolute_path(monkeypatch):
 def test_readback_fails_when_recorded_interface_still_disabled(tmp_path, monkeypatch, quiet):
     monkeypatch.setattr(restore_mod, "_host_platform", lambda: "linux")
     _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
-    monkeypatch.setattr(restore_mod, "disabled_now", lambda: {"eth0", "wlan9"})
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "disabled", "wlan9": "disabled"})
     with pytest.raises(ZeeError) as ei:
         restore_mod.restore("t-host", cut_state=_record(tmp_path, ["eth0"]))
     assert ei.value.code == "Z601" and "still disabled eth0" in str(ei.value)
@@ -607,7 +613,7 @@ def test_readback_fails_when_recorded_interface_still_disabled(tmp_path, monkeyp
 def test_readback_outside_record_is_only_a_warning(tmp_path, monkeypatch, quiet):
     monkeypatch.setattr(restore_mod, "_host_platform", lambda: "linux")
     _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
-    monkeypatch.setattr(restore_mod, "disabled_now", lambda: {"wlan9"})
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled", "wlan9": "disabled"})
     ok, detail = restore_mod.restore("t-host", cut_state=_record(tmp_path, ["eth0"]))
     assert ok is True and "warning" in detail and "wlan9" in detail
 
@@ -615,7 +621,7 @@ def test_readback_outside_record_is_only_a_warning(tmp_path, monkeypatch, quiet)
 def test_unreadable_state_is_unverified(tmp_path, monkeypatch, quiet):
     monkeypatch.setattr(restore_mod, "_host_platform", lambda: "linux")
     _fake_linux(monkeypatch, tools={"ip", "nft", "iptables"})
-    monkeypatch.setattr(restore_mod, "disabled_now", lambda: None)
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: None)
     with pytest.raises(ZeeError) as ei:
         restore_mod.restore("t-host", cut_state=_record(tmp_path, ["eth0"]))
     assert ei.value.code == "Z606"
@@ -624,7 +630,7 @@ def test_unreadable_state_is_unverified(tmp_path, monkeypatch, quiet):
 def test_notifications_say_the_ledger_is_user_writable(tmp_path, monkeypatch):
     bodies: list = []
     monkeypatch.setattr(restore_mod, "notify_local", lambda t, b: bodies.append(b) or True)
-    monkeypatch.setattr(restore_mod, "disabled_now", lambda: set())
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: _AllEnabled())
     monkeypatch.setattr(restore_mod, "_restore_compat", lambda: (True, "all on"))
     restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "c.jsonl"), all_interfaces=True)
     assert "writable by the same user" in bodies[-1]
@@ -670,31 +676,73 @@ IP_OUT = ("1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536\n"
           "3: veth1@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500\n")
 
 
-def test_disabled_now_linux(monkeypatch):
+def test_interface_states_linux(monkeypatch):
     import subprocess
     monkeypatch.setattr(full_mod.sys, "platform", "linux")
     _stub_check_output(monkeypatch, {"ip": IP_OUT, "nmcli": "disabled\n"})
-    assert full_mod.disabled_now() == {"eth0", full_mod.SENTINEL_LINUX_NMCLI}
-    # NetworkManager not running: interface read-back is kept, sentinel skipped.
-    _stub_check_output(monkeypatch, {"ip": IP_OUT, "nmcli": subprocess.CalledProcessError(8, "nmcli")})
-    assert full_mod.disabled_now() == {"eth0"}
+    assert full_mod.interface_states() == {
+        "eth0": "disabled", "veth1": "enabled", full_mod.SENTINEL_LINUX_NMCLI: "disabled"}
+    # NetworkManager not answering: interfaces kept, nmcli state is unknown.
+    _stub_check_output(monkeypatch, {"ip": IP_OUT, "nmcli": subprocess.TimeoutExpired("nmcli", 5)})
+    assert full_mod.interface_states()[full_mod.SENTINEL_LINUX_NMCLI] == "unknown"
+    _stub_check_output(monkeypatch, {"ip": IP_OUT, "nmcli": "asleep\n"})
+    assert full_mod.interface_states()[full_mod.SENTINEL_LINUX_NMCLI] == "unknown"
 
 
-def test_disabled_now_macos_and_windows(monkeypatch):
+def test_interface_states_macos_and_windows(monkeypatch):
     monkeypatch.setattr(full_mod.sys, "platform", "darwin")
     _stub_check_output(monkeypatch, {"networksetup": "An asterisk (*) denotes ...\n*Wi-Fi\nEthernet\n"})
-    assert full_mod.disabled_now() == {"Wi-Fi"}
+    assert full_mod.interface_states() == {"Wi-Fi": "disabled", "Ethernet": "enabled"}
     monkeypatch.setattr(full_mod.sys, "platform", "win32")
-    _stub_check_output(monkeypatch, {"powershell": '[{"Name":"Ethernet","Status":"Disabled"},{"Name":"Wi-Fi","Status":"Up"}]'})
-    assert full_mod.disabled_now() == {"Ethernet"}
-    _stub_check_output(monkeypatch, {"powershell": '{"Name":"Ethernet","Status":"Up"}'})
-    assert full_mod.disabled_now() == set()
+    _stub_check_output(monkeypatch, {"powershell": '[{"Name":"Ethernet","Status":"Disabled"},'
+                                                   '{"Name":"Wi-Fi","Status":"Up"},{"Name":"BT"}]'})
+    assert full_mod.interface_states() == {"Ethernet": "disabled", "Wi-Fi": "enabled", "BT": "unknown"}
+    _stub_check_output(monkeypatch, {"powershell": ""})
+    assert full_mod.interface_states() is None  # empty listing is not "all enabled"
 
 
-def test_disabled_now_unreadable_is_none(monkeypatch):
+def test_interface_states_unreadable_is_none(monkeypatch):
     monkeypatch.setattr(full_mod.sys, "platform", "linux")
     _stub_check_output(monkeypatch, {"ip": OSError("no ip")})
-    assert full_mod.disabled_now() is None
+    assert full_mod.interface_states() is None
+
+
+@pytest.mark.parametrize("states, expect", [
+    ({"eth0": "enabled"}, True),
+    ({"eth0": "disabled"}, False),
+    ({"eth0": "unknown"}, None),
+    ({}, None),                      # vanished / not enumerated
+    (None, None),                    # unreadable
+])
+def test_readback_needs_positive_enabled(monkeypatch, states, expect):
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: states)
+    assert restore_mod._readback(("eth0",))[0] is expect
+
+
+@pytest.mark.parametrize("nm_state, expect", [("enabled", True), ("unknown", None), ("disabled", False)])
+def test_readback_nmcli_sentinel_three_states(monkeypatch, nm_state, expect):
+    monkeypatch.setattr(restore_mod, "interface_states",
+                        lambda: {full_mod.SENTINEL_LINUX_NMCLI: nm_state})
+    assert restore_mod._readback((full_mod.SENTINEL_LINUX_NMCLI,))[0] is expect
+
+
+def test_readback_without_record(monkeypatch):
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
+    ok, detail = restore_mod._readback(None)
+    assert ok is True and "no recorded targets to verify" in detail
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: None)
+    assert restore_mod._readback(None)[0] is None
+
+
+def test_readback_nmcli_missing_is_unverified(monkeypatch):
+    monkeypatch.setattr(restore_mod, "interface_states", lambda: {"eth0": "enabled"})
+    assert restore_mod._readback((full_mod.SENTINEL_LINUX_NMCLI,))[0] is None
+
+
+def test_sbin_which_returns_absolute_path(monkeypatch):
+    import os
+    monkeypatch.setattr(full_mod.shutil, "which", lambda name, path=None: "bin/ip")
+    assert full_mod.sbin_which("ip") == os.path.abspath("bin/ip")
 
 
 def test_interface_listing_uses_sbin_absolute_path(monkeypatch):

@@ -36,7 +36,8 @@ SBIN_PATH = os.pathsep.join(filter(None, [os.environ.get("PATH", ""), "/usr/sbin
 
 
 def sbin_which(name: str) -> Optional[str]:
-    return shutil.which(name, path=SBIN_PATH)
+    found = shutil.which(name, path=SBIN_PATH)
+    return os.path.abspath(found) if found else None
 
 
 def _abs(cmd: list[str]) -> list[str]:
@@ -317,39 +318,48 @@ def _run(cmd: list[str]) -> tuple[bool, str]:
     return True, (cp.stdout or "").strip()
 
 
-def disabled_now() -> Optional[set[str]]:
-    """Read back which interfaces / services are disabled right now.
+def interface_states() -> Optional[dict[str, str]]:
+    """Read back every interface / service and its state right now.
 
-    Names use the same spelling the cut records (interface / service names;
-    ``SENTINEL_LINUX_NMCLI`` when NetworkManager networking is off). Returns
-    None when the state cannot be read — callers must treat that as
-    "unverified", never as "nothing disabled".
+    Maps the name the cut records (interface / service name;
+    ``SENTINEL_LINUX_NMCLI`` for NetworkManager networking) to "enabled",
+    "disabled" or "unknown". A name that is absent was not enumerated.
+    Returns None when the listing cannot be read or is empty. Callers must
+    treat absent / "unknown" / None as unverified, never as enabled.
     """
     try:
         if sys.platform.startswith("linux"):
             out = subprocess.check_output(_abs(["ip", "-o", "link", "show"]), text=True, timeout=5)
-            disabled: set[str] = set()
+            states: dict[str, str] = {}
             for line in out.splitlines():
                 parts = line.split(":", 2)
-                if len(parts) < 3:
+                if len(parts) < 3 or "<" not in parts[2]:
                     continue
                 name = parts[1].strip().split("@")[0]
                 flags = parts[2].split(">", 1)[0].lstrip(" <").split(",")
-                if name and name != "lo" and "UP" not in flags:
-                    disabled.add(name)
+                if name and name != "lo":
+                    states[name] = "enabled" if "UP" in flags else "disabled"
+            if not states:
+                return None
             if sbin_which("nmcli"):
-                # Separate try: NetworkManager not running must not discard
-                # the interface read-back (the nmcli sentinel is just skipped).
+                # Separate try: NetworkManager not answering must not discard
+                # the interface states; its own state is then "unknown".
                 try:
-                    state = subprocess.check_output(_abs(["nmcli", "networking"]), text=True, timeout=5).strip()
+                    nm = subprocess.check_output(_abs(["nmcli", "networking"]), text=True, timeout=5).strip()
                 except (subprocess.SubprocessError, OSError):
-                    state = ""
-                if state == "disabled":
-                    disabled.add(SENTINEL_LINUX_NMCLI)
-            return disabled
+                    nm = ""
+                states[SENTINEL_LINUX_NMCLI] = nm if nm in ("enabled", "disabled") else "unknown"
+            return states
         if sys.platform == "darwin":
             out = subprocess.check_output(_abs(["networksetup", "-listallnetworkservices"]), text=True, timeout=5)
-            return {l.strip()[1:].strip() for l in out.splitlines()[1:] if l.strip().startswith("*")}
+            states = {}
+            for line in out.splitlines()[1:]:  # skip the asterisk legend
+                name = line.strip()
+                if name.startswith("*"):
+                    states[name[1:].strip()] = "disabled"
+                elif name:
+                    states[name] = "enabled"
+            return states or None
         if sys.platform == "win32":
             cmd = sbin_which("powershell") or sbin_which("pwsh")
             if not cmd:
@@ -358,9 +368,18 @@ def disabled_now() -> Optional[set[str]]:
                 [cmd, "-NoProfile", "-Command",
                  "Get-NetAdapter | Select-Object Name,Status | ConvertTo-Json -Compress"],
                 text=True, timeout=10).strip()
-            data = json.loads(out) if out else []
+            if not out:
+                return None
+            data = json.loads(out)
             data = [data] if isinstance(data, dict) else data
-            return {d["Name"] for d in data if isinstance(d, dict) and d.get("Status") == "Disabled"}
-    except (subprocess.SubprocessError, OSError, ValueError, KeyError, TypeError):
+            if not isinstance(data, list):
+                return None
+            # Admin state is what Zee changes: "Disabled" vs. admin-enabled
+            # (Up / Disconnected). Anything else is unknown.
+            mapping = {"Disabled": "disabled", "Up": "enabled", "Disconnected": "enabled"}
+            states = {d["Name"]: mapping.get(d.get("Status"), "unknown")
+                      for d in data if isinstance(d, dict) and isinstance(d.get("Name"), str) and d["Name"]}
+            return states or None
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError):
         return None
     return None
