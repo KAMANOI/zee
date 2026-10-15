@@ -34,7 +34,11 @@ from ..errors import (
 from ..notifier.local import notify_local
 from ..responder.cut_egress import PF_ANCHOR, PF_LEGACY_ANCHOR, ZEE_RULE_TAG
 from ..responder.cut_full import (
+    PF_TOKEN_PREFIX,
+    SENTINEL_LINUX_IPTABLES_EGRESS,
+    SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_LINUX_NMCLI,
+    SENTINEL_MACOS_PFCTL_EGRESS,
     interface_states,
     list_linux_interfaces,
     sbin_which as _which,
@@ -154,7 +158,8 @@ def _restore_targeted(rec: CutRecord) -> tuple[Optional[bool], str]:
             steps.append((entry, _run(["networksetup", "-setnetworkserviceenabled", entry, "on"])[0]))
         else:
             steps.append((entry, _run(["netsh", "interface", "set", "interface", entry, "admin=enable"])[0]))
-    return _summary(f"{rec.platform} restore", steps + _firewall_steps(rec.platform))
+    recorded = tuple(n for k, n in rec.entries() if k == "firewall")
+    return _summary(f"{rec.platform} restore", steps + _firewall_steps(rec.platform, recorded))
 
 
 def _host_platform() -> str:
@@ -260,40 +265,81 @@ _ABSENT_MARKERS = (
 )
 
 
-def _firewall_steps(platform: str) -> list[Step]:
+# iptables front ends: each talks to its own kernel backend (legacy x_tables
+# or nf_tables), and `iptables` may point at either; the cut used whichever
+# `iptables` was then, so restore checks every one installed now.
+_IPTABLES = ("iptables", "iptables-legacy", "iptables-nft")
+
+
+def _firewall_steps(platform: str, recorded: tuple[str, ...] = ()) -> list[Step]:
     """Remove Zee's fixed-name firewall rules on every backend of this OS and
-    re-read that they are gone. The ledger plays no part (a forged ledger
-    cannot hide a rule). Tool missing = None (unverified), still present or
-    unreadable = False."""
+    re-read that they are gone. The ledger does not decide what is removed (a
+    forged ledger cannot hide a rule). ``recorded``: firewall entries of the
+    cut record (empty without one).
+
+    A backend whose tool is not installed cannot hold a rule Zee made with
+    it: reported "not-installed" and not counted — unless the record says the
+    cut used it, or no firewall tool of this OS is installed at all, which is
+    None (unverified). Still present = False; unreadable = None.
+    """
     if platform == "linux":
-        backends = [
-            ("nft", lambda: _run(["nft", "delete", "table", "inet", "zee_egress"]),
-             ["nft", "list", "table", "inet", "zee_egress"]),
-            ("iptables", _remove_iptables_chain, ["iptables", "-S", "ZEE_EGRESS"]),
+        groups = [
+            (SENTINEL_LINUX_NFT_EGRESS, "nft", [
+                ("nft", lambda: _run(["nft", "delete", "table", "inet", "zee_egress"]),
+                 ["nft", "list", "table", "inet", "zee_egress"])]),
+            (SENTINEL_LINUX_IPTABLES_EGRESS, "iptables", [
+                (t, (lambda t=t: _remove_iptables_chain(t)), [t, "-S", "ZEE_EGRESS"])
+                for t in _IPTABLES]),
         ]
     elif platform == "darwin":
-        backends = [
+        groups = [(SENTINEL_MACOS_PFCTL_EGRESS, "pfctl", [
             (f"pfctl {a}", (lambda a=a: _run(["pfctl", "-a", a, "-F", "all"])),
              ["pfctl", "-a", a, "-s", "rules"])
-            for a in (PF_ANCHOR, PF_LEGACY_ANCHOR)
-        ]
+            for a in (PF_ANCHOR, PF_LEGACY_ANCHOR)])]
     elif platform == "win32":
-        backends = [
+        groups = [(None, "netsh", [
             (f"netsh rule {r}",
              (lambda r=r: _run(["netsh", "advfirewall", "firewall", "delete", "rule", f"name={r}"])),
              ["netsh", "advfirewall", "firewall", "show", "rule", f"name={r}"])
-            for r in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local")
-        ]
+            for r in (f"{ZEE_RULE_TAG}-block", f"{ZEE_RULE_TAG}-allow-local")])]
     else:
         return [("firewall:unsupported-platform", False)]
+    installed = [[b for b in backends if _which(b[2][0])] for _s, _g, backends in groups]
+    none_at_all = not any(installed)
     steps: list[Step] = []
-    for name, remove, show in backends:
-        tool = show[0]
-        if not _which(tool):
-            steps.append((f"{name}:not-found", None))
+    for (sentinel, group, _b), present in zip(groups, installed):
+        if not present:
+            if none_at_all or platform != "linux" or sentinel in recorded:
+                steps.append((f"{group}:not-found", None))
+            else:
+                steps.append((f"{group}:not-installed", True))
             continue
-        remove()  # the verdict is the re-read below, not the remove's exit code
-        steps.append((name, _verify_absent(tool, show)))
+        for name, remove, show in present:
+            remove()  # the verdict is the re-read below, not the remove's exit code
+            steps.append((name, _verify_absent(show[0], show)))
+    if platform == "darwin":
+        steps += _release_pf_tokens(recorded)
+    return steps
+
+
+def _release_pf_tokens(recorded: tuple[str, ...]) -> list[Step]:
+    """Release the pf enable references the cut took (`pfctl -X <token>`).
+    pf turns off only when no one else holds a reference (pfctl(8) -E/-X).
+    "token invalid" (already released, or every token dropped by `pfctl -d`)
+    and "pf not enabled" mean Zee holds nothing: done."""
+    steps: list[Step] = []
+    for entry in recorded:
+        if not entry.startswith(PF_TOKEN_PREFIX):
+            continue
+        token = entry.removeprefix(PF_TOKEN_PREFIX)
+        if not token.isdigit():
+            steps.append((f"pf enable reference {token!r}", False))
+            continue
+        ok, msg = _run(["pfctl", "-X", token])
+        if ok or "token invalid" in msg or "pf not enabled" in msg:
+            steps.append((f"pf enable reference {token}", True))
+        else:
+            steps.append((f"pf enable reference {token}", None if msg.startswith(_LAUNCH_FAILED) else False))
     return steps
 
 
@@ -311,8 +357,11 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
     if tool == "nft":
         absent = (msg.startswith("Error:") and "No such file or directory" in msg
                   and "zee_egress" in msg)
-    elif tool == "iptables":
-        absent = msg.startswith("iptables") and "No chain/target/match by that name" in msg
+    elif tool in _IPTABLES:
+        # "Table does not exist": that backend's filter table was never set
+        # up, so no chain of Zee's can be in it.
+        absent = msg.startswith("iptables") and (
+            "No chain/target/match by that name" in msg or "Table does not exist" in msg)
     elif tool == "netsh":
         absent = "No rules match the specified criteria" in msg
     else:
@@ -329,10 +378,10 @@ def _run_removal(cmd: list[str]) -> tuple[bool, str]:
     return ok, msg
 
 
-def _remove_iptables_chain() -> tuple[bool, str]:
-    ok1, _ = _run_removal(["iptables", "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
-    ok2, _ = _run_removal(["iptables", "-F", "ZEE_EGRESS"])
-    ok3, m3 = _run_removal(["iptables", "-X", "ZEE_EGRESS"])
+def _remove_iptables_chain(tool: str = "iptables") -> tuple[bool, str]:
+    ok1, _ = _run_removal([tool, "-D", "OUTPUT", "-j", "ZEE_EGRESS"])
+    ok2, _ = _run_removal([tool, "-F", "ZEE_EGRESS"])
+    ok3, m3 = _run_removal([tool, "-X", "ZEE_EGRESS"])
     return ok1 and ok2 and ok3, m3
 
 

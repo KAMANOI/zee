@@ -60,6 +60,19 @@ class ResponderResult:
     notified_locally: bool
     notified_remote: Optional[bool]  # None == dispatched async or no webhook
     cut_skipped_reason: Optional[str] = None  # e.g. "op_class=read"
+    cut_failed: bool = False  # a real cut was attempted and not confirmed (Z404)
+
+
+def recover_hint(cut_state: Optional[CutStateLog], asset_id: str) -> str:
+    """`zee restore` only works with an unresolved cut record (else Z605):
+    point to it only then."""
+    try:
+        recorded = cut_state is not None and cut_state.latest_unresolved_for(asset_id) is not None
+    except Exception:  # noqa: BLE001 - a hint must never break the alert
+        recorded = False
+    if recorded:
+        return f"recover with: zee restore {asset_id}"
+    return "nothing was recorded as changed (`zee restore` would refuse: Z605)"
 
 
 def _hint_for(op_class: str, asset_id: str) -> str:
@@ -154,6 +167,7 @@ def handle(
     cut_executed = False
     cut_would = False
     cut_detail = ""
+    cut_failed = False
     cut_done_at: Optional[datetime] = None
     cut_would_have_done_at: Optional[datetime] = None
     cut_skipped_reason: Optional[str] = None
@@ -201,14 +215,15 @@ def handle(
                 # Post-cut notification (network may be down for remote channels).
                 # decoy_ref keeps the path off the OS notification history.
                 # The title never says "applied" for a failed cut.
+                cut_failed = not ok
                 notify_local(
-                    f"Zee cut {'applied' if ok else 'FAILED'} [{tier.label}]: {event.asset_id}",
+                    f"Zee cut {'applied' if ok else 'FAILED (Z404)'} [{tier.label}]: {event.asset_id}",
                     (
                         f"reason: {event.detail}\n"
                         f"decoy_ref: {event.decoy_ref or '-'}\n"
                         f"{reason_line(tier, action='contain' if ok else 'contain_failed')}\n"
-                        + ("" if ok else f"detail: {detail}\n")
-                        + f"recover with: zee restore {event.asset_id}"
+                        + ("" if ok else f"traffic may NOT be stopped. detail: {detail}\n")
+                        + recover_hint(cut_state, event.asset_id)
                     ),
                 )
 
@@ -229,6 +244,7 @@ def handle(
         cut_executed=cut_executed,
         cut_would_have_been_executed=cut_would,
         cut_detail=cut_detail,
+        cut_failed=cut_failed,
         notified_locally=notified_locally,
         notified_remote=notified_remote,
         cut_skipped_reason=cut_skipped_reason,

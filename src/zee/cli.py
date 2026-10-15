@@ -21,12 +21,13 @@ from .decoy.seeder import seed_all
 from .errors import (
     ZeeError,
     Z102_UNKNOWN_ASSET_ID,
+    Z404_CUT_COMMAND_FAILED,
     Z602_RESTORE_TOKEN_REQUIRED,
     Z603_RESTORE_TOKEN_NOT_INITIALIZED,
     Z604_RESTORE_TOKEN_INVALID,
 )
 from .notifier.webhook import from_env as webhook_from_env
-from .responder.sequence import handle
+from .responder.sequence import handle, recover_hint
 from .recovery.auth import init_token, load_token, verify_token
 from .recovery.restore import restore
 from .telemetry.capability_report import render_text as capability_text
@@ -127,7 +128,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
                     )
                     print(
                         f"[event] {event.detail} → mode={result.mode} "
-                        f"cut={'yes' if result.cut_executed else 'no'} "
+                        f"cut={'yes' if result.cut_executed else 'FAILED(Z404)' if result.cut_failed else 'no'} "
                         f"would_cut={'yes' if result.cut_would_have_been_executed else 'no'}",
                         file=sys.stderr,
                     )
@@ -242,10 +243,10 @@ def _cmd_cut(args: argparse.Namespace) -> int:
     ok, detail = cut_fn(asset_id=args.asset_id, cut_state=cut_state)
     print(detail, file=sys.stderr)
     if ok:
-        print(
-            f"[zee cut] applied. recover with: zee restore {args.asset_id}",
-            file=sys.stderr,
-        )
+        print(f"[zee cut] applied. {recover_hint(cut_state, args.asset_id)}", file=sys.stderr)
+    else:
+        print(f"[zee cut] FAILED ({Z404_CUT_COMMAND_FAILED[0]}) — traffic may NOT be stopped. "
+              f"{recover_hint(cut_state, args.asset_id)}", file=sys.stderr)
     return 0 if ok else 1
 
 

@@ -22,6 +22,7 @@ from .cut_full import (
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
     SENTINEL_MACOS_PFCTL_EGRESS,
+    PF_TOKEN_PREFIX,
     record_or_report,
     sbin_which,
 )
@@ -71,6 +72,8 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
     unreadable or in an unexpected form."""
     checks: list[tuple[str, list[str], object]] = []
     for m in modified:
+        if m.startswith(PF_TOKEN_PREFIX):
+            continue  # a reference to release on restore, not a rule to read back
         if m == SENTINEL_LINUX_NFT_EGRESS:
             checks.append(("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure))
         elif m == SENTINEL_LINUX_IPTABLES_EGRESS:
@@ -158,18 +161,39 @@ def _iptables_jump_first(out: str, _profiles: set[str]) -> str:
     return "confirmed" if rules and rules[0] == "-A OUTPUT -j ZEE_EGRESS" else "missing"
 
 
+# The pass rules Zee loads ahead of its block, as `pfctl -s rules` prints them
+# (pfctl may add `inet`, `from any` and `flags ... keep state`).
+_PF_ZEE_PASS = re.compile(
+    r"^pass out quick (?:on lo0 all|(?:inet )?(?:from any )?to "
+    r"(?:10\.0\.0\.0/8|172\.16\.0\.0/12|192\.168\.0\.0/16))(?:\s|$)")
+_PF_REF = re.compile(r'^anchor "(?:com\.apple/\*|' + re.escape(PF_ANCHOR) + r')"(?: all)?$')
+
+
 def _pf_block_rule(out: str, _profiles: set[str]) -> str:
-    """`pfctl -a <anchor> -s rules`: the outbound block-all rule Zee loads."""
+    """`pfctl -a <anchor> -s rules`: the quick block-all rule Zee loads, with
+    nothing but Zee's own pass rules ahead of it (with quick, first match wins)."""
     lines = _lines(out)
-    return "confirmed" if "block drop out all" in lines else "missing"
+    if "block drop out quick all" not in lines:
+        return "missing"
+    ahead = lines[:lines.index("block drop out quick all")]
+    return "confirmed" if all(_PF_ZEE_PASS.match(ln) for ln in ahead) else "unverified"
 
 
 def _pf_anchor_referenced(out: str, _profiles: set[str]) -> str:
-    # A filter `anchor` line at the start of a rule: scrub-/nat-/rdr-anchor
-    # lines merely contain the same text and do not evaluate filter rules.
-    refs = ('anchor "com.apple/*"', f'anchor "{PF_ANCHOR}"')
-    hit = any(line.strip().startswith(r) for line in out.splitlines() for r in refs)
-    return "confirmed" if hit else "missing"
+    """Main ruleset (`pfctl -s rules`): an unconditional filter `anchor` line
+    must reach Zee's anchor. A conditional one (`... on lo0`, `in`) is not a
+    reference for outbound traffic. Before it, any other anchor (contents not
+    inspected here) or `pass ... quick` rule could decide a packet first:
+    unverified. (Other anchors under com.apple/* are not inspected either;
+    see docs/design/self-defense.md.)"""
+    lines = _lines(out)
+    for i, ln in enumerate(lines):
+        if _PF_REF.match(ln):
+            for prev in lines[:i]:
+                if prev.startswith("anchor ") or (prev.startswith("pass") and " quick" in f" {prev} "):
+                    return "unverified"
+            return "confirmed"
+    return "missing"
 
 
 # IPv4 outside RFC 1918 (10/8, 172.16/12, 192.168/16) and loopback (127/8).
@@ -257,8 +281,9 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
                 timeout=10,
             )
         except (subprocess.SubprocessError, OSError) as e:
-            return False, f"nft failed: {e}", []
-        if cp.returncode != 0:
+            # A timeout may come after nft applied the table: record it.
+            return False, f"nft failed: {e}", [SENTINEL_LINUX_NFT_EGRESS]
+        if cp.returncode != 0:  # nft -f is atomic: nothing was applied
             return False, (cp.stderr or cp.stdout).strip(), []
         return True, "nftables zee_egress table installed", [SENTINEL_LINUX_NFT_EGRESS]
 
@@ -272,13 +297,14 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
             ["iptables", "-A", "ZEE_EGRESS", "-j", "DROP"],
             ["iptables", "-I", "OUTPUT", "-j", "ZEE_EGRESS"],
         ]
-        for i, cmd in enumerate(commands):
+        for cmd in commands:
             ok, msg = _run(cmd)
             if not ok:
-                # Once the chain exists it must be recorded, or it is left
-                # behind and blocks the next `-N`.
-                return False, f"{' '.join(cmd)}: {msg}", [SENTINEL_LINUX_IPTABLES_EGRESS] if i else []
-        return True, "iptables ZEE_EGRESS chain installed", [SENTINEL_LINUX_IPTABLES_EGRESS]
+                # Recorded even when the first command fails: a timed-out
+                # `-N` may still have created the chain, which restore removes.
+                return False, f"{' '.join(cmd)}: {msg}", [SENTINEL_LINUX_IPTABLES_EGRESS]
+        return (True, "iptables ZEE_EGRESS chain installed (IPv4 only: IPv6 NOT blocked)",
+                [SENTINEL_LINUX_IPTABLES_EGRESS])
 
     return False, "no supported backend (need nft or iptables)", []
 
@@ -286,12 +312,14 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
 def _cut_egress_macos() -> tuple[bool, str, list[str]]:
     if not shutil.which("pfctl"):
         return False, "pfctl not available", []
+    # `quick`: the first matching rule is final, so no later rule in the main
+    # ruleset or another anchor can pass what Zee blocks (pf.conf(5) ANCHORS).
     rules = (
-        "block drop out all\n"
-        "pass out on lo0 all\n"
-        "pass out to 10.0.0.0/8\n"
-        "pass out to 172.16.0.0/12\n"
-        "pass out to 192.168.0.0/16\n"
+        "pass out quick on lo0 all\n"
+        "pass out quick to 10.0.0.0/8\n"
+        "pass out quick to 172.16.0.0/12\n"
+        "pass out quick to 192.168.0.0/16\n"
+        "block drop out quick all\n"
     )
     try:
         cp = subprocess.run(
@@ -302,15 +330,30 @@ def _cut_egress_macos() -> tuple[bool, str, list[str]]:
             timeout=10,
         )
     except (subprocess.SubprocessError, OSError) as e:
-        return False, f"pfctl failed: {e}", []
+        # A timeout may still have loaded the rules: record the anchor.
+        return False, f"pfctl failed: {e}", [SENTINEL_MACOS_PFCTL_EGRESS]
     if cp.returncode != 0:
         return False, (cp.stderr or cp.stdout).strip(), []
-    # Enable pf if it isn't already. The anchor does nothing while pf is off,
-    # so a failure here is a failed cut (the anchor is still recorded).
-    ok, msg = _run(["pfctl", "-e"])
-    if not ok and "already enabled" not in msg:
-        return False, f"pfctl -e failed: {msg}", [SENTINEL_MACOS_PFCTL_EGRESS]
-    return True, f"pfctl anchor {PF_ANCHOR} loaded", [SENTINEL_MACOS_PFCTL_EGRESS]
+    # Enable pf with a reference of Zee's own (`pfctl -E`, pfctl(8)); restore
+    # releases exactly that reference (`pfctl -X <token>`), so pf goes back
+    # off only if nobody else holds it on. The anchor does nothing while pf
+    # is off, so a failure here is a failed cut (the anchor is still recorded).
+    modified = [SENTINEL_MACOS_PFCTL_EGRESS]
+    try:
+        cp = subprocess.run(["pfctl", "-E"], capture_output=True, text=True, errors="replace", timeout=10)
+    except (subprocess.SubprocessError, OSError) as e:
+        return False, f"pfctl -E failed: {e}", modified
+    out = f"{cp.stdout or ''}\n{cp.stderr or ''}"
+    if cp.returncode != 0:
+        return False, f"pfctl -E failed: {out.strip()}", modified
+    m = re.search(r"Token\s*:\s*(\d+)", out)
+    note = ""
+    if m:
+        modified.append(PF_TOKEN_PREFIX + m.group(1))
+    else:
+        note = "; pf enable token not reported (restore cannot release it)"
+    return True, (f"pfctl anchor {PF_ANCHOR} loaded (new connections only: connections "
+                  f"already open keep their pf state){note}"), modified
 
 
 def _cut_egress_windows() -> tuple[bool, str, list[str]]:
@@ -330,12 +373,13 @@ def _cut_egress_windows() -> tuple[bool, str, list[str]]:
     ]
     added: list[str] = []
     for cmd in commands:
+        # Recorded before the outcome is known: a failed or timed-out add may
+        # still have installed the rule, and restore needs the record.
+        added.append(cmd[5].removeprefix("name="))
         ok, msg = _run(cmd)
         if not ok:
-            # The block rule may already be in place: report it so it is recorded.
             return False, f"{cmd[3:6]}: {msg}", added
-        added.append(cmd[5].removeprefix("name="))
-    return True, "netsh advfirewall rules installed", added
+    return True, "netsh advfirewall rules installed (IPv4 only: IPv6 NOT blocked)", added
 
 
 def _run(cmd: list[str]) -> tuple[bool, str]:

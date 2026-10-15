@@ -73,7 +73,7 @@ def _absent_on_show(cmd):
     """_run stub: every command succeeds; rule listings report 'absent'."""
     if cmd[:3] == ["nft", "list", "table"]:
         return False, "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^"
-    if cmd[:2] == ["iptables", "-S"]:
+    if cmd[0].startswith("iptables") and cmd[1] == "-S":  # iptables / -legacy / -nft
         return False, "iptables: No chain/target/match by that name."
     if cmd[:4] == ["netsh", "advfirewall", "firewall", "show"]:
         return False, "No rules match the specified criteria."
@@ -213,7 +213,7 @@ def test_emergency_treats_already_absent_rule_as_removed(monkeypatch):
     def run(cmd):
         if cmd[0] == "nft":
             return False, "Error: No such file or directory\nlist table inet zee_egress\n                 ^^^^^^^^^^"
-        if cmd[0] == "iptables":
+        if cmd[0].startswith("iptables"):
             return False, "iptables: No chain/target/match by that name."
         return True, ""
     monkeypatch.setattr(restore_mod, "_run", run)
@@ -277,17 +277,27 @@ def test_iptables_partial_install_is_recorded(monkeypatch):
     assert ok is False and modified == [full_mod.SENTINEL_LINUX_IPTABLES_EGRESS]
 
 
-@pytest.mark.parametrize("msg, expect_ok", [("pfctl: pf already enabled", True), ("permission denied", False)])
-def test_pf_enable_failure_is_a_failed_cut(monkeypatch, msg, expect_ok):
+@pytest.mark.parametrize("rc, err, expect_ok, expect_mod", [
+    (0, "No ALTQ support in kernel\npf enabled\nToken : 12345678901234\n", True,
+     [full_mod.SENTINEL_MACOS_PFCTL_EGRESS, full_mod.PF_TOKEN_PREFIX + "12345678901234"]),
+    (0, "pf enabled\n", True, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]),  # no token: nothing to release
+    (1, "pfctl: permission denied", False, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]),
+])
+def test_pf_enable_takes_a_reference_and_records_its_token(monkeypatch, rc, err, expect_ok, expect_mod):
     from zee.responder import cut_egress as egress_mod
     import subprocess
     monkeypatch.setattr(egress_mod.sys, "platform", "darwin")
     monkeypatch.setattr(egress_mod.shutil, "which", lambda name: "/sbin/pfctl")
-    monkeypatch.setattr(egress_mod.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a[0], 0, "", ""))
-    monkeypatch.setattr(egress_mod, "_run", lambda cmd: (False, msg))
-    ok, _detail, modified = egress_mod._cut_egress_dispatch()
-    assert ok is expect_ok and modified == [full_mod.SENTINEL_MACOS_PFCTL_EGRESS]
+    seen: list = []
+    def run(argv, **k):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, rc if argv == ["pfctl", "-E"] else 0, "", err)
+    monkeypatch.setattr(egress_mod.subprocess, "run", run)
+    ok, detail, modified = egress_mod._cut_egress_dispatch()
+    assert ["pfctl", "-E"] in seen and ["pfctl", "-e"] not in seen
+    assert ok is expect_ok and modified == expect_mod
+    if ok:
+        assert "new connections only" in detail
 
 
 # ── cut: record what changed; empty is not success ────────────────────
@@ -565,20 +575,22 @@ def test_recorded_nft_with_nft_missing_is_unverified(tmp_path, monkeypatch, quie
     """Recorded nft cut but nft is not installed: cannot confirm → Z606."""
     monkeypatch.setattr(restore_mod, "_host_platform", lambda: "linux")
     _fake_linux(monkeypatch, tools={"ip", "iptables"})
-    log = _record(tmp_path, [NFT])
+    log = CutStateLog(tmp_path / "cut_state.jsonl")
+    log.record_cut(asset_id="t-host", method="egress", platform="linux", modified=[NFT])
     with pytest.raises(ZeeError) as ei:
         restore_mod.restore("t-host", cut_state=log)
     assert ei.value.code == "Z606"
     assert log.latest_unresolved_for("t-host") is not None  # stays unresolved
 
 
-def test_no_ledger_nft_missing_iptables_ok_is_unverified(tmp_path, monkeypatch, quiet):
+def test_no_ledger_nft_not_installed_iptables_ok_is_success(tmp_path, monkeypatch, quiet):
+    """4-persona #6: an iptables-only host is not Z606 on every restore. nft
+    is not installed, so no nft rule of Zee's can exist; said in the detail."""
     monkeypatch.setattr(restore_mod.sys, "platform", "linux")
     _fake_linux(monkeypatch, tools={"ip", "iptables"})
-    with pytest.raises(ZeeError) as ei:
-        restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"), all_interfaces=True)
-    assert ei.value.code == "Z606"
-    assert any("UNVERIFIED" in t for t in quiet)
+    ok, detail = restore_mod.restore("t-host", cut_state=CutStateLog(tmp_path / "none.jsonl"),
+                                     all_interfaces=True)
+    assert ok is True and "nft:not-installed" in detail
 
 
 def test_one_backend_permission_error_continues_then_fails(monkeypatch):
@@ -1092,7 +1104,7 @@ def test_iptables_egress_needs_chain_and_jump(tmp_path, monkeypatch):
 
 def test_pf_egress_needs_rules_and_pf_enabled(tmp_path, monkeypatch):
     sentinel = full_mod.SENTINEL_MACOS_PFCTL_EGRESS
-    rules = {PF_RULES: (True, "block drop out all\npass out on lo0 all"),
+    rules = {PF_RULES: (True, "pass out quick on lo0 all flags S/SA keep state\nblock drop out quick all"),
              ("pfctl", "-s", "rules"): (True, 'anchor "com.apple/*" all')}
     ok, _d, _r = _egress_setup(monkeypatch, tmp_path, [sentinel],
                                outputs={**rules, PF_INFO: (True, "Status: Disabled")})
@@ -1213,7 +1225,7 @@ PF_NEW_RULES = ("pfctl", "-a", "com.apple/zee-egress-cut", "-s", "rules")
     ('nat-anchor "com.apple/*" all\nrdr-anchor "com.apple/*" all', False),
 ])
 def test_pf_cut_requires_anchor_reachable_from_main_ruleset(tmp_path, monkeypatch, main, expect):
-    outputs = {PF_NEW_RULES: (True, "block drop out all"), PF_INFO: (True, "Status: Enabled"),
+    outputs = {PF_NEW_RULES: (True, "block drop out quick all"), PF_INFO: (True, "Status: Enabled"),
                PF_MAIN: (True, main)}
     ok, detail, rec = _egress_setup(monkeypatch, tmp_path, [full_mod.SENTINEL_MACOS_PFCTL_EGRESS],
                                     outputs=outputs)

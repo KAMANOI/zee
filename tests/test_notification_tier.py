@@ -187,7 +187,8 @@ def test_reason_line_does_not_claim_containment_when_cut_failed(monkeypatch):
             event_log=log,
         )
     assert result.cut_executed is False
-    cut_notification_bodies = [b for b in bodies if "recover with" in b]
+    # No cut record (cut_state=None): no restore hint, but the failure is said.
+    cut_notification_bodies = [b for b in bodies if "may NOT be stopped" in b]
     assert len(cut_notification_bodies) == 1
     assert "封じ込め。" not in cut_notification_bodies[0]
     assert "失敗" in cut_notification_bodies[0]

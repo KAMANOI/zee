@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 SENTINEL_LINUX_NFT_EGRESS = "__zee_nft_egress_table__"
 SENTINEL_LINUX_IPTABLES_EGRESS = "__zee_iptables_egress_chain__"
 SENTINEL_MACOS_PFCTL_EGRESS = "__zee_pfctl_egress_anchor__"
+# `pfctl -E` returns a token for the pf enable reference Zee took; recorded as
+# "<prefix><token>" so restore can release exactly that one (`pfctl -X`).
+PF_TOKEN_PREFIX = "__zee_pf_enable_token__:"
 
 # Admin tools often live in /usr/sbin or /sbin, which a service / sudo PATH
 # may lack. Lookups add them, and commands then run by absolute path.
@@ -68,6 +71,13 @@ def cut_full(
         # cut the host: confirm the interfaces themselves.
         required = [m for m in modified if m != SENTINEL_LINUX_NMCLI] or modified
         unconfirmed = [m for m in required if (states or {}).get(m) != "disabled"]
+        # A full cut means nothing is left up: an interface / service outside
+        # the record that is not read back as disabled (e.g. one NetworkManager
+        # does not manage) makes the cut unconfirmed too.
+        unconfirmed += sorted(n for n, v in (states or {}).items()
+                              if n not in required and n != SENTINEL_LINUX_NMCLI and v != "disabled")
+        if states is not None and not any(n != SENTINEL_LINUX_NMCLI for n in states):
+            states = None  # only NetworkManager's switch was readable: interfaces unknown
         if states is None or unconfirmed:
             ok = False
             verified = "unverified" if states is None or any(
@@ -124,17 +134,20 @@ def _cut_full_linux() -> tuple[bool, str, list[str]]:
     # failed or timed out may still have taken effect, and restore must
     # bring it back and read it back.
     attempted: list[str] = []
+    nm_ok = False
     if shutil.which("nmcli"):
         attempted.append(SENTINEL_LINUX_NMCLI)
-        result = _run(["nmcli", "networking", "off"])
-        if result[0]:
-            return True, "nmcli networking off", attempted
-        logger.warning("nmcli failed (%s); falling back to `ip link`", result[1])
-    # Fallback: bring all non-loopback interfaces down.
+        nm_ok, msg = _run(["nmcli", "networking", "off"])
+        if not nm_ok:
+            logger.warning("nmcli failed (%s); falling back to `ip link`", msg)
+    # Always bring every non-loopback interface down as well: NetworkManager
+    # leaves interfaces it does not manage up, and the read-back requires
+    # every interface to be down.
+    prefix = "nmcli networking off; " if nm_ok else ""
     if shutil.which("ip"):
         ifaces = list_linux_interfaces()
         if not ifaces:
-            return False, "no non-loopback interfaces found via ip", attempted
+            return False, prefix + "no non-loopback interfaces found via ip", attempted
         all_ok = True
         details: list[str] = []
         for ifname in ifaces:
@@ -142,7 +155,9 @@ def _cut_full_linux() -> tuple[bool, str, list[str]]:
             details.append(f"{ifname}:{'ok' if ok else 'fail'}")
             attempted.append(ifname)
             all_ok = all_ok and ok
-        return all_ok, "ip link down: " + ", ".join(details), attempted
+        return all_ok, prefix + "ip link down: " + ", ".join(details), attempted
+    if nm_ok:  # the read-back then decides (interfaces unreadable = not confirmed)
+        return True, prefix + "ip not available", attempted
     return False, "no supported backend (need nmcli or ip)", attempted
 
 
