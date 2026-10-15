@@ -137,10 +137,13 @@ honestly-published boundaries of what Zee is and is not:
   ([docs/design/privsep.md](./docs/design/privsep.md)). Without `[privsep]`
   the attacker described above can still do all of the above. The approver
   UI (WebAuthn) is not built; signatures are made with an openssl key.
-  The daemon trusts the Python installation it runs on, as any root
-  service does: it checks the placement of its own executable, the zee
-  code and its state, not the standard library or site-packages (the
-  install runbook checks those with `find` before enabling).
+  The daemon and every root `zee` command run as `python3 -P -s -S`: with
+  `-S` the site module is not used, so site-packages / dist-packages and
+  their `.pth` files are never read as root (zee has no runtime
+  dependencies). The interpreter and its standard library are trusted as
+  for any root service and checked with `find` by the install runbook
+  before enabling; at start the daemon checks the placement of its own
+  executable, the zee code, its state and its socket directory.
 - **On Windows the POSIX permission check is skipped.** NTFS uses
   ACLs rather than POSIX bits and `os.stat().st_mode` reports `0666`
   regardless of the real ACL. Zee therefore does not enforce the

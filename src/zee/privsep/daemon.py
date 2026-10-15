@@ -151,8 +151,14 @@ class AdminEngine(Engine):
             return []
         self.daemon.bump_gen()  # before acting: a crash mid-way still voids older approvals
         if op in ("key_add", "key_remove"):
-            self.outcome = (True, op)
-            return super()._apply(req, key_id)
+            before = dict(self.state["keys"])
+            failed = super()._apply(req, key_id)
+            if op == "key_remove" and self.state["keys"] == before:
+                self.outcome = (False, f"key_remove: nothing removed ({args['key_id']!r} is not registered, "
+                                       "or it is the last key)")
+            else:
+                self.outcome = (True, op)
+            return failed
         self.outcome = self.daemon._apply_admin(op, args)
         self._log("config_applied", req=req.id, op=op, key_id=key_id, args=args,
                   ok=self.outcome[0], detail=self.outcome[1][:500])

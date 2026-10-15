@@ -118,7 +118,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 **一つの署名で一回だけ試す**：復旧が失敗（Z601）・未確認（Z606）でも署名は使用済みになる。やり直すには新しい請求に署名する。
 
-**最初の鍵**：`cd / && sudo env PYTHONPATH=<root 所有の src> <root 所有の python3> -P -s -m zee privsep bootstrap-key --public-key /絶対パス/pub.pem` で実行（相手の uid が 0 の時だけ受け付ける。登録簿が空の時だけ）。2台目以降は署名付き `key_add`。
+**最初の鍵**：`cd / && sudo env PYTHONPATH=<root 所有の src> <root 所有の python3> -P -s -S -m zee privsep bootstrap-key --public-key /絶対パス/pub.pem` で実行（相手の uid が 0 の時だけ受け付ける。登録簿が空の時だけ）。2台目以降は署名付き `key_add`。
 
 **全承認端末を失った時**：持ち出し承認の「72時間待ちの回復」（`recovery_start`）は署名なしで始められるので、**ソケットには出さない**（業務ユーザーが始めて72時間後に登録簿を空にし、誰も復旧できない状態を作れるため）。代わりに、正当な所有者が root でコンソールから：①遮断部を止める（`launchctl bootout`／`systemctl stop`）②`admin_keys.json` を `mv` で退避 ③起動して `bootstrap-key` で登録し直す。root を持つ人は元から全部できるので、新しい権限は生まない。
 
@@ -153,7 +153,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 1. 隔離した試験環境（使い捨ての VM・CI）で §9 と同じ確認を通す（済：CI）。
 2. 実機に入れる前に：承認端末の鍵を用意する（試作は openssl の P-256 鍵で検証。iPhone の WebAuthn アダプタは未実装＝egress-approval.md §11 と同じ）。
 3. 業務ユーザーの assets.toml に `[privsep] socket = ...` を**先に**足して完成させる（承認済みの写しは同じバイト列でなければ `watch_config_unapproved`）。
-4. root で（`cd /`・`python3 -P -s`）：コードと Python を root 所有の場所へ／状態ディレクトリ（700）と承認済みの assets.toml（600）を作る／常駐の定義を置いて起動／`bootstrap-key`。`zee watch` を起動し直す。
+4. root で（`cd /`・`python3 -P -s -S`）：コードと Python を root 所有の場所へ／状態ディレクトリ（700）と承認済みの assets.toml（600）を作る／常駐の定義を置いて起動／`bootstrap-key`。`zee watch` を起動し直す。
 5. 署名付き `auto_set on`（自動遮断を使う場合）。
 
 **戻し方**（順序が大事）：①遮断中なら署名付きの `restore`、OS の状態が戻ったことを確認 ②署名付き `stop`（または root で `launchctl bootout`／`systemctl disable --now`）③業務側の `[privsep]` を外して `zee watch` を起動し直す（従来の同一プロセスの遮断に戻る）④常駐の定義・状態ディレクトリ・コードを `mv` で退避（削除しない）。遮断部が起動できない時の救済は self-defense.md §7.2 の 7 と同じ（root で直接 `pfctl -a com.apple/zee-egress-cut -F all` 等）。
@@ -172,7 +172,9 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 - 承認の画面は未実装（WebAuthn アダプタ・承認ページ＝egress-approval.md §11 と同じ）。試作の署名は openssl の鍵で行う。承認端末の画面を乗っ取られた場合の限界も egress-approval.md §3(5) と同じ。
 - 業務ユーザーは嘘の遮断要求で遮断を起こせる（§4）。同時接続は「許可された uid（watch・root）」と「それ以外」で別々に 16 本までで、上限を超えた接続はスレッドを作らずに閉じ、要求1行は全体で 5 秒以内に読めなければ切る（Codex 3回目の指摘）。ほかの利用者が watch の遮断要求を締め出すことはできないが、**業務ユーザー自身**は自分の枠を埋めて署名付きの復旧を遅らせられる（その間は root のコンソールで止める・戻す）。遮断と管理の処理は1つのロックで順に行う。
 - root で動く遮断部が出す macOS の通知（osascript）は、ログイン中の利用者の画面には**届かない前提**で設計している（未検証。遮断・復旧の結果は返答・台帳・管理の記録で確かめる）。業務側の `zee watch` は、遮断部に接続できなくなった時と戻った時に1回ずつ、利用者の通知と webhook で知らせる。
-- 起動時の配置の確認（§3.1）は Python が起動して zee を読み込んだ**後**に走る。すでに書き換えられた Python や zee が相手では効かない（配置の誤りを見つけるための確認）。Python 自身のライブラリは信頼する前提で、有効化前に手順書の点検（Python を使わない `find`）で一度確かめる。
+- 起動時の配置の確認（§3.1）は Python が起動して zee を読み込んだ**後**に走る。すでに書き換えられた Python や zee が相手では効かない（配置の誤りを見つけるための確認）。root のコマンドと常駐の定義はすべて `-P -s -S` で動かし、site-packages・dist-packages とその `.pth`（Linux の `/usr/local/lib/python3.X/dist-packages`・`/usr/lib/python3/dist-packages` を含む）は読まない（zee は実行時依存なし）。Python 本体と標準ライブラリは信頼する前提で、有効化前に手順書の点検（Python を使わない `find`）で一度確かめる。
+- **業務ユーザーは管理者であってはならない**：macOS の `admin`、Linux の `sudo`・`wheel` に入っていると、業務ユーザー（＝乗っ取られた watch）が sudo で root になれ、分離にならない。確認：macOS `dseditgroup -o checkmember -m <業務ユーザー> admin`（`no ... is NOT a member` であること）、Linux `id <業務ユーザー>`（`sudo`・`wheel` が無いこと）。導入（手順書 §2・§3）の sudo は別の管理用アカウントで行う。
+- `[privsep]` を書いている間、手動の `zee cut`／`zee restore` は従来どおり同じプロセスで動くので、業務ユーザーでは権限が無く失敗する（未対応）。手動の遮断・復旧は遮断部経由（`zee privsep challenge restore ...` の署名付き要求、または root のコンソール）で行う。
 - `watch_silent` は「status が来ない」ことしか見ない。watch が心拍だけ送り続けて囮の監視を止める改ざんは検出しない（プロセスの存在と防御の動作は別、の残り）。試験用の遮断要求（self-defense.md §4.2）は未実装。
 - 遮断部の状態は起動時に一度読む（egress の Engine と同じ単一プロセス前提）。root が稼働中に状態ファイルを直接書き換えた場合の整合は扱わない。
 - Linux の full 遮断は NetworkManager を使う。業務ユーザーが polkit の許可で `nmcli networking on` を実行できる環境では、遮断部と無関係に戻せる（self-defense.md §7.2 の注意と同じ）。CI の実測は egress（nft）だけ。
@@ -180,7 +182,7 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 ## 11. 実測の記録
 
-**commit fb10683（2026-10-16、最終確認（Codex 09・再レビュー）と Codex 10・11 の修正後）：3つの workflow がすべて合格。**
+**commit fb10683（2026-10-16、最終確認（Codex 09・再レビュー）と Codex 10・11 の修正後。§3.1 の単純化（規則1つ）とファイル記述子基準の検査の前の版）：3つの workflow がすべて合格。**
 
 - **Privsep、run 38780924628**
   - Linux（job 116580604559、ubuntu-24.04・`/usr/bin/python3`・配布の systemd unit をそのまま使用、コードは `/usr/local/lib/zee`）：37項目すべて PASS。

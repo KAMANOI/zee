@@ -15,7 +15,7 @@ fail() { echo "FAIL: $*" | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"; fails=$((
 check() { local what=$1; shift; if "$@"; then pass "$what"; else fail "$what"; fi; }
 zee_as() {  # zee privsep <sub> ... as $1
   local u=$1 sub=$2; shift 2
-  sudo -u "$u" env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep "$sub" "$@" --socket "$SOCK"
+  sudo -u "$u" env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -S -m zee privsep "$sub" "$@" --socket "$SOCK"
 }
 ok() { jq -e '.ok == true' >/dev/null; }
 # A refusal must be the OS saying no: non-zero exit AND a permission message
@@ -34,7 +34,7 @@ signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the 
   local code
   code=$(sed -n 's/.*: \([0-9][0-9]\)$/\1/p' "$X/code.txt")
   jq -r '.payload | "approving: op=\(.op) args=\(.args|tostring)"' "$X/req.json" >&2  # the approver looks first
-  echo yes | PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep digest --request "$X/req.json" --entered "$code" --out "$X/d.bin"
+  echo yes | PYTHONPATH="$ZEE_SRC" "$PY" -P -s -S -m zee privsep digest --request "$X/req.json" --entered "$code" --out "$X/d.bin"
   openssl pkeyutl -sign -inkey "$KEY" -in "$X/d.bin" -out "$X/sig.der"
   chmod 644 "$X"/req.json "$X"/sig.der
   echo "$code" >"$X/last_code"
@@ -44,17 +44,21 @@ signed() {  # signed <admin_op> [k=v ...]: challenge as WATCH_USER, sign as the 
 online() { sudo ip netns exec zt curl -sS -m 3 -o /dev/null "$TEST_URL"; }
 offline() { ! online; }  # a function: `bash -c "! online"` would not see it (and "pass")
 
-echo "== root commands never import from the working directory (-P -s)"
+echo "== root commands never import from the working directory (-P -s -S)"
 EVIL=/tmp/zee-evil
 sudo -u "$WATCH_USER" mkdir -p "$EVIL/zee"
 sudo -u "$WATCH_USER" sh -c 'printf "import os\nopen(\"/tmp/zee-hijacked\", \"w\").write(str(os.geteuid()))\n" > "$1/zee/__main__.py"; : > "$1/zee/__init__.py"' _ "$EVIL"
 (cd "$EVIL" && sudo env PYTHONPATH="$ZEE_SRC" "$PY" -m zee --version) >/dev/null 2>&1
 check "control: without -P a planted ./zee runs as root (the attack is real)" test "$(cat /tmp/zee-hijacked 2>/dev/null)" = 0
 sudo mv /tmp/zee-hijacked /tmp/zee-hijacked.control 2>/dev/null
-out=$(cd "$EVIL" && sudo env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee --version 2>&1)
+out=$(cd "$EVIL" && sudo env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -S -m zee --version 2>&1)
 echo "  -> $out"
-check "with -P -s the planted ./zee is not read" test ! -e /tmp/zee-hijacked
-check "with -P -s the root-owned zee runs" grep -q '^zee [0-9]' <<<"$out"
+check "with -P -s -S the planted ./zee is not read" test ! -e /tmp/zee-hijacked
+check "with -P -s -S the root-owned zee runs" grep -q '^zee [0-9]' <<<"$out"
+flags=$(cd / && sudo env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -S -c 'import sys; print(int(sys.flags.no_site), int(sys.flags.no_user_site), int(sys.flags.safe_path)); print(sys.path)')
+echo "  -> $flags"
+check "-S: no site module (sys.flags.no_site == 1, safe_path == 1)" grep -q '^1 1 1$' <<<"$flags"
+check "-S: no site-packages / dist-packages on sys.path" bash -c "! grep -qE 'site-packages|dist-packages' <<<\"\$1\"" _ "$flags"
 
 echo "== status from the watch user (peer uid from the kernel)"
 st=$(zee_as "$WATCH_USER" status)
@@ -150,7 +154,9 @@ r=$(signed stop); echo "$r"
 check "signed stop accepted" ok <<<"$r"
 sleep 5
 check "daemon stopped and not restarted by the supervisor" bash -c "! $ACTIVE_CMD"
-out=$(sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -m zee privsep status --socket "$SOCK" 2>&1 >/dev/null); rc=$?
+ex=$(bash -c "$EXIT_CMD"); echo "  -> supervisor: $ex"
+check "supervisor saw a clean exit and no restart" test "$ex" = "$EXIT_OK"
+out=$(sudo -u "$WATCH_USER" env PYTHONPATH="$ZEE_SRC" "$PY" -P -s -S -m zee privsep status --socket "$SOCK" 2>&1 >/dev/null); rc=$?
 echo "  -> rc=$rc ${out:0:200}"
 check "socket no longer answers (non-zero exit and Z710)" bash -c "[ $rc -ne 0 ] && grep -q Z710 <<<\"\$1\"" _ "$out"
 

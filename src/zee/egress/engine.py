@@ -111,7 +111,7 @@ class Engine:
     TAINT_WINDOW = 600  # s: after a protected-data touch, any new destination is exfil-shaped
     RECOVERY_WAIT = 72 * 3600
     RECOVERY_NOTICE_EVERY = 6 * 3600
-    OPS = CONFIG_OPS  # signed config ops this engine accepts (privsep/admin.py narrows them)
+    OPS = CONFIG_OPS  # signed config ops this engine accepts (privsep/daemon.py's AdminEngine replaces them)
     STATE_FILE, LOG_FILE = "egress_approval.json", "egress.jsonl"
 
     def __init__(self, state_dir: Path, verifier: Verifier, *, enforcer: Optional[Enforcer] = None,

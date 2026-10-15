@@ -9,9 +9,10 @@ After=network.target
 [Service]
 Type=simple
 Environment=PYTHONPATH=/usr/local/lib/zee/src
-# -P: never import from the working directory; -s: no user site-packages (root runs this)
+# -P: never import from the working directory; -s: no user site-packages; -S: no site module at all
+# (no dist-packages / site-packages, no .pth files run as root; zee has no runtime dependencies)
 # The real file, not a link (/usr/bin/python3 -> python3.12 on Ubuntu 24.04): the daemon refuses links.
-ExecStart=/usr/bin/python3.12 -P -s -m zee privsep daemon --state-dir /var/lib/zee-cutd --socket /run/zee/cutd.sock --allow-uid WATCH_UID --group WATCH_GROUP --watch-config WATCH_CONFIG
+ExecStart=/usr/bin/python3.12 -P -s -S -m zee privsep daemon --state-dir /var/lib/zee-cutd --socket /run/zee/cutd.sock --allow-uid WATCH_UID --group WATCH_GROUP --watch-config WATCH_CONFIG
 # A signed `stop` exits 0 and must stay stopped; a crash restarts.
 Restart=on-failure
 RestartSec=2

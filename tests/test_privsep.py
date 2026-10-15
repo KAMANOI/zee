@@ -1138,3 +1138,15 @@ def test_check_runtime_refuses_a_child_it_cannot_open(monkeypatch):
     monkeypatch.setattr(daemon, "fd_ops_ok", lambda: True)
     with pytest.raises(ValueError, match="sub"):
         daemon.check_runtime(str(exe), pkg)
+
+
+# ---- final review (v0.14.0): a key_remove that removes nothing is not reported as done
+def test_key_remove_of_an_unknown_key_is_not_ok(env):
+    d, _, _, _ = env
+    assert signed(d, "key_add", key_id="k2", public_key="s2")["ok"]
+    r = signed(d, "key_remove", key_id="nope")
+    assert r["ok"] is False and "nothing removed" in r["detail"] and r["code"] == "Z718"
+    assert signed(d, "key_remove", key_id="k2")["ok"]
+    r = signed(d, "key_remove", key_id="k1")  # the last key stays
+    assert r["ok"] is False and "nothing removed" in r["detail"]
+    assert set(d.engine.state["keys"]) == {"k1"}

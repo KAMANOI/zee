@@ -9,13 +9,16 @@ root の操作を含むので、実行するのは機械の正当な所有者だ
 **root で動かすコマンドは必ず次の形にする**：
 
 ```sh
-cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3> -P -s -m zee ...
+cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3> -P -s -S -m zee ...
 ```
 
 - `-P`：作業ディレクトリ（と `python -m` の時のカレント）を import の対象にしない。付けないと、
   業務ユーザーが書ける場所（鍵ファイルを置いたディレクトリ等）に `zee/__main__.py` を置かれた時、
   **それが root で実行される**（4ペルソナ・レビューで再現。CI でも「付けないと実行される／付けると実行されない」を毎回確かめる）。
 - `-s`：ユーザーの site-packages を読まない（macOS の sudo は HOME を引き継ぐため）。
+- `-S`：site の仕組みを使わない。site-packages・dist-packages（Linux の `/usr/local/lib/python3.X/dist-packages`・
+  `/usr/lib/python3/dist-packages` を含む）とその `.pth` ファイルは root で読まれない。zee は実行時に外部ライブラリを使わないので、
+  これで動く（CI で `sys.flags.no_site == 1` と `sys.path` に site-packages／dist-packages が無いことを毎回確かめる）。
 - `cd /`：念のため、業務ユーザーが書けない場所から実行する。ファイル（公開鍵など）は**絶対パス**で渡す。
 - Python 本体も root 所有の 3.11 以上を使う。**常駐の定義（plist・unit）には、シンボリックリンクではない実体のパスを書く**
   （`readlink -f`／`realpath` で確かめる。遮断部はリンクの実行ファイルを拒否する）。
@@ -37,8 +40,8 @@ cd / && sudo env PYTHONPATH=<root 所有の zee の src> <root 所有の python3
 **`..` を含まず、どこにもシンボリックリンクが無い**（`realpath` が自分自身）こと。そのうえで、上のディレクトリが
 すべて root 所有でグループ／他から書けない（`/tmp` のような sticky だけは可）こと。zee のコード一式の中には
 リンクが1つも無く、全部が root 所有でグループ／他から書けないこと。満たさなければ起動を拒否する（Z721）。
-**Python 自身のライブラリ（標準ライブラリ・site-packages）は、root で動くサービス一般と同じく信頼する**
-（遮断部は確かめない）。だから下の点検で、有効にする前に一度確かめる。macOS のソケットは `/var` がリンクなので
+**Python 本体と標準ライブラリは、root で動くサービス一般と同じく信頼する**（遮断部は確かめない）。
+site-packages・dist-packages は `-S` で読まないので信頼の対象外。だから下の点検では Python 本体と標準ライブラリを、有効にする前に一度確かめる。macOS のソケットは `/var` がリンクなので
 実体の `/private/var/db/zee/cutd.sock` と書く。
 
 ### 有効にする前の点検（Python を使わずに。何か表示されたら直してから進む）
@@ -68,9 +71,17 @@ Linux の置き場所は `/usr/local/lib/zee` を使う（GitHub の Ubuntu ラ�
 
 ## 0. 先に用意するもの
 
+- **業務ユーザーは管理者でないこと**（入っていると業務ユーザーが sudo で root になれ、分離にならない）。
+  - macOS：`dseditgroup -o checkmember -m <業務ユーザー> admin` が `no <業務ユーザー> is NOT a member of admin` を返すこと。
+  - Linux：`id <業務ユーザー>` に `sudo`・`wheel` が無いこと。
+  - §2・§3 の `sudo` は、業務ユーザーではない**別の管理用アカウント**で実行する。
+
 - 承認端末の P-256 鍵。試作では openssl で作った鍵（`openssl ecparam -name prime256v1 -genkey -noout -out k.pem`、
   公開鍵は `openssl ec -in k.pem -pubout -out pub.pem`）。**秘密鍵はこの機械に置かない**（別の端末・別の機械で署名する）。
 - **専用のグループ**（例 `zeecut`）を作り、`<業務ユーザー>` だけを入れる。ソケットはこのグループにだけ開く。
+  - macOS：`sudo dseditgroup -o create zeecut` → `sudo dseditgroup -o edit -a <業務ユーザー> -t user zeecut`
+    （gid は `dscl . -read /Groups/zeecut PrimaryGroupID`）。
+  - Linux：`sudo groupadd zeecut` → `sudo usermod -aG zeecut <業務ユーザー>`（gid は `getent group zeecut`）。
   macOS の `staff`（ユーザーの既定のグループ）は全員が入っているので**使わない**（接続できても uid で拒否されるが、入口は狭くする）。
 
 ## 1. 業務ユーザー側の assets.toml を先に仕上げる
@@ -96,7 +107,7 @@ sudo install -m 600 -o root -g wheel <業務ユーザーの assets.toml の絶�
 # WATCH_GROUP（専用グループの gid）/ WATCH_CONFIG（業務ユーザーの assets.toml の絶対パス）を書き換えて：
 sudo install -m 644 -o root -g wheel /絶対パス/io.github.kamanoi.zee-cutd.plist /Library/LaunchDaemons/
 sudo launchctl bootstrap system /Library/LaunchDaemons/io.github.kamanoi.zee-cutd.plist
-cd / && sudo env PYTHONPATH="$Z/src" <root 所有の python3> -P -s -m zee privsep bootstrap-key \
+cd / && sudo env PYTHONPATH="$Z/src" <root 所有の python3> -P -s -S -m zee privsep bootstrap-key \
   --key-id phone --public-key /絶対パス/pub.pem
 ```
 
@@ -110,7 +121,7 @@ sudo install -m 600 <業務ユーザーの assets.toml の絶対パス> /var/lib
 # examples/privsep/zee-cutd.service の WATCH_UID / WATCH_GROUP（専用グループ）/ WATCH_CONFIG を書き換えて：
 sudo install -m 644 /絶対パス/zee-cutd.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now zee-cutd
-cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3.12 -P -s -m zee privsep bootstrap-key \
+cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3.12 -P -s -S -m zee privsep bootstrap-key \
   --key-id phone --public-key /絶対パス/pub.pem
 ```
 
@@ -131,7 +142,10 @@ NetworkManager を使う機械では、業務ユーザーが `nmcli networking o
    ```
    復旧・設定の差し替え・自己防衛の ON（`tamper_set action=egress|full`）・停止も同じ3段。
    署名付きの操作が1つ実行されると、それより前に出した未使用の請求はすべて無効になる（新しく challenge からやり直す）。
-3. **自己防衛（`tamper_set`）を ON にする前に**：ON の間は、業務ユーザーの assets.toml を書き換えてから
+3. **手動の `zee cut`／`zee restore` について**：`[privsep]` を書いている間も、手動の `zee cut`／`zee restore` は
+   従来どおり同じプロセスで動くので、業務ユーザーでは権限が無く失敗する（未対応）。手動の復旧は上の署名付き `restore`、
+   手動の遮断は root のコンソールで行う。
+4. **自己防衛（`tamper_set`）を ON にする前に**：ON の間は、業務ユーザーの assets.toml を書き換えてから
    `config_set` が承認されるまでの間や、`zee watch` を 300 秒以上止めた時（更新・再起動を含む）にも遮断しうる。
    設定を変える・watch を止める時は、先に `tamper_set action=off` を承認しておく。
 
@@ -148,7 +162,7 @@ NetworkManager を使う機械では、業務ユーザーが `nmcli networking o
 ## 6. 承認端末の鍵をすべて失った時
 
 root で：①遮断部を止める ②`<状態ディレクトリ>/admin_keys.json` を `mv` で退避 ③起動
-④ `cd / && sudo env PYTHONPATH=<src> <python3> -P -s -m zee privsep bootstrap-key --key-id phone --public-key /絶対パス/pub.pem` で登録し直す。
+④ `cd / && sudo env PYTHONPATH=<src> <python3> -P -s -S -m zee privsep bootstrap-key --key-id phone --public-key /絶対パス/pub.pem` で登録し直す。
 
 ## 7. エラーコード（`zee privsep ...` と遮断部の返答の `code`）
 

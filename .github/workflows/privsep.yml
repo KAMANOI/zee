@@ -106,7 +106,7 @@ jobs:
           install -d -m 700 "$RUNNER_TEMP/approver"
           openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
           openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
-          cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -m zee privsep bootstrap-key \
+          cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -S -m zee privsep bootstrap-key \
             --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /run/zee/cutd.sock
       - name: Checks
         env:
@@ -119,6 +119,8 @@ jobs:
           DAEMON_PID_CMD: systemctl show -p MainPID --value zee-cutd
           STOP_AS_USER_CMD: sudo -u zeework systemctl --no-ask-password stop zee-cutd
           ACTIVE_CMD: systemctl is-active --quiet zee-cutd
+          EXIT_CMD: systemctl show -p NRestarts,ExecMainStatus --value zee-cutd | paste -sd/
+          EXIT_OK: '0/0'
           REAL_CUT: '1'
           TEST_URL: http://198.51.100.1:8080/
           DECOY: /home/zeework/decoys/secret-plan.txt
@@ -132,7 +134,7 @@ jobs:
           command -v setfacl || sudo apt-get install -y -qq acl
           D=/var/lib/zee-acl
           refused() {
-            out=$(cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -m zee privsep daemon \
+            out=$(cd / && sudo env PYTHONPATH=/usr/local/lib/zee/src /usr/bin/python3 -P -s -S -m zee privsep daemon \
                     --state-dir $D/state --socket $D/s.sock --allow-uid 1 2>&1) && return 1
             echo "$out"; grep -q Z721 <<<"$out" && grep -q "extended ACL" <<<"$out" && test ! -e $D/state
           }
@@ -234,7 +236,7 @@ jobs:
           install -d -m 700 "$RUNNER_TEMP/approver"
           openssl ecparam -name prime256v1 -genkey -noout -out "$RUNNER_TEMP/approver/k.pem"
           openssl ec -in "$RUNNER_TEMP/approver/k.pem" -pubout -out "$RUNNER_TEMP/approver/pub.pem"
-          cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -m zee privsep bootstrap-key \
+          cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -S -m zee privsep bootstrap-key \
             --key-id phone --public-key "$RUNNER_TEMP/approver/pub.pem" --socket /private/var/db/zee/cutd.sock
       - name: Checks
         env:
@@ -246,6 +248,8 @@ jobs:
           DAEMON_PID_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd | awk '/^\tpid = /{print $3; exit}'
           STOP_AS_USER_CMD: sudo -u zeework launchctl bootout system/io.github.kamanoi.zee-cutd
           ACTIVE_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd 2>/dev/null | grep -q 'state = running'
+          EXIT_CMD: sudo launchctl print system/io.github.kamanoi.zee-cutd | awk -F' = ' '/last exit code/{print $2; exit}'
+          EXIT_OK: '0'
         run: |
           export KEY="$RUNNER_TEMP/approver/k.pem"
           bash scripts/privsep_ci.sh
@@ -256,7 +260,7 @@ jobs:
           sudo install -d -m 755 -o root -g wheel $D
           sudo chmod +a "zeework allow add_file,add_subdirectory,delete_child" $D
           ls -lde $D && test "$(stat -f %Lp $D)" = 755
-          out=$(cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -m zee privsep daemon \
+          out=$(cd / && sudo env PYTHONPATH="/Library/Application Support/Zee/src" "$PY" -P -s -S -m zee privsep daemon \
                   --state-dir $D/state --socket $D/s.sock --allow-uid 1 2>&1) && exit 1
           echo "$out"; grep -q Z721 <<<"$out"; grep -q "extended ACL" <<<"$out"; test ! -e $D/state
       - name: Logs

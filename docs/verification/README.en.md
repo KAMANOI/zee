@@ -12,6 +12,7 @@ Last updated: 2026-10-11 (version: v0.12.0, commit `220bf0d`)
 - **Entry gate (`zee gate`):** an inspection that is incomplete no longer passes (v0.11.0); G501 prompt-injection detection gained a normalized view and a two-tier verdict (v0.12.0); a crafted-input slowdown was fixed (v0.12.0). Each came with a reproduction test. The measured limits are in the same table.
 - **Decoys and containment:** checked by the test suite and by a dry_run exercise in an isolated macOS environment (run on a version near v0.10.1; not repeated on v0.12.0).
 - **Not done yet:** independent evaluation by outside experts or organizations; real cuts and continuous runs on real Linux and Windows hardware. Real cuts (`dry_run: false`) were run on GitHub's virtual runners and one real Mac ([real-cut.md](./real-cut.md), Japanese). See "Not covered" below.
+- **Privilege separation (v0.14.0 prototype):** measurements on disposable GitHub Actions runners are in [privsep.md §11](../design/privsep.md#11-実測の記録) (Japanese).
 
 ## Checks
 

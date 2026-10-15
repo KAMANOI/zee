@@ -32,8 +32,10 @@ Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied 
   voids older unused ones. Replies carry codes Z710–Z721
   (docs/maintenance/privsep_install.md §7); `zee privsep digest` shows what
   is being approved and asks for "yes". Root commands and the shipped
-  launchd / systemd definitions run Python with `-P -s` (never import from
-  the working directory or the user site). The daemon refuses to start
+  launchd / systemd definitions run Python with `-P -s -S` (never import
+  from the working directory, the user site or any site-packages /
+  dist-packages, and run no `.pth` file as root; zee has no runtime
+  dependencies). The daemon refuses to start
   (Z721) unless the paths it trusts — its Python executable, the zee code,
   the state directory and the socket directory — contain no `..` and no
   symlink anywhere (each is its own realpath), every directory above them is
