@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.12.0
+Early Public / Research Project — v0.13.0
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.12.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.13.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -111,17 +111,15 @@ zee gate audit
 
 `src/zee/` に MVP の実装があります。**既定では dry_run で動き、実際の遮断は行いません。** 資産プロファイルで `response_mode: auto` を明示し `dry_run: false` にしたときだけ、自動遮断（contain）が走ります。
 
-> **macOS で `cut_method: egress` をお使いの方へ（2026-10-15）** — v0.12.0 までの macOS の外向き遮断は、規則を読み込むアンカーが macOS 標準の `/etc/pf.conf`（`anchor "com.apple/*"` のみ評価）から参照されないため、通信を止めません。遮断の通知が出ても、外向き通信は流れています。修正版では `com.apple/` 配下のアンカーを使い、遮断の後に規則が評価されていることを読み直して確認します。修正版の公開までは、macOS の外向き遮断を前提にしない運用をお願いします。
+> **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも、修正途中の規則で確認）。**v0.13.0 に更新してください。**
 
-> **Windows で `cut_method: egress` をお使いの方へ（2026-10-15）** — v0.12.0 までの Windows の外向き遮断は、`netsh` が全アドレスを指す範囲指定を受け付けないため規則が入らず、通信を止めません。この場合 Zee は遮断を「失敗」と表示します（止めたとは表示しません）。修正版では私用アドレス帯とループバック以外を1つの block 規則で止める形に直し、GitHub の Windows 環境で止まって戻ることを確認しました。修正版の公開までは、Windows の外向き遮断を前提にしない運用をお願いします。
-
-> **Linux で nft が無く iptables で外向き遮断する方へ（2026-10-15）** — iptables の経路は IPv4 の規則だけを入れるため、IPv6 の外向き通信は止まりません（nft の経路は IPv6 も止めます）。IPv6 が使える端末では、修正までは外向き遮断で持ち出しを止められる前提にしないでください。
+> **外向き遮断と IPv6（2026-10-15）** — nft（Linux）と pf（macOS）の経路は IPv6 の外向き通信も止めます。**iptables の経路（nft の無い Linux）と Windows の経路は IPv4 の規則だけを入れるため、IPv6 の外向き通信は止まりません**（遮断の結果に `IPv6 NOT blocked` と出ます）。修正は作業中です。IPv6 が使える端末で確実に止めたい場合は `cut_method: full` を使ってください。
 
 ### インストール
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.12.0"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.13.0"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git
@@ -280,7 +278,7 @@ Zee は誠実に範囲を区切ります。
 - **`zee restore` には `restore_token` が必要** — v0.3 から、`zee init-restore-token` で生成したトークンを `--token` または `ZEE_RESTORE_TOKEN` 環境変数で渡さないと実行できません。別シェルから誤って遮断を巻き戻す事故は防げますが、`~/.zee/restore_token` は同じユーザーなら読めるため、同じユーザー権限の攻撃者（root 相当でなくても）にはバイパスされます。マルチユーザー本番では `zee restore` を `sudo` で囲うか、専用ユーザーで運用してください
 - **イベントログは `decoy_ref`（asset_id#index）で記録** — v0.3 から、events.jsonl には絶対パスではなく `decoy_ref` を書きます。ログを読めた攻撃者が囮の位置を一覧化することはできなくなりました（対応関係は `assets.toml` 経由）
 - **限界がある** — 機械の速度で完全自動完結する相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。Zee が時間を稼げる対象は「人間〜半自動の侵入後活動」（侵入が成功した後、攻撃者が偵察・横移動・データ持ち出しに進む段階）です
-- **検証の範囲** — 入口ゲートの判定ロジックは、合成検体による社内の再現試験とテストスイートで確認しています（自然文の言い換えによる指示すり込みは、未知の検体の盲検試験で検出できていません）。囮・封じ込めは、テストスイートと、隔離した macOS 環境での dry_run の実演（v0.10.1 付近の版で実施）で確認しています。専門家・第三者機関による独立評価は受けていません。実際の遮断（`dry_run: false`）の試験は、macOS＝実機（MacBookPro17,1／macOS 26.6.2）と GitHub Actions の仮想ランナー、Windows・Linux＝仮想ランナーで行い、いずれも通信が止まって復旧で戻ることを確認しました（2026-10-15・IPv4。全面遮断は Linux ランナーと実機の macOS のみ。手順と結果は [docs/verification/real-cut.md](./docs/verification/real-cut.md)）。結果と条件は [docs/verification/](./docs/verification/README.md) にあります。本番運用の前に、ご自身の環境でも確認してください
+- **検証の範囲** — 入口ゲートの判定ロジックは、合成検体による社内の再現試験とテストスイートで確認しています（自然文の言い換えによる指示すり込みは、未知の検体の盲検試験で検出できていません）。囮・封じ込めは、テストスイートと、隔離した macOS 環境での dry_run の実演（v0.10.1 付近の版で実施）で確認しています。専門家・第三者機関による独立評価は受けていません。実際の遮断（`dry_run: false`）の試験は、GitHub Actions の仮想ランナー（Linux はネットワーク名前空間の中、macOS、Windows は英語版のみ）と macOS 実機1台（MacBookPro17,1／macOS 26.6.2）で行い、いずれも通信が止まって復旧で戻ることを確認しました（2026-10-15）。**範囲：IPv4 のみ／新しい接続のみ（遮断前から開いていた接続は測っていません）／Windows は英語版の仮想ランナーのみで実機なし／Linux も仮想ランナーのみで実機なし／全面遮断（full）は Linux ランナーと macOS 実機1台のみ／macOS 実機は v0.13.0 の1つ前の規則で実施（v0.13.0 の規則は macOS ランナーで確認）**。手順と結果は [docs/verification/real-cut.md](./docs/verification/real-cut.md)。結果と条件は [docs/verification/](./docs/verification/README.md) にあります。本番運用の前に、ご自身の環境でも確認してください
 
 これは床であって天井ではありません。安全だと言う前に、失敗条件を先に書きました。
 

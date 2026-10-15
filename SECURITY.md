@@ -157,6 +157,27 @@ honestly-published boundaries of what Zee is and is not:
   (`::1`). In typical SME environments these ranges are uncommon, but
   operators who rely on APIPA addresses or IPv6-only LAN segments
   should review the egress rules before enabling `cut_egress`.
+- **The egress cut does not stop outbound IPv6 on two of its four
+  paths.** The `nftables` path (an `inet` table with policy drop) and the
+  `pfctl` path (`block drop out quick all`) block IPv6 too, except
+  loopback. The `iptables` path (used on Linux when `nft` is absent) and
+  the Windows `netsh` rule cover IPv4 only, so outbound IPv6 is not
+  stopped there; the cut result says `IPv6 NOT blocked`. A fix is being
+  worked on (`fix/egress-ipv6`). On such hosts, use `cut_method: full` if
+  the cut must stop all traffic.
+- **On macOS and Windows the egress cut stops new connections;
+  connections opened before the cut may continue.** pf passes packets
+  that match an existing state entry without evaluating the new rules,
+  and Windows Firewall applies its rules when a connection is set up.
+  The Linux egress rules have no state exception, so open connections
+  are stopped too. Use `cut_method: full` if that matters. The real-cut
+  checks measured new connections only.
+- **macOS egress: other anchors under `com.apple/*` are not inspected.**
+  Zee's rules (all `quick`) sit in `com.apple/zee-egress-cut`. The cut
+  is confirmed only if the main ruleset references it unconditionally
+  with no other anchor or `pass ... quick` rule ahead of it, but a
+  `quick` pass rule that another program puts in a sibling anchor
+  evaluated before Zee's would still let that traffic through.
 - **Event logs grow without bound by default; rotate manually for
   long-running deployments.** `events.jsonl` and `metrics.jsonl`
   accumulate every trap event and latency record indefinitely. Zee

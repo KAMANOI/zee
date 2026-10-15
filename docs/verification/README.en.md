@@ -11,7 +11,7 @@ Last updated: 2026-10-11 (version: v0.12.0, commit `220bf0d`)
 - **Test suite:** 427 passed, 1 skipped. Passing in CI on Ubuntu / macOS / Windows.
 - **Entry gate (`zee gate`):** an inspection that is incomplete no longer passes (v0.11.0); G501 prompt-injection detection gained a normalized view and a two-tier verdict (v0.12.0); a crafted-input slowdown was fixed (v0.12.0). Each came with a reproduction test. The measured limits are in the same table.
 - **Decoys and containment:** checked by the test suite and by a dry_run exercise in an isolated macOS environment (run on a version near v0.10.1; not repeated on v0.12.0).
-- **Not done yet:** independent evaluation by outside experts or organizations; a real cut (`dry_run: false`) against the OS firewall; continuous runs on real Linux and Windows hardware. See "Not covered" below.
+- **Not done yet:** independent evaluation by outside experts or organizations; real cuts and continuous runs on real Linux and Windows hardware. Real cuts (`dry_run: false`) were run on GitHub's virtual runners and one real Mac ([real-cut.md](./real-cut.md), Japanese). See "Not covered" below.
 
 ## Checks
 
@@ -36,7 +36,7 @@ Zee records detection latency, cut completion time and false-positive markers in
 ## Not covered
 
 - **Independent evaluation by outside experts or organizations:** not received.
-- **A cut that actually operates the OS firewall (`dry_run: false`):** the test suite replaces the cut routines to check the branching; it does not run the OS cut commands themselves. No real cut has been tested in an isolated VM or container either (V6 is dry_run).
+- **Scope of real cuts (`dry_run: false`):** run on GitHub's virtual runners (Linux inside a network namespace, macOS, en-US Windows) and one real Mac ([real-cut.md](./real-cut.md)). Not tried: real Linux / Windows hardware, non-English Windows, IPv6, connections opened before the cut, and v0.13.0's rules on a real Mac. The test suite replaces the OS cut commands to check the branching.
 - **Continuous runs on real Linux and Windows hardware:** the CI tests and smoke test pass, but there is no long-running check on real hardware.
 - **Whether a real AI agent follows an injected instruction:** V3 and V4 are static tests of whether the checker flags a sample; agent behavior was not tried.
 - **Gate dynamic inspection, Rug Pull, and conditional runtime behavior:** not evaluated.

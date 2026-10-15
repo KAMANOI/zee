@@ -5,9 +5,13 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
-## [Unreleased]
+## [0.13.0] — 2026-10-15
 
-Not in any tagged release yet.
+**If you use `cut_method: egress` on macOS or Windows, update.** Up to
+v0.12.0 the outbound cut did not stop traffic on either (macOS: rules in an
+anchor pf never evaluated; Windows: netsh rejected the rule and Zee
+reported the cut as failed). Both are fixed and were confirmed on real cuts
+(see Verification below).
 
 ### Security
 
@@ -35,10 +39,13 @@ Not in any tagged release yet.
   "no such table / chain / rule" answer counts as gone, while a
   loader error (exit 126/127), permission error or unexpected answer is
   unverified (Z606). A backend whose
-  tool is not installed cannot be checked: restore exits 1 with the new
-  **Z606 (unverified)** and the cut stays unresolved — on a Linux host
-  with only one of nft / iptables this is expected; read the per-step
-  detail. Recorded interfaces / services are re-read afterwards and must
+  tool is not installed cannot hold a rule Zee made with it, so it is
+  listed as `not-installed` and not counted — unless the cut record says
+  the cut used it, or no firewall tool of the OS is installed at all:
+  then restore exits 1 with the new **Z606 (unverified)** and the cut
+  stays unresolved. On Linux, `iptables`, `iptables-legacy` and
+  `iptables-nft` are each removed and re-read (each talks to its own
+  kernel backend, and `iptables` may have been switched since the cut). Recorded interfaces / services are re-read afterwards and must
   be positively read back as enabled: disabled fails (Z601); not listed,
   unknown state (including NetworkManager not answering) or an unreadable
   / empty listing is unverified (Z606). Disabled ones outside the record
@@ -78,23 +85,77 @@ Not in any tagged release yet.
   never evaluated);
   the cut record stores the read-back result (`verified`). Tool output
   in an undecodable code page no longer raises mid-cut. A macOS egress
-  cut also fails when its
-  `pfctl -e` fails (other
-  than "already enabled"). A partial cut records the interfaces / rules
+  cut enables pf with
+  `pfctl -E`, which takes an enable reference of Zee's own; its token is
+  recorded and the normal restore releases exactly that reference
+  (`pfctl -X`), so pf goes back off unless something else holds it on
+  (before, Zee left pf enabled after restore). A failed `pfctl -E` is a
+  failed cut. The macOS rules are all `quick` with the block last, and
+  the read-back requires nothing but Zee's own pass rules ahead of the
+  block, and an unconditional reference to the anchor in the main ruleset
+  with no other anchor or `pass ... quick` rule ahead of it (a reference
+  such as `anchor "com.apple/*" in on lo0` no longer counts). A partial cut records the interfaces / rules
   it did change (full cut: every target it attempted, including ones
-  whose command failed or timed out; Windows egress; iptables once the
-  chain exists), so restore can undo and re-check them. A Windows full
+  whose command failed or timed out; every egress backend when the
+  outcome is uncertain — an nft or pf command that timed out, any failed
+  Windows rule add, any failed iptables command), so restore can undo and
+  re-check them. A Linux full cut now also takes every interface down
+  with `ip link` after `nmcli networking off` succeeds, and any interface
+  that does not read back as disabled (including one outside the record,
+  e.g. not managed by NetworkManager) makes the cut fail. A Windows full
   cut targets every adapter not confirmed admin-disabled. Egress
   read-back checks rule structure (nft output hook with policy drop;
   iptables unconditional DROP and the OUTPUT jump first; pf outbound
   block-all) with comments ignored, not substrings. If the cut record cannot be
   written, the cut is reported as failed with `os=ok ledger=FAILED`, what
   was changed, and the `--all-interfaces` way back (no exception).
+  A failed cut now says `FAILED (Z404)` and "traffic may NOT be stopped"
+  (notification, `zee cut`, and `cut=FAILED(Z404)` in `zee watch`), and
+  points to `zee restore` only when a cut record exists (otherwise
+  restore would refuse with Z605).
 - **Cut boundary (`zee.responder.blocker`).** Every automatic cut is
   re-validated against a fixed three-field request (asset, op_class,
   confidence) right before the cut runs. Same rules as before; it does
   not relax the gate, and it does not yet separate privileges (same
   process, same user). Design: `docs/design/self-defense.md`.
+
+### Verification
+
+- **Real cuts (`dry_run: false`)** with Zee's own cut and restore code,
+  measured as reachability before / during / after
+  ([docs/verification/real-cut.md](docs/verification/real-cut.md)):
+  GitHub Actions virtual runners — Linux inside a network namespace (nft,
+  iptables-nft and iptables-legacy egress; full via `ip link`), macOS pf
+  egress, en-US Windows netsh egress — and one real Mac (egress and full,
+  with the rules from just before this release). A run passes only if
+  Zee's cut and its normal restore both report success and traffic
+  stopped and came back (before, reachability alone could pass).
+  `.github/workflows/real-cut.yml` now runs on every push to main that
+  touches the cut / restore code; never on pull requests.
+
+### Known limitations
+
+- **IPv6 on two egress paths:** the iptables path (Linux without nft) and
+  the Windows netsh rule cover IPv4 only, so outbound IPv6 is not stopped
+  there (the cut result says `IPv6 NOT blocked`). nft and pf block IPv6
+  too. Fix in progress; use `cut_method: full` where it matters.
+- **Connections opened before the cut (macOS, Windows egress):** pf state
+  and Windows Firewall let an existing connection continue; only new
+  connections are stopped (the macOS cut result says so). Linux egress
+  rules have no state exception. Not measured by the real-cut checks.
+- **macOS: other anchors under `com.apple/*`** are not inspected; a
+  `quick` pass rule another program puts there, evaluated before Zee's,
+  would let that traffic through.
+- **The emergency restore (`--all-interfaces`) does not release the pf
+  enable reference** (it does not use the ledger): rules are removed and
+  traffic comes back, but pf may stay enabled.
+- **Privilege separation (`docs/design/self-defense.md` §7) is not
+  implemented:** an attacker running as the same user can still stop
+  Zee, read the restore token, or forge a well-formed ledger.
+- Not verified: real Linux / Windows hardware, non-English Windows,
+  Linux with NetworkManager (full cut), v0.13.0's macOS rules on a real
+  Mac. When a result cannot be read back, Zee reports FAILED / unverified,
+  never success.
 
 ### Added
 
