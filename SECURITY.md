@@ -147,24 +147,27 @@ honestly-published boundaries of what Zee is and is not:
   `zee init-restore-token`), and PowerShell / netsh enumeration
   parsers. Continuous-run verification on Japanese / German / French
   Windows hosts is still pending — the CI runner is en-US.
-- **`cut_egress` "local" definition covers RFC 1918 and loopback only.**
-  The egress-cut backends (`nftables`, `iptables`, `pfctl`, `netsh`)
-  pass traffic to the following destinations and block everything else:
-  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and the loopback
-  interface (`lo` / `lo0` on Linux/macOS; `127.0.0.0/8` on Windows).
-  Not covered: IPv4 link-local (`169.254.0.0/16`), IPv6 ULA
-  (`fc00::/7`), IPv6 link-local (`fe80::/10`), and IPv6 loopback
-  (`::1`). In typical SME environments these ranges are uncommon, but
-  operators who rely on APIPA addresses or IPv6-only LAN segments
-  should review the egress rules before enabling `cut_egress`.
-- **The egress cut does not stop outbound IPv6 on two of its four
-  paths.** The `nftables` path (an `inet` table with policy drop) and the
-  `pfctl` path (`block drop out quick all`) block IPv6 too, except
-  loopback. The `iptables` path (used on Linux when `nft` is absent) and
-  the Windows `netsh` rule cover IPv4 only, so outbound IPv6 is not
-  stopped there; the cut result says `IPv6 NOT blocked`. A fix is being
-  worked on (`fix/egress-ipv6`). On such hosts, use `cut_method: full` if
-  the cut must stop all traffic.
+- **What `cut_egress` leaves open differs by path.** IPv4: every path
+  passes `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and loopback
+  (`lo` / `lo0`; `127.0.0.0/8` on Windows); IPv4 link-local
+  (`169.254.0.0/16`) is blocked. IPv6: the `iptables` path (ip6tables)
+  and the Windows `netsh` rule pass loopback, link-local (`fe80::/10`),
+  ULA (`fc00::/7`) and link-scope multicast (`ff02::/16`, which carries
+  neighbor discovery); the `nftables` and `pfctl` paths pass IPv6
+  loopback only. Operators who rely on APIPA addresses, or on IPv6
+  link-local / ULA LANs with nft or pf, should review the egress rules
+  before enabling `cut_egress`.
+- **Outbound IPv6 (fixed in v0.13.1).** Up to v0.13.0 the `iptables` path
+  (Linux without `nft`) and the Windows `netsh` rule covered IPv4 only,
+  so outbound IPv6 was not stopped there. Since v0.13.1 the `iptables`
+  path adds the same chain through ip6tables of the same kernel backend
+  (no such ip6tables, or a failed command, makes the cut FAILED — never
+  an IPv4-only success), and the Windows rule carries the IPv6 ranges as
+  well. Measured on Linux (network namespace; nft, iptables nf_tables
+  and legacy). **On Windows, IPv6 traffic stopping is not measured**
+  (the runner has no outbound IPv6); the rule was accepted and read back
+  as set. A Linux host with IPv6 disabled in the kernel can make
+  ip6tables fail; the cut then reports FAILED although no IPv6 can leave.
 - **On macOS and Windows the egress cut stops new connections;
   connections opened before the cut may continue.** pf passes packets
   that match an existing state entry without evaluating the new rules,

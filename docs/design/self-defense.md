@@ -30,7 +30,7 @@
 | 「認証済みの管理経路」は新しく作る | **部品が既にある。** `src/zee/egress/`（持ち出し承認）が、別端末の ES256 署名・公開鍵登録簿・設定変更（`CONFIG_OPS`：allow/protect/key の追加削除・disable）の署名必須化を実装済み。ただしこちらも未配線 | 食い違い（§4.3 で共通化する） |
 | 遮断が失敗しても成功に見える（指示書2章） | 本文の想定以上に具体的に存在した：①遮断が失敗しても通知の題名が「Zee cut applied」②インターフェースが0件のとき遮断「成功」③複数インターフェースの一部だけ落ちたとき、落ちた分も記録しない（→次の restore が旧方式へ） | 一致（具体的な穴3つ） |
 | 死活は監視対象の自己申告に頼っている | 死活確認は `permission.watch_running()` がロックファイルを掴めるかを見るだけ＝「プロセスがある」しか分からない。イベント処理が進んでいるかは見ていない | 一致 |
-| IPv6 の遮断漏れ | main は IPv4 のみ。別の枝 `fix/egress-ipv6` で対応中 | 本件では触らない |
+| IPv6 の遮断漏れ | main は IPv4 のみ。別の枝 `fix/egress-ipv6` で対応中 | 本件では触らない（v0.13.1 で対応。付録の限界 6） |
 
 **10/7 の GPT コードレビューとの重複**：`20261007-0911` の報告どおり、第2回以降は再現テスト（別の作業ツリーにある未コミットのファイル `tests/test_gpt_repro_sections_2_to_5.py`、xfail）までで止まっている。その §3a（失敗でも applied）・§3b（0件で成功）・§4a（一部成功を記録しない）・§4b（記録の無い資産の restore が全体を戻す）は本件と同じ穴で、**本件の第一段でまとめて直した**。再現ファイル自体は別の作業ツリーにあるため本枝には持ち込まず、同じ内容を `tests/test_self_defense.py` に書き直した（あちらの xfail は、この枝を取り込むと XPASS になり、strict なので外す必要がある）。
 
@@ -264,7 +264,11 @@ Linux では systemd のサービス（専用ユーザー＋`AmbientCapabilities
 3. **Windows：Get-NetAdapter の状態。** `NotPresent` 等の状態の機器があると、遮断は無効を確認できず FAILED になる（安全側だが、誤報になりうる）。
 4. **Linux：NetworkManager のある実機。** v0.13.0 から nmcli の後も全インターフェースを `ip link down` し、全部が無効と読めた時だけ成功（付録A-4 #9）。実測は NetworkManager の無い名前空間（ip link の経路）だけで、NetworkManager のある実機では確かめていない。
 5. **Linux：nft・iptables の出力形式。** GitHub の Ubuntu ランナーの版では確認済み（iptables-nft は別バックエンドに表があると先頭に `# Warning:` 行を出すことが実測で分かり、その次の行で判定するよう直した）。他の版・ディストリビューションで文言が違えば未確認＝FAILED。
-6. **IPv6（経路ごと）。** nft（`inet` 表・policy drop）と pf（`block drop out quick all`）は IPv6 も止める（ループバックを除く）。**iptables の経路（nft の無い Linux）と Windows の netsh は IPv4 の規則だけ**で、IPv6 の外向き通信は止まらない（遮断の結果に `IPv6 NOT blocked` と出す）。修正は別の枝 `fix/egress-ipv6` で作業中だが、その枝は v0.13.0 より前の main から分かれており、Windows 側は実測で無効と分かった作り（`0.0.0.0/0`＋allow 規則）のままなので、取り込む前に作り直しが要る。確実に止めたい場合は `cut_method: full`。
+6. **IPv6（経路ごと・v0.13.1）。** nft（`inet` 表・policy drop）と pf（`block drop out quick all`）は IPv6 も止める（ループバックを除く）。v0.13.0 までは iptables の経路と Windows の netsh が IPv4 の規則だけで、IPv6 の外向き通信は止まらなかった。v0.13.1 で次のとおり直した（古い枝 `fix/egress-ipv6` は Windows が実測で無効な作りだったため取り込まず、v0.13.0 の上で作り直した）。
+   - **iptables**：`iptables --version` のバックエンド（legacy／nf_tables）と同じバックエンドの ip6tables（`ip6tables`、違えば `ip6tables-legacy`／`ip6tables-nft`）に、同じ `ZEE_EGRESS` チェーンを入れる。通すのは `lo`・`fe80::/10`・`fc00::/7`（RFC 1918 に当たる ULA）・`ff02::/16`、それ以外は DROP。`ff02::/16` は指示書に無い追加：IPv6 の近隣探索（ARP の代わり）は ICMPv6 で、ARP と違って OUTPUT で止まるため、これを止めると近隣の記録が切れた後にリンクローカル／ULA も届かなくなる（リンク内に限られ外へは出ない）。そのような ip6tables が無い・コマンドが失敗した時は遮断を FAILED にし、結果に `IPv6 NOT blocked` と書く（IPv4 だけで confirmed とは言わない）。台帳には `__zee_ip6tables_egress_chain__` を記録し、遮断直後に ip6tables で読み直す（IPv4 と同じ判定）。復旧は台帳に関係なく `ip6tables`・`ip6tables-legacy`・`ip6tables-nft` の全部で消して読み直し、記録にある時はそのバックエンドを読めるツールを要求する（無ければ Z606）。台帳が読めない全面復旧では両バックエンドを要求する。v0.13.0 の記録（IPv6 のチェーンなし）には要求しない。
+   - **Windows**：同じ block 規則の `remoteip` に IPv6 の4範囲（`::2-fbff:…`・`fe00::-fe7f:…`・`fec0::-ff01:…`・`ff03::-ffff:…`＝`::/127`・`fc00::/7`・`fe80::/10`・`ff02::/16` の補集合）を足す。`::/0` のような全域指定は IPv4 と同じく拒否されうるので使わない。書式は Microsoft の「Netsh AdvFirewall Firewall Commands」（remoteip：IPAddress／IPSubnet／IPRange、範囲は `開始-終了`、IPv4・IPv6 とも）に従った。読み直しは文字列ではなくアドレスの区間（併合した集合）で比べ、netsh の表記（0の省略・範囲の CIDR 表示）に左右されないようにした。補集合に漏れ・重なりが無いことはテストで機械的に確かめる。
+   - **実測（run 38755882154、commit 5d1ca43）**：Linux の名前空間（nft・iptables nf_tables 版・legacy 版の egress、nft の full）で、`2001:db8::1`（文書用。ULA でもリンクローカルでもない）宛ての IPv6 が遮断で止まり、復旧で戻った。**Windows は規則が受け付けられ読み直しが confirmed になったところまでで、IPv6 の通信が止まることは未確認**（ランナーに IPv6 の外向き経路が無く「IPv6 未測定」）。macOS ランナーも同じく IPv6 未測定（pf は v0.13.0 から IPv6 を止める作り）。
+   - **残る限界**：カーネルで IPv6 を無効にした Linux では ip6tables が失敗し、IPv6 が出られなくても遮断は FAILED と出る（安全側）。full 遮断（`ip link down`）は Linux の既定で静的な IPv6 アドレスを消す（`keep_addr_on_down=0`）。SLAAC・DHCPv6・NetworkManager が無い手設定の IPv6 アドレスは復旧で戻らず、Zee の復旧は「インターフェースが有効」を読むだけなのでそれを検出しない（名前空間の実測は `keep_addr_on_down=1` で行った）。nft・pf の経路は IPv6 のリンクローカル／ULA も止める（iptables・Windows と揃っていない）。
 7. **読み直しの時間差。** コマンド直後は OS の状態がまだ変わっていないことがある（無線の再接続など）。その場合、遮断・復旧は FAILED／未確認と表示される（成功に化ける向きではない）。
 8. **「無い」の判定の文言。** 規則が無いことの判定は各ツールの英語の応答文に頼る。表示言語や版で文言が違えば未確認になる。
 9. **規則本体への追加・並べ替えによる迂回。** 読み直しは Zee の規則の形（nft の hook と policy、iptables の無条件 DROP とその前の無条件 ACCEPT（コメントは無視）・OUTPUT の先頭、pf の block 行）を見るが、同じユーザー以上の権限の攻撃者が、条件付きの通過規則を chain／アンカーの中や前に足した場合までは検出しない。

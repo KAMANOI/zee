@@ -5,6 +5,53 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [0.13.1] — 2026-10-16
+
+**If you use `cut_method: egress` on Linux without nft, or on Windows,
+update.** Up to v0.13.0 those two paths did not stop outbound IPv6.
+
+### Security
+
+- **The iptables egress path blocks outbound IPv6.** The same `ZEE_EGRESS`
+  chain is installed through ip6tables of the same kernel backend as
+  `iptables` (`ip6tables`, else `ip6tables-legacy` / `ip6tables-nft`). It
+  passes `lo`, `fe80::/10`, `fc00::/7` and `ff02::/16` (link-scope
+  multicast: IPv6 neighbor discovery is filtered by OUTPUT, unlike ARP)
+  and drops the rest. No matching ip6tables, or any ip6tables command
+  failing, makes the cut FAILED with `IPv6 NOT blocked` in the result —
+  never an IPv4-only success. The IPv6 chain is recorded in the cut
+  ledger, read back at cut time, and on restore removed and read back on
+  every ip6tables front end, with the recorded backend required.
+- **The Windows egress rule blocks outbound IPv6.** The block rule's
+  `remoteip` also carries the IPv6 complement of `::/127`, `fe80::/10`,
+  `fc00::/7` and `ff02::/16`, written as `start-end` ranges (no
+  whole-space form). The read-back compares merged address intervals
+  instead of strings, so netsh's formatting does not matter.
+
+### Verification
+
+- `scripts/real_cut_check.py --url6` measures IPv6 the same way as IPv4;
+  `--require-ipv6` makes it part of the pass. Run 38755882154 (commit
+  5d1ca43, all jobs passed): in the Linux namespace (nft, iptables
+  nf_tables and legacy egress; nft full) IPv6 to `2001:db8::1` stopped
+  during the cut and came back after Zee's restore. **Not measured on
+  Windows or macOS**: the runners have no outbound IPv6 (recorded as
+  "unmeasured", never as passed). On Windows, netsh accepted the rule
+  with the IPv6 ranges and Zee's read-back confirmed it.
+
+### Known limitations
+
+- **Windows: IPv6 traffic stopping is not measured** (see above).
+- **Linux with IPv6 disabled in the kernel:** ip6tables can fail, and the
+  cut then reports FAILED although no IPv6 can leave (the safe direction).
+- **Linux full cut and static IPv6 addresses:** `ip link down` flushes
+  static IPv6 addresses by default (`keep_addr_on_down=0`). Addresses not
+  re-created by SLAAC / DHCPv6 / NetworkManager do not come back on
+  restore, and Zee's restore (which reads interface state) does not
+  detect it.
+- **nft and pf block IPv6 link-local and ULA too**; the iptables and
+  Windows paths pass them.
+
 ## [0.13.0] — 2026-10-15
 
 **If you use `cut_method: egress` on macOS or Windows, update.** Up to
@@ -149,7 +196,7 @@ reported the cut as failed). Both are fixed and were confirmed on real cuts
 - **IPv6 on two egress paths:** the iptables path (Linux without nft) and
   the Windows netsh rule cover IPv4 only, so outbound IPv6 is not stopped
   there (the cut result says `IPv6 NOT blocked`). nft and pf block IPv6
-  too. Fix in progress; use `cut_method: full` where it matters.
+  too. Fixed in v0.13.1.
 - **Connections opened before the cut (macOS, Windows egress):** pf state
   and Windows Firewall let an existing connection continue; only new
   connections are stopped (the macOS cut result says so). Linux egress

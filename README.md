@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.13.0
+Early Public / Research Project — v0.13.1
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.13.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.13.1): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -111,15 +111,15 @@ zee gate audit
 
 `src/zee/` に MVP の実装があります。**既定では dry_run で動き、実際の遮断は行いません。** 資産プロファイルで `response_mode: auto` を明示し `dry_run: false` にしたときだけ、自動遮断（contain）が走ります。
 
-> **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも v0.13.0 の規則で確認）。**v0.13.0 に更新してください。**
+> **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも v0.13.0 の規則で確認）。**v0.13.0 以降に更新してください。**
 
-> **外向き遮断と IPv6（2026-10-15）** — nft（Linux）と pf（macOS）の経路は IPv6 の外向き通信も止めます。**iptables の経路（nft の無い Linux）と Windows の経路は IPv4 の規則だけを入れるため、IPv6 の外向き通信は止まりません**（遮断の結果に `IPv6 NOT blocked` と出ます）。修正は作業中です。IPv6 が使える端末で確実に止めたい場合は `cut_method: full` を使ってください。
+> **外向き遮断と IPv6（v0.13.1・2026-10-16）** — v0.13.0 までは、iptables の経路（nft の無い Linux）と Windows の経路が IPv4 の規則だけを入れ、**IPv6 の外向き通信を止めていませんでした**（遮断の結果に `IPv6 NOT blocked` と出ていました）。v0.13.1 で、iptables の経路は同じバックエンドの ip6tables にも規則を入れ（入れられなければ遮断は「失敗」）、Windows は同じ規則に IPv6 の範囲を足しました。どちらの経路も、ループバック・リンクローカル（`fe80::/10`）・ULA（`fc00::/7`）・リンク内マルチキャスト（`ff02::/16`）以外の IPv6 を止めます。Linux（名前空間内の nft・iptables nf_tables 版・legacy 版）では IPv6 の通信が止まって復旧で戻ることを実測しました。**Windows は規則が入り読み直しで一致することまでを確認し、IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が無いため）。**v0.13.1 に更新してください。**
 
 ### インストール
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.13.0"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.13.1"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git
