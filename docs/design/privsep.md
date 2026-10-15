@@ -182,6 +182,10 @@ self-defense.md §7.1 は「遮断部の状態は専用ユーザー `_zeecut` �
 
 ## 11. 実測の記録
 
+**最新：commit b0c712c（2026-10-16、v0.14.0 前の最終4ペルソナ（中3・低7）の修正後）：3つの workflow がすべて合格。**
+- Privsep run 38791030191：Linux（systemd・名前空間内の実遮断）40項目 PASS／macOS（launchd）26項目 PASS、FAIL 0。root の Python は `-P -s -S` で動き、`sys.flags.no_site == 1`、`sys.path` に site-packages・dist-packages が無いことを両方で実測（Linux：`/usr/local/lib/zee/src`・`/usr/lib/python312.zip`・`/usr/lib/python3.12`・`lib-dynload` だけ）。署名付き停止の後、Linux は `NRestarts/ExecMainStatus = 0/0`、macOS は `last exit code = 0`。拡張 ACL を付けたディレクトリでの起動拒否（Z721）も両方で確認。
+- Real cut run 38791035620、Tests run 38791040593（macOS 958 passed / 8 skipped、ubuntu 946 / 20、Windows 844 / 122）。
+
 **commit fb10683（2026-10-16、最終確認（Codex 09・再レビュー）と Codex 10・11 の修正後。§3.1 の単純化（規則1つ）とファイル記述子基準の検査の前の版）：3つの workflow がすべて合格。**
 
 - **Privsep、run 38780924628**
