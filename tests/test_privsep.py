@@ -70,7 +70,7 @@ def req(d, uid=WATCH, **r):
     return d.handle_line(json.dumps(r).encode(), uid)
 
 
-def signed(d, admin_op, uid=OTHER, secret="s1", key="k1", tamper=None, **args):
+def signed(d, admin_op, uid=WATCH, secret="s1", key="k1", tamper=None, **args):
     ch = req(d, uid, op="challenge", admin_op=admin_op, args=args)
     assert ch["ok"], ch
     payload, code = ch["payload"], ch["code"]
@@ -96,8 +96,8 @@ def test_peer_uid_is_the_kernel_reported_uid():
 # ---- unsigned surface: cut and status only, only from allowed uids
 def test_cut_and_status_need_an_allowed_peer(env):
     d, cuts, _, _ = env
-    assert cut(d, uid=OTHER) == {"ok": False, "error": "peer_not_allowed"}
-    assert req(d, OTHER, op="status") == {"ok": False, "error": "peer_not_allowed"}
+    for op in ("cut", "status", "challenge", "submit"):
+        assert req(d, OTHER, op=op) == {"ok": False, "error": "peer_not_allowed", "code": "Z712"}
     assert req(d, WATCH, op="status")["ok"] is True
     assert cuts.calls == []
 
@@ -105,18 +105,18 @@ def test_cut_and_status_need_an_allowed_peer(env):
 @pytest.mark.parametrize("op", ["restore", "config_set", "auto_set", "stop", "tamper_set", "disable"])
 def test_management_ops_are_not_unsigned_requests(env, op):
     d, cuts, restores, _ = env
-    assert req(d, 0, op=op, asset_id="ws") == {"ok": False, "error": "unknown_op"}
+    assert req(d, 0, op=op, asset_id="ws") == {"ok": False, "error": "unknown_op", "code": "Z713"}
     assert restores == [] and not d.stopping
 
 
 def test_cut_needs_the_signed_auto_permission(env):
     d, cuts, _, _ = env
-    assert cut(d) == {"ok": False, "refused": "no_permission"}
+    assert cut(d) == {"ok": False, "refused": "no_permission", "code": "Z715"}
     assert signed(d, "auto_set", state="on")["ok"]
     assert cut(d)["ok"] is True
     assert cuts.calls == [("egress", "ws")]  # the method comes from the daemon's own config
     assert signed(d, "auto_set", state="off")["ok"]
-    assert cut(d) == {"ok": False, "refused": "auto_off"}
+    assert cut(d) == {"ok": False, "refused": "auto_off", "code": "Z715"}
 
 
 @pytest.mark.parametrize("over,why", [
@@ -135,7 +135,7 @@ def test_cut_facts_are_checked_by_the_daemon(env, over, why):
 def test_requester_cannot_choose_method_or_target(env, extra):
     d, cuts, _, _ = env
     signed(d, "auto_set", state="on")
-    assert cut(d, **extra) == {"ok": False, "error": "malformed"}
+    assert cut(d, **extra) == {"ok": False, "error": "malformed", "code": "Z711"}
     assert cuts.calls == []
 
 
@@ -163,7 +163,7 @@ def test_signed_restore_maps_scope(env):
 
 def test_restore_of_unknown_asset_is_not_even_issued(env):
     d, _, _, _ = env
-    assert req(d, OTHER, op="challenge", admin_op="restore",
+    assert req(d, WATCH, op="challenge", admin_op="restore",
                args={"asset_id": "nope", "scope": "recorded"})["refused"] == "unknown_asset"
 
 
@@ -180,23 +180,23 @@ def test_failed_restore_is_reported_and_daemon_keeps_serving(env):
 
 def test_old_auto_on_signature_cannot_approve_a_newer_config(env, tmp_path):
     d, cuts, _, _ = env
-    ch = req(d, OTHER, op="challenge", admin_op="auto_set", args={"state": "on"})
+    ch = req(d, WATCH, op="challenge", admin_op="auto_set", args={"state": "on"})
     assert len(ch["payload"]["args"]["config_sha256"]) == 64  # bound by the daemon
     new = tmp_path / "full.toml"
     new.write_text(CFG.replace('"egress"', '"full"'))
     assert signed(d, "config_set", path=str(new), sha256=hashlib.sha256(new.read_bytes()).hexdigest())["ok"]
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
-    r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
+    r = req(d, WATCH, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
     assert r["ok"] is False and "config_sha256" in r["detail"]
     assert cut(d)["refused"] == "auto_off" and cuts.calls == []
 
 
 def test_old_restore_signature_cannot_undo_a_newer_cut(env):
     d, cuts, restores, _ = env
-    ch = req(d, OTHER, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
+    ch = req(d, WATCH, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
     d.cut_state.record_cut(asset_id="ws", method="egress", platform=sys.platform, modified=["x"])
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
-    r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
+    r = req(d, WATCH, op="submit", payload=ch["payload"], entered=ch["code"], key_id="k1", signature=sig)
     assert r["ok"] is False and "ledger_sha256" in r["detail"] and restores == []
 
 
@@ -204,26 +204,26 @@ def test_bound_fields_cannot_be_supplied_by_the_requester(env):
     d, _, _, _ = env
     for op, args in (("auto_set", {"state": "on", "config_sha256": "0" * 64}), ("stop", {"gen": "0"}),
                      ("restore", {"asset_id": "ws", "scope": "all", "ledger_sha256": "absent"})):
-        assert req(d, OTHER, op="challenge", admin_op=op, args=args)["refused"] == "bad_args"
+        assert req(d, WATCH, op="challenge", admin_op=op, args=args)["refused"] == "bad_args"
 
 
 def test_old_auto_on_signature_cannot_undo_a_newer_off(env):
     """Codex 2: hold an 'on' signature, let a newer 'off' apply, then replay the old 'on'."""
     d, cuts, _, _ = env
-    old = req(d, OTHER, op="challenge", admin_op="auto_set", args={"state": "on"})
+    old = req(d, WATCH, op="challenge", admin_op="auto_set", args={"state": "on"})
     assert signed(d, "auto_set", state="off")["ok"]
     sig = base64.b64encode(sign("s1", old["payload"], old["code"])).decode()
-    r = req(d, OTHER, op="submit", payload=old["payload"], entered=old["code"], key_id="k1", signature=sig)
+    r = req(d, WATCH, op="submit", payload=old["payload"], entered=old["code"], key_id="k1", signature=sig)
     assert r["ok"] is False and "gen" in r["detail"]
     assert cut(d)["refused"] == "auto_off" and cuts.calls == []
 
 
 def test_old_tamper_off_cannot_undo_a_newer_on(env):
     d, _, _, _ = env
-    old = req(d, OTHER, op="challenge", admin_op="tamper_set", args={"action": "off"})
+    old = req(d, WATCH, op="challenge", admin_op="tamper_set", args={"action": "off"})
     assert signed(d, "tamper_set", action="full")["ok"]
     sig = base64.b64encode(sign("s1", old["payload"], old["code"])).decode()
-    assert req(d, OTHER, op="submit", payload=old["payload"], entered=old["code"],
+    assert req(d, WATCH, op="submit", payload=old["payload"], entered=old["code"],
                key_id="k1", signature=sig)["ok"] is False
     assert d.tamper_action() == "full"
 
@@ -286,31 +286,31 @@ def test_bad_signature_and_unknown_key(env):
 
 def test_signature_is_single_use(env):
     d, _, restores, _ = env
-    ch = req(d, OTHER, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
+    ch = req(d, WATCH, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
     sub = {"op": "submit", "payload": ch["payload"], "entered": ch["code"], "key_id": "k1",
            "signature": base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()}
-    assert req(d, OTHER, **sub)["ok"]
-    assert req(d, OTHER, **sub)["refused"] == "unknown_request"
+    assert req(d, WATCH, **sub)["ok"]
+    assert req(d, WATCH, **sub)["refused"] == "unknown_request"
     assert len(restores) == 1
 
 
 def test_signed_payload_is_bound_to_the_daemon(env, tmp_path):
     """An egress approval signature (same key, same digest function) can't be used here."""
     d, _, restores, _ = env
-    ch = req(d, OTHER, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
+    ch = req(d, WATCH, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
     assert ch["payload"]["aud"] == "zee-cutd-admin-v1"
     eg = Engine(tmp_path / "eg", HmacVerifier())
     eg.bootstrap_key("k1", "s1")
     ereq = eg.request_config("allow_add", dest="1.2.3.4")
     sig = base64.b64encode(sign("s1", ereq.payload, ereq.code)).decode()
-    r = req(d, OTHER, op="submit", payload=ereq.payload, entered=ereq.code, key_id="k1", signature=sig)
+    r = req(d, WATCH, op="submit", payload=ereq.payload, entered=ereq.code, key_id="k1", signature=sig)
     assert r["refused"] == "unknown_request" and restores == []
 
 
 def test_pending_challenges_are_capped(env):
     d, _, _, _ = env
     for _ in range(50):
-        req(d, OTHER, op="challenge", admin_op="stop", args={})
+        req(d, WATCH, op="challenge", admin_op="stop", args={})
     assert len(d.engine.pending) <= 16
 
 
@@ -360,7 +360,7 @@ def test_config_set_rejects_invalid_config_and_keeps_the_old(env, tmp_path):
 
 def test_config_set_relative_path_not_issued(env):
     d, _, _, _ = env
-    r = req(d, OTHER, op="challenge", admin_op="config_set", args={"path": "x.toml", "sha256": "0" * 64})
+    r = req(d, WATCH, op="challenge", admin_op="config_set", args={"path": "x.toml", "sha256": "0" * 64})
     assert r["refused"] == "path_not_absolute"
 
 
@@ -476,7 +476,7 @@ def test_serve_end_to_end(tmp_path):
         time.sleep(0.02)
     assert oct(sock.stat().st_mode & 0o777) == "0o600"
     assert call(sock, {"op": "status"})["ok"]
-    assert privsep_cut(sock)(CutRequest("ws", "change", "high")) == (False, "cut daemon: no_permission")
+    assert privsep_cut(sock)(CutRequest("ws", "change", "high")) == (False, "cut daemon: no_permission (Z715)")
     d.engine.state["keys"]["k1"] = "s1"
     ch = call(sock, {"op": "challenge", "admin_op": "stop", "args": {}})
     sig = base64.b64encode(sign("s1", ch["payload"], ch["code"])).decode()
@@ -498,11 +498,11 @@ def test_real_p256_admin_signature(env, tmp_path):
     subprocess.run(["openssl", "ec", "-in", str(k), "-pubout", "-out", str(pub)], check=True, capture_output=True)
     assert signed(d, "key_add", key_id="p256", public_key=pub.read_text())["ok"]
     d.engine.verifier = OpensslVerifier()
-    ch = req(d, OTHER, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
+    ch = req(d, WATCH, op="challenge", admin_op="restore", args={"asset_id": "ws", "scope": "recorded"})
     (tmp_path / "d.bin").write_bytes(payload_digest({**ch["payload"], "entered": ch["code"]}))
     der = subprocess.run(["openssl", "pkeyutl", "-sign", "-inkey", str(k), "-in", str(tmp_path / "d.bin")],
                          check=True, capture_output=True).stdout
-    r = req(d, OTHER, op="submit", payload=ch["payload"], entered=ch["code"], key_id="p256",
+    r = req(d, WATCH, op="submit", payload=ch["payload"], entered=ch["code"], key_id="p256",
             signature=base64.b64encode(der).decode())
     assert r["ok"] and restores == [("ws", False)]
 
@@ -544,3 +544,83 @@ def test_slow_and_excess_connections_cannot_block_the_daemon(tmp_path, monkeypat
         assert b"malformed" in c.recv(200)
     assert time.monotonic() - t0 < 2
     assert call(sock, {"op": "status"})["ok"]  # slots were released
+
+
+# ---- 4-persona review (2026-10-16)
+def test_status_does_not_wait_behind_a_slow_cut(env):
+    d, _, _, _ = env
+    with d.lock:  # a cut / restore in progress
+        r = []
+        t = threading.Thread(target=lambda: r.append(req(d, op="status")))
+        t.start()
+        t.join(2)
+        assert r and r[0]["ok"] is True
+
+
+def test_failed_operation_has_its_own_code(env):
+    d, _, _, _ = env
+    d.restore_fn = lambda *a, **k: (False, "Z601 x")
+    r = signed(d, "restore", asset_id="ws", scope="recorded")
+    assert r["ok"] is False and r["code"] == "Z718"
+
+
+def test_socket_directory_must_not_be_writable_by_others(tmp_path):
+    from zee.privsep.daemon import CutDaemon, serve
+    state = tmp_path / "cutd"
+    state.mkdir(mode=0o700)
+    d = CutDaemon(state, {os.geteuid()}, verifier=HmacVerifier())
+    loose = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    os.chmod(loose, 0o777)
+    with pytest.raises(ValueError, match="not group/other-writable"):
+        serve(d, loose / "s")
+    real = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp"))
+    link = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "l"
+    link.symlink_to(real)
+    with pytest.raises(ValueError):
+        serve(d, link / "s")
+
+
+def test_cli_without_daemon_gives_z710_not_a_traceback(tmp_path, capsys):
+    from zee.cli import main
+    sock = Path(tempfile.mkdtemp(prefix="zt", dir="/tmp")) / "none"
+    assert main(["privsep", "status", "--socket", str(sock)]) == 1
+    assert "Z710" in capsys.readouterr().err
+    assert main(["privsep", "submit", "--socket", str(sock), "--request", str(tmp_path / "missing.json"),
+                 "--entered", "00", "--key-id", "k", "--signature", str(tmp_path / "s")]) == 1
+    assert "Z719" in capsys.readouterr().err
+
+
+def test_digest_shows_the_request_and_needs_yes(tmp_path, monkeypatch, capsys):
+    import io
+    from zee.cli import main
+    reqf, out = tmp_path / "req.json", tmp_path / "d.bin"
+    reqf.write_text(json.dumps({"payload": {"aud": "zee-cutd-admin-v1", "host": "h", "op": "restore",
+                                            "args": {"asset_id": "ws", "scope": "all"}, "exp": 2000000000}}))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("y\n"))
+    assert main(["privsep", "digest", "--request", str(reqf), "--entered", "12", "--out", str(out)]) == 1
+    err = capsys.readouterr().err
+    assert "restore" in err and '"scope": "all"' in err and not out.exists()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("yes\n"))
+    assert main(["privsep", "digest", "--request", str(reqf), "--entered", "12", "--out", str(out)]) == 0
+    assert len(out.read_bytes()) == 32
+
+
+def test_heartbeat_announces_loss_and_return_once_each(monkeypatch):
+    from zee import cli
+    answers = [OSError("refused"), OSError("refused"), {"ok": True}, {"ok": True}, OSError("x")]
+    notes, hooks, done = [], [], threading.Event()
+
+    def call(sock, req, timeout):
+        if not answers:
+            done.set()
+            time.sleep(10)
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+    cli._start_privsep_heartbeat(Path("/nonexistent"), call, lambda t, p: hooks.append(t), every=0,
+                                 notify=lambda t, b: notes.append(t))
+    assert done.wait(5)
+    assert notes == ["Zee cut daemon UNREACHABLE (Z710)", "Zee cut daemon reachable again",
+                     "Zee cut daemon UNREACHABLE (Z710)"]
+    assert hooks == notes

@@ -7,7 +7,7 @@ Code ranges:
     Z4xx — responder (containment)
     Z5xx — notifier
     Z6xx — recovery
-    Z7xx — containment report export
+    Z7xx — containment report export (Z71x: privsep cut daemon, docs/design/privsep.md)
     Z10xx — incident report bundling (police/PPC handoff documents)
     Z8xx — decoy PII dilution (value-dilution dummy records)
     Z9xx — unexpected internal errors
@@ -52,6 +52,18 @@ Z605_RESTORE_NO_CUT_RECORD = ("Z605", "遮断記録が無いため通常の復�
 # Z7xx
 Z701_EXPORT_OUTPUT_NOT_WRITABLE = ("Z701", "エクスポート出力先に書き込めません")
 Z702_INVALID_TIME_RANGE = ("Z702", "--since / --until の日時形式が不正、または since が until より後です")
+
+# Z71x — privsep cut daemon (zee privsep ...)
+Z710_CUTD_UNREACHABLE = ("Z710", "遮断部（zee privsep daemon）に接続できません。macOS は `sudo launchctl print system/io.github.kamanoi.zee-cutd`、Linux は `systemctl status zee-cutd` で動いているか確認してください")
+Z711_CUTD_MALFORMED = ("Z711", "遮断部への要求の形が正しくありません")
+Z712_CUTD_PEER_NOT_ALLOWED = ("Z712", "このユーザーは遮断部への要求を許可されていません（--allow-uid に無い uid、または root 専用の操作）")
+Z713_CUTD_UNKNOWN_OP = ("Z713", "遮断部が受け付けない要求です（復旧・設定変更・停止は署名付きの challenge／submit だけ）")
+Z714_CUTD_SIGNATURE_REFUSED = ("Z714", "署名付きの要求が拒否されました（期限切れ・照合コード違い・署名不正・再送・未登録の鍵など。新しい challenge からやり直してください）")
+Z715_CUTD_POLICY_REFUSED = ("Z715", "遮断部の方針または引数の検査で拒否されました（自動遮断が OFF・dry_run・未知の資産など）")
+Z716_CUTD_INTERNAL = ("Z716", "遮断部の内部エラー、または遮断・復旧の処理がエラーを返しました（詳細は返答の error）")
+Z717_CUTD_RATE_LIMITED = ("Z717", "署名請求の頻度の上限（1分に10件）を超えました。少し待ってからやり直してください")
+Z718_CUTD_OPERATION_FAILED = ("Z718", "署名は受け付けられましたが、操作そのものが失敗しました（詳細は返答の detail）")
+Z719_PRIVSEP_REQUEST_FILE = ("Z719", "--request／--signature／--public-key のファイルが無い・読めない・形が正しくありません")
 
 # Z10xx
 Z1001_UNKNOWN_RECIPIENT = ("Z1001", "--recipient は police / ppc のいずれかを指定してください")

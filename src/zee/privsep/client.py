@@ -35,8 +35,9 @@ def privsep_cut(socket_path: Path):
             r = call(socket_path, {"op": "cut", "asset_id": req.asset_id,
                                    "op_class": req.op_class, "confidence": req.confidence})
         except (OSError, ValueError) as e:
-            return False, f"cut daemon unreachable ({e}); nothing was cut by Zee"
+            return False, f"Z710 cut daemon unreachable ({e}); nothing was cut by Zee"
         if r.get("ok") is True:
             return True, f"cut daemon: {r.get('detail', '')}"
-        return False, f"cut daemon: {r.get('refused') or r.get('error') or r.get('detail')}"
+        return False, (f"cut daemon: {r.get('refused') or r.get('error') or r.get('detail')}"
+                       f" ({r.get('code', '-')})")
     return cut

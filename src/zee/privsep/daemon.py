@@ -51,7 +51,8 @@ AUD = "zee-cutd-admin-v1"  # in every signed admin payload: never mistaken for a
 TAMPER_ASSET = "zee-tamper"  # ledger id of a cut made by the tamper response
 MAX_LINE = 16 * 1024
 MAX_CONFIG = 256 * 1024
-MAX_PENDING = 16
+PENDING_PER_UID = 4  # unanswered admin requests per uid (only allowed uids and root may ask)
+CHALLENGES_PER_MIN = 10
 CONN_SLOTS = 16  # concurrent connections per pool (allowed uids / everyone else)
 READ_DEADLINE = 5.0  # seconds for the whole request line
 _ASSET_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -98,6 +99,27 @@ def file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+# Reply codes (src/zee/errors.py Z71x; docs/maintenance/privsep_install.md lists them).
+def reply_code(reply: dict) -> str:
+    err, refused = reply.get("error"), reply.get("refused")
+    if err == "malformed":
+        return "Z711"
+    if err in ("peer_not_allowed", "root_only", "peer_unknown"):
+        return "Z712"
+    if err == "unknown_op":
+        return "Z713"
+    if refused in ("unknown_request", "expired", "payload_mismatch", "code_mismatch", "unknown_key",
+                   "replay", "bad_signature", "would_leave_one_key", "malformed"):
+        return "Z714"
+    if refused == "rate_limited":
+        return "Z717"
+    if refused is not None:
+        return "Z715"  # cut or request refused by the daemon's policy / argument checks
+    if err is not None:
+        return "Z716"  # internal error or a ZeeError from the cut / restore code
+    return "Z718"  # the signature was accepted but the operation itself failed (see detail)
+
+
 def peer_uid(sock: socket.socket) -> int:
     """Effective uid of the connected peer, as recorded by the kernel at connect().
 
@@ -135,8 +157,6 @@ class AdminEngine(Engine):
         super().__init__(state_dir, verifier, **kw)
 
     def _new_request(self, kind: str, body: dict, ttl: Optional[float] = None):
-        while len(self.pending) >= MAX_PENDING:  # any connecting peer can ask for challenges
-            self.pending.pop(next(iter(self.pending)))
         return super()._new_request(kind, {"aud": AUD, "host": socket.gethostname(), **body}, ttl)
 
     def _apply(self, req, key_id: str) -> list[str]:
@@ -176,6 +196,8 @@ class CutDaemon:
         self.last_seen: Optional[float] = None
         self.findings: list[str] = []
         self._strikes = 0
+        self._asked: dict[int, list[float]] = {}  # uid -> challenge times (last minute)
+        self._owner: dict[str, int] = {}  # pending request id -> uid that asked for it
         self._tamper_acted = False
 
     # ---- files the daemon owns (all inside its 0700 state directory)
@@ -224,6 +246,12 @@ class CutDaemon:
 
     # ---- one request line -> one reply (the whole trust boundary)
     def handle_line(self, line: bytes, uid: int) -> dict:
+        reply = self._handle(line, uid)
+        if reply.get("ok") is not True:
+            reply["code"] = reply_code(reply)
+        return reply
+
+    def _handle(self, line: bytes, uid: int) -> dict:
         try:
             req = json.loads(line)
         except (ValueError, RecursionError):
@@ -231,24 +259,30 @@ class CutDaemon:
         if not isinstance(req, dict) or not isinstance(req.get("op"), str):
             return {"ok": False, "error": "malformed"}
         op = req["op"]
-        with self.lock:
-            try:
-                if op in ("cut", "status"):
-                    if uid not in self.allow and uid != 0:
-                        return {"ok": False, "error": "peer_not_allowed"}
-                    return self._cut(req) if op == "cut" else self._status(uid)
+        if op == "bootstrap_key":
+            if uid != 0:
+                return {"ok": False, "error": "root_only"}
+        elif op in ("cut", "status", "challenge", "submit"):
+            if uid not in self.allow and uid != 0:
+                return {"ok": False, "error": "peer_not_allowed"}
+        else:
+            return {"ok": False, "error": "unknown_op"}
+        try:
+            if op == "status":  # never waits behind a slow cut / restore (files are replaced atomically)
+                return self._status(uid)
+            with self.lock:
+                if op == "cut":
+                    return self._cut(req)
                 if op == "challenge":
-                    return self._challenge(req)
+                    return self._challenge(req, uid)
                 if op == "submit":
                     return self._submit(req)
-                if op == "bootstrap_key":
-                    return self._bootstrap(req, uid)
-                return {"ok": False, "error": "unknown_op"}
-            except ZeeError as e:
-                return {"ok": False, "error": str(e)}
-            except Exception as e:  # noqa: BLE001 - a bad request must never kill the daemon
-                logger.exception("cutd: request failed")
-                return {"ok": False, "error": f"internal: {type(e).__name__}"}
+                return self._bootstrap(req, uid)
+        except ZeeError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:  # noqa: BLE001 - a bad request must never kill the daemon
+            logger.exception("cutd: request failed")
+            return {"ok": False, "error": f"internal: {type(e).__name__}"}
 
     def _cut(self, req: dict) -> dict:
         if set(req) != {"op", "asset_id", "op_class", "confidence"} or not all(
@@ -291,7 +325,7 @@ class CutDaemon:
                 "unresolved": unresolved, "keys": len(self.engine.state["keys"]),
                 "watch_seen_s_ago": None if self.last_seen is None else round(self.clock() - self.last_seen)}
 
-    def _challenge(self, req: dict) -> dict:
+    def _challenge(self, req: dict, uid: int) -> dict:
         args = req.get("args", {})
         if set(req) - {"op", "admin_op", "args"} or not isinstance(req.get("admin_op"), str) \
                 or not isinstance(args, dict):
@@ -300,10 +334,20 @@ class CutDaemon:
         if why:
             return {"ok": False, "refused": why}
         args = {**args, **self.bindings(req["admin_op"])}
+        now = self.clock()
+        recent = [t for t in self._asked.get(uid, []) if t > now - 60]
+        if len(recent) >= CHALLENGES_PER_MIN:  # bounds root's disk use (admin.jsonl) too
+            return {"ok": False, "refused": "rate_limited"}
+        self._asked[uid] = recent + [now]
+        mine = [r for r, u in self._owner.items() if u == uid and r in self.engine.pending]
+        self._owner = {r: u for r, u in self._owner.items() if r in self.engine.pending}
+        while len(mine) >= PENDING_PER_UID:  # a uid only ever displaces its own requests
+            self.engine.pending.pop(mine.pop(0), None)
         try:
             r = self.engine.request_config(req["admin_op"], **args)
         except (ValueError, PermissionError, TypeError) as e:
             return {"ok": False, "refused": f"bad_request: {e}"}
+        self._owner[r.id] = uid
         return {"ok": True, "payload": r.payload, "code": r.code}
 
     def _check_args(self, op: str, args: dict) -> Optional[str]:
@@ -338,8 +382,6 @@ class CutDaemon:
         return {"ok": ok, "detail": detail}
 
     def _bootstrap(self, req: dict, uid: int) -> dict:
-        if uid != 0:
-            return {"ok": False, "error": "root_only"}
         if set(req) != {"op", "key_id", "public_key"} or not all(
                 type(req[k]) is str and req[k] for k in ("key_id", "public_key")):
             return {"ok": False, "error": "malformed"}
@@ -491,6 +533,11 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
     if not socket_path.parent.exists():  # e.g. /var/run/zee on macOS (systemd's RuntimeDirectory on Linux)
         socket_path.parent.mkdir(parents=True)
         os.chmod(socket_path.parent, 0o755)  # the daemon's umask (077) would make it untraversable
+    st = os.lstat(socket_path.parent)  # whoever can write here could swap the socket for their own
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid() \
+            or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise ValueError(f"socket directory must be a real directory owned by uid {os.geteuid()} "
+                         f"and not group/other-writable: {socket_path.parent}")
     if socket_path.is_symlink():
         raise ValueError(f"symlink refused: {socket_path}")
     if socket_path.exists():
@@ -507,11 +554,11 @@ def serve(daemon: CutDaemon, socket_path: Path, *, group: Optional[int] = None,
         def handle(self) -> None:
             uid = self.server.peer_of[id(self.request)][0]
             if uid is None:
-                self.request.sendall(b'{"ok": false, "error": "peer_unknown"}\n')
+                self.request.sendall(b'{"ok": false, "error": "peer_unknown", "code": "Z712"}\n')
                 return
             line = _read_line(self.request)
             if line is None:
-                reply = {"ok": False, "error": "malformed"}
+                reply = {"ok": False, "error": "malformed", "code": "Z711"}
             else:
                 reply = daemon.handle_line(line, uid)
             self.request.sendall(json.dumps(reply).encode() + b"\n")

@@ -10,6 +10,7 @@ import argparse
 import logging
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -78,7 +79,7 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     if config.privsep_socket:  # opt-in: cuts go to the root cut daemon (docs/design/privsep.md)
         from .privsep.client import call, privsep_cut as make_privsep_cut
         privsep_cut = make_privsep_cut(Path(config.privsep_socket))
-        _start_privsep_heartbeat(Path(config.privsep_socket), call)
+        _start_privsep_heartbeat(Path(config.privsep_socket), call, webhook_from_env())
     log_dir = event_log.log_dir
     sender = webhook_from_env()
     try:
@@ -157,23 +158,46 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     return 0
 
 
-def _start_privsep_heartbeat(sock: Path, call, every: float = 30) -> None:
-    """status every 30 s: the daemon's evidence that this watch is alive. A daemon
-    that does not answer is reported every time, never shown as protected."""
-    import threading
+def _start_privsep_heartbeat(sock: Path, call, sender=None, every: float = 30,
+                             notify=None) -> threading.Thread:
+    """status every 30 s: the daemon's evidence that this watch is alive.
+
+    Losing the daemon is announced once (local notification + webhook) when it
+    becomes unreachable, and once when it is back; stderr gets every failure."""
+    from .notifier.local import notify_local
+    notify = notify or notify_local
+
+    def announce(title: str, body: str) -> None:
+        notify(title, body)
+        if sender is not None:
+            try:
+                sender(title, {"event": "privsep_daemon", "detail": body})
+            except Exception:  # noqa: BLE001 - an alert path must never stop the heartbeat
+                pass
 
     def loop() -> None:
+        up = None  # unknown until the first answer
         while True:
             try:
-                r = call(sock, {"op": "status"}, timeout=10)
-                if r.get("ok") is not True or r.get("findings"):
+                r = call(sock, {"op": "status"}, timeout=30)
+                ok = r.get("ok") is True
+                if not ok or r.get("findings"):
                     print(f"[zee watch] cut daemon reports: {r}", file=sys.stderr, flush=True)
             except (OSError, ValueError) as e:
+                ok, r = False, {"error": str(e)}
                 print(f"[zee watch] cut daemon UNREACHABLE ({e}): automatic cuts will fail",
                       file=sys.stderr, flush=True)
+            if not ok and up is not False:
+                announce("Zee cut daemon UNREACHABLE (Z710)",
+                         f"automatic cuts will FAIL until it answers again: {r}")
+            elif ok and up is False:
+                announce("Zee cut daemon reachable again", "automatic cuts go to the daemon again")
+            up = ok
             time.sleep(every)
 
-    threading.Thread(target=loop, name="zee-privsep-heartbeat", daemon=True).start()
+    t = threading.Thread(target=loop, name="zee-privsep-heartbeat", daemon=True)
+    t.start()
+    return t
 
 
 def _cmd_restore(args: argparse.Namespace) -> int:

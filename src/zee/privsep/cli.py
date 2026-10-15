@@ -8,15 +8,44 @@ import os
 import sys
 from pathlib import Path
 
+from .. import errors
 from ..egress.signing import payload_digest
-from .client import DEFAULT_SOCKET, call
+from ..errors import ZeeError, Z710_CUTD_UNREACHABLE, Z719_PRIVSEP_REQUEST_FILE
+from .client import DEFAULT_SOCKET, call as _raw_call
 
 DEFAULT_STATE = Path("/Library/Application Support/Zee/cutd" if sys.platform == "darwin"
                      else "/var/lib/zee-cutd")
 
 
+_MEANING = {v[0]: v[1] for k, v in vars(errors).items() if k.startswith("Z71")}
+
+
+def call(sock: Path, req: dict) -> dict:
+    try:
+        return _raw_call(sock, req)
+    except (OSError, ValueError) as e:  # no daemon, refused, no permission, garbled reply
+        raise ZeeError(Z710_CUTD_UNREACHABLE, f"{sock}: {e}") from e
+
+
+def _read(path: Path, kind: str = "text"):
+    try:
+        if kind == "bytes":
+            return path.read_bytes()
+        if kind == "json":
+            raw = json.loads(path.read_text())
+            raw = raw["payload"] if isinstance(raw, dict) and "payload" in raw else raw
+            if not isinstance(raw, dict):
+                raise ValueError("not a JSON object")
+            return raw
+        return path.read_text()
+    except (OSError, ValueError, UnicodeDecodeError) as e:
+        raise ZeeError(Z719_PRIVSEP_REQUEST_FILE, f"{path}: {e}") from e
+
+
 def _print(reply: dict) -> int:
     print(json.dumps(reply, ensure_ascii=False, indent=1))
+    if reply.get("ok") is not True and reply.get("code") in _MEANING:
+        print(f"error: [{reply['code']}] {_MEANING[reply['code']]}", file=sys.stderr)
     return 0 if reply.get("ok") is True else 1
 
 
@@ -54,24 +83,38 @@ def _challenge(a: argparse.Namespace) -> int:
 
 
 def _load_payload(path: Path) -> dict:
-    raw = json.loads(path.read_text())
-    return raw["payload"] if isinstance(raw, dict) and "payload" in raw else raw
+    return _read(path, "json")
 
 
 def _digest(a: argparse.Namespace) -> int:
-    a.out.write_bytes(payload_digest({**_load_payload(a.request), "entered": a.entered}))
+    """Shows what is being approved and asks for "yes" before writing the digest to sign."""
+    p = _load_payload(a.request)
+    print("You are about to approve this request to the Zee cut daemon:", file=sys.stderr)
+    for k in ("aud", "host", "op", "args", "exp"):
+        v = p.get(k)
+        if k == "exp" and isinstance(v, int):
+            import datetime
+            v = f"{v} ({datetime.datetime.fromtimestamp(v).isoformat(timespec='seconds')})"
+        print(f"  {k:5}: {json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v}", file=sys.stderr)
+    if p.get("aud") != "zee-cutd-admin-v1":
+        print("  WARNING: this is not a cut daemon admin request", file=sys.stderr)
+    print('Type "yes" to approve: ', end="", file=sys.stderr, flush=True)
+    if sys.stdin.readline().strip() != "yes":
+        print("not approved; nothing written", file=sys.stderr)
+        return 1
+    a.out.write_bytes(payload_digest({**p, "entered": a.entered}))
     return 0
 
 
 def _submit(a: argparse.Namespace) -> int:
     return _print(call(a.socket, {
         "op": "submit", "payload": _load_payload(a.request), "entered": a.entered,
-        "key_id": a.key_id, "signature": base64.b64encode(a.signature.read_bytes()).decode()}))
+        "key_id": a.key_id, "signature": base64.b64encode(_read(a.signature, "bytes")).decode()}))
 
 
 def _bootstrap(a: argparse.Namespace) -> int:
     return _print(call(a.socket, {"op": "bootstrap_key", "key_id": a.key_id,
-                                  "public_key": a.public_key.read_text()}))
+                                  "public_key": _read(a.public_key)}))
 
 
 def add_parser(sub) -> None:
