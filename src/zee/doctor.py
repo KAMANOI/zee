@@ -34,8 +34,8 @@ def _ps_lines() -> Optional[list[str]]:
         return None
     try:
         out = subprocess.run(["ps", "-A", "-o", "args="], capture_output=True,
-                             text=True, timeout=5, check=True).stdout
-    except (OSError, subprocess.SubprocessError):
+                             text=True, errors="replace", timeout=5, check=True).stdout
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
     return out.splitlines()
 
@@ -173,8 +173,11 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         say("FAIL", "restore token", f"{tok} cannot be checked: {e}",
             f"check the owner and permissions of {tok.parent}")
     else:
+        if not stat.S_ISREG(st.st_mode):
+            say("FAIL", "restore token", f"{tok} is not a regular file; `zee restore` cannot read it",
+                "move it aside, then zee init-restore-token")
         # same bits load_token() refuses on
-        if posix and stat.S_IMODE(st.st_mode) & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH):
+        elif posix and stat.S_IMODE(st.st_mode) & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH):
             say("FAIL", "restore token", f"{tok} is readable/writable by other users "
                 f"(mode {stat.S_IMODE(st.st_mode):o}); `zee restore` refuses it",
                 f"chmod 600 {tok}")
@@ -183,9 +186,10 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                 (" (owner-only)" if posix else " (Windows: ACL not checked)"))
 
     # --- state directory --------------------------------------------------
-    log_dir = default_log_dir()
+    log_dir = Path("~/.zee")  # placeholder for messages if discovery itself fails
     lst, err = None, None
     try:
+        log_dir = default_log_dir()
         lst = _stat(log_dir)
     except OSError as e:
         err = e

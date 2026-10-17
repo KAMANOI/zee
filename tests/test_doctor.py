@@ -228,3 +228,19 @@ def test_output_survives_a_narrow_encoding(home):
     rc = doctor.run(home / "missing.toml", ps=lambda: ["\u732b zee watch"], out=out)
     out.flush()
     assert rc == 1 and b"-> next" in raw.getvalue()
+
+
+# --- Codex review 3 regressions -------------------------------------------
+
+def test_token_directory_is_not_ok(home):
+    (home / ".zee" / "restore_token").mkdir(parents=True)
+    rc, out = _run(home / "missing.toml")
+    assert "[FAIL] restore token" in out and "not a regular file" in out
+
+
+def test_state_dir_discovery_error_is_reported(home, monkeypatch):
+    def boom():
+        raise PermissionError("denied")
+    monkeypatch.setattr(doctor, "default_log_dir", boom)
+    rc, out = _run(home / "missing.toml")
+    assert "[FAIL] state dir" in out and "summary:" in out
