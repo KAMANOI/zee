@@ -97,9 +97,10 @@ Strongly recommended order for the first run:
    1. Open [https://canarytokens.org/](https://canarytokens.org/), choose "DNS / HTTP canary", and generate a token.
    2. Set the generated URL as an environment variable: `export ZEE_CANARY_BASE_URL="https://canarytokens.org/..."`
    3. Start `zee watch` with this variable set. The seeder will embed the canary URL into decoy content; when an attacker dereferences it, Canarytokens.org notifies you (out-of-band — never re-enters Zee's local responder).
-4. Leave `response_mode: notify` (no cut, no would-have-cut path).
-5. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
-6. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
+4. Run `zee doctor` to check the config, decoys, restore token and whether watch is running (read-only; versions after v0.14.0 only). `[FAIL]` / `[WARN]` lines come with a next step.
+5. Leave `response_mode: notify` (no cut, no would-have-cut path).
+6. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
+7. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
 
 **Jumping straight to `auto` is not recommended.** Zee is a layer that loses trust the moment it ensnares your own work. Promoting only after observing zero false positives is the precondition for using Zee long-term.
 

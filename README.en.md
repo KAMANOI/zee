@@ -152,6 +152,9 @@ export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 # 3. Generate a restore token once (required from v0.3)
 zee init-restore-token   # capture the printed token somewhere safe
 
+#    Check the setup so far (read-only, changes nothing; available after v0.14.0)
+zee doctor   # config, decoys, restore token, a running watch, cut privileges — with next steps
+
 # 4. Start monitoring (default dry_run — no real cut)
 zee watch -c ./assets.toml
 

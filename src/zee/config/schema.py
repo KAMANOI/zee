@@ -93,6 +93,21 @@ class Config:
         return None
 
 
+def duplicate_decoys(config: Config) -> list[tuple[str, str, str]]:
+    """(path, first_asset, other_asset) for decoys listed under two assets.
+
+    `zee watch` refuses to start on any; `zee doctor` reports them."""
+    seen: dict[str, str] = {}
+    dups: list[tuple[str, str, str]] = []
+    for asset in config.assets:
+        for raw in asset.decoy_paths:
+            key = str(Path(raw).expanduser())
+            if key in seen and seen[key] != asset.id:
+                dups.append((raw, seen[key], asset.id))
+            seen.setdefault(key, asset.id)
+    return dups
+
+
 def _parse_asset(raw: dict) -> AssetProfile:
     asset_id = raw["id"]
     asset_type = raw.get("type", "workstation")

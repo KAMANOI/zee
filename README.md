@@ -153,6 +153,9 @@ export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 # 3. 復旧トークンを 1 回だけ生成（v0.3 以降必須）
 zee init-restore-token   # 表示されたトークンを安全な場所に控える
 
+#    ここまでの状態を確かめる（読むだけ・何も書き換えない。v0.14.0 より後の版で使えます）
+zee doctor   # 設定・おとり・復旧トークン・監視の有無・遮断の権限を確かめ、足りない所に次の手順を表示
+
 # 4. 監視開始（既定は dry_run、実遮断なし）
 zee watch -c ./assets.toml
 

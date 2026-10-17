@@ -97,9 +97,10 @@ MVP は既定で **dry_run** で動きます。実遮断はせず、「もし遮
    1. [https://canarytokens.org/](https://canarytokens.org/) を開いて「DNS / HTTP canary」を選び、トークンを生成する
    2. 生成された URL を環境変数に設定する：`export ZEE_CANARY_BASE_URL="https://canarytokens.org/..."`
    3. この状態で `zee watch` を起動すると、seeder が囮ファイルに canary URL を自動埋め込みする。攻撃者がその URL を辿った瞬間に Canarytokens.org 経由で通知が届く（Zee 本体には戻らない）
-4. `response_mode: notify` のまま起動（最初は遮断系の挙動も dry_run も走らせない）
-5. 数日〜1 週間、自分の業務をいつも通りやってみる。誤検知（自分のバックアップツールや IDE が囮を踏むなど）が **ゼロ** であることを確認する
-6. 誤検知ゼロが確認できたら、資産ごとに `response_mode: staged` か `auto` に昇格する
+4. `zee doctor` で設定・おとり・復旧トークン・監視の有無を確かめる（読むだけ・v0.14.0 より後の版のみ）。`[FAIL]`/`[WARN]` の行には次の手順が出る
+5. `response_mode: notify` のまま起動（最初は遮断系の挙動も dry_run も走らせない）
+6. 数日〜1 週間、自分の業務をいつも通りやってみる。誤検知（自分のバックアップツールや IDE が囮を踏むなど）が **ゼロ** であることを確認する
+7. 誤検知ゼロが確認できたら、資産ごとに `response_mode: staged` か `auto` に昇格する
 
 「すぐ auto にする」は **おすすめしません**。Zee は自分の業務を巻き込んだ瞬間に信頼を失う層です。誤検知ゼロを観測してからの昇格が、Zee を長く使うための前提です。
 

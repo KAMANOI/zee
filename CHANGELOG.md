@@ -20,6 +20,19 @@ releases.
   an existing file or follows a link there (Z105), reports a missing or
   unwritable folder as Z106, and does not create decoys or the restore
   token (it prints those as next steps).
+- **`zee doctor`** — read-only self-check. Prints `[OK]` / `[WARN]` /
+  `[FAIL]` / `[INFO]` lines with a next step for: the config file (loads,
+  has assets, no decoy listed under two assets, not writable by others),
+  whether automatic cut is on, each decoy (present, or under a folder name
+  that is often cloud-synced such as `Documents` / `Desktop` / `OneDrive`),
+  the restore token (present, same permission rule `zee restore` applies),
+  the state directory, `ZEE_CANARY_BASE_URL` (https, or unset on macOS /
+  Windows), a process that looks like `zee watch` (process list on macOS /
+  Linux only — not proof it is healthy or uses this config), and, when
+  automatic cut is on, root or a present privsep socket. It never writes,
+  never reads the token's value, never contacts the privsep daemon and
+  never goes to the network (the version shown is the local one). Exit
+  code 1 if any line is `[FAIL]`.
 
 ## [0.14.0] — 2026-10-16
 

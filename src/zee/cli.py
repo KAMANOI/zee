@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import __version__
-from .config.schema import Config
+from .config.schema import Config, duplicate_decoys
 from .decoy.canary_token import CanaryTokenRegistry
 from .decoy.seeder import seed_all
 from .errors import (
@@ -59,19 +59,14 @@ def _cmd_watch(args: argparse.Namespace) -> int:
     # Detect decoy_paths registered to more than one asset. Same path
     # under multiple assets confuses watcher bookkeeping (duplicate FDs,
     # ambiguous reporting).
-    seen: dict[str, str] = {}
-    for asset in config.assets:
-        for raw in asset.decoy_paths:
-            key = str(Path(raw).expanduser())
-            if key in seen and seen[key] != asset.id:
-                print(
-                    f"[error] decoy_path {raw!r} appears under both "
-                    f"asset {seen[key]!r} and {asset.id!r}. Each decoy "
-                    f"must belong to exactly one asset.",
-                    file=sys.stderr,
-                )
-                return 1
-            seen[key] = asset.id
+    for raw, first, other in duplicate_decoys(config)[:1]:
+        print(
+            f"[error] decoy_path {raw!r} appears under both "
+            f"asset {first!r} and {other!r}. Each decoy "
+            f"must belong to exactly one asset.",
+            file=sys.stderr,
+        )
+        return 1
 
     event_log = EventLog()
     cut_state = CutStateLog()
@@ -554,6 +549,11 @@ def _cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from .doctor import run
+    return run(args.config)
+
+
 def _cmd_capability(args: argparse.Namespace) -> int:
     canary_url = os.environ.get("ZEE_CANARY_BASE_URL", "").strip()
     canary_configured = bool(canary_url)
@@ -799,6 +799,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="cut method override; defaults to the asset profile's cut_method",
     )
     p_cut.set_defaults(func=_cmd_cut)
+
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="read-only self-check: config, decoys, restore token, watch, privileges",
+    )
+    p_doctor.set_defaults(func=_cmd_doctor)
 
     p_status = sub.add_parser(
         "status",
