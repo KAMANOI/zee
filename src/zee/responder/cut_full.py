@@ -426,6 +426,95 @@ def _windows_states_via_netsh() -> Optional[dict[str, str]]:
     return states or None
 
 
+# Windows Firewall read-back that does not depend on the display language:
+# PowerShell cmdlets return objects, and enum members (Outbound, Block, True)
+# are not localized. Filtering happens inside PowerShell, so "no such rule" is
+# an empty list, never a localized error text. Both names are matched because
+# netsh may store the given name in Name or DisplayName.
+_WINFW_NAME = re.compile(r"^[A-Za-z0-9-]+$")
+_WINFW_SCRIPT = """
+$ErrorActionPreference = 'Stop'
+try {
+  $names = @(%s)
+  function Dump($store) {
+    $rules = @(Get-NetFirewallRule -PolicyStore $store | Where-Object { ($names -contains $_.Name) -or ($names -contains $_.DisplayName) })
+    foreach ($r in $rules) {
+      $af = $r | Get-NetFirewallAddressFilter -PolicyStore $store
+      $remote = $null
+      if ($af) { $remote = @($af.RemoteAddress | ForEach-Object { [string]$_ }) }
+      [pscustomobject]@{ name = [string]$r.Name; display = [string]$r.DisplayName; enabled = [string]$r.Enabled;
+        direction = [string]$r.Direction; action = [string]$r.Action; profile = [string]$r.Profile; remote = $remote }
+    }
+  }
+  $active = @(Dump 'ActiveStore')
+  $persistent = @(Dump 'PersistentStore')
+  $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore | ForEach-Object { [pscustomobject]@{ name = [string]$_.Name; enabled = [string]$_.Enabled } })
+  [ordered]@{ ok = $true; active = $active; persistent = $persistent; profiles = $profiles } | ConvertTo-Json -Depth 6 -Compress
+} catch {
+  [ordered]@{ ok = $false; error = [string]$_.Exception.Message } | ConvertTo-Json -Compress
+}
+"""
+_WINFW_RULE_KEYS = ("name", "display", "enabled", "direction", "action", "profile")
+
+
+def read_windows_firewall(names: list[str]) -> Optional[dict]:
+    """Zee's rules (by Name or DisplayName) in the ActiveStore (what is in
+    force) and the PersistentStore (where netsh creates them), plus the
+    ActiveStore profile states: {"active": [rule], "persistent": [rule],
+    "profiles": {"Domain": "True", ...}}; a rule is a dict with name, display,
+    enabled, direction, action, profile (strings) and remote (list or None).
+
+    An empty "active" list is a successful read of zero rules. None = could not
+    read (no PowerShell, the script failed, output not in the expected shape):
+    callers may then fall back to netsh, and must treat it as unverified."""
+    if sys.platform != "win32" or not names or not all(_WINFW_NAME.match(n) for n in names):
+        return None
+    exe = sbin_which("powershell") or sbin_which("pwsh")
+    if not exe:
+        return None
+    script = _WINFW_SCRIPT % ", ".join(f"'{n}'" for n in names)
+    try:
+        cp = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", script],
+                            capture_output=True, text=True, errors="replace", timeout=60)
+        if cp.returncode != 0:
+            return None
+        data = json.loads(cp.stdout.strip())
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("ok") is not True:
+        return None
+
+    def rules(key):
+        # PowerShell 5.1 prints a one-element array as a bare object and an
+        # empty one as null/[]: normalize, then check every field's type.
+        v = data.get(key)
+        v = [] if v is None else [v] if isinstance(v, dict) else v
+        if not isinstance(v, list):
+            raise ValueError(key)
+        for r in v:
+            if not isinstance(r, dict) or any(not isinstance(r.get(k), str) for k in _WINFW_RULE_KEYS):
+                raise ValueError(key)
+            rem = r.get("remote")
+            r["remote"] = [rem] if isinstance(rem, str) else rem
+            if r["remote"] is not None and not (isinstance(r["remote"], list)
+                                                and all(isinstance(x, str) for x in r["remote"])):
+                raise ValueError(key)
+        return v
+
+    try:
+        prof = data.get("profiles")
+        prof = [] if prof is None else [prof] if isinstance(prof, dict) else prof
+        profiles = {p["name"]: p["enabled"] for p in prof
+                    if isinstance(p, dict) and isinstance(p.get("name"), str) and isinstance(p.get("enabled"), str)}
+        return {"active": rules("active"), "persistent": rules("persistent"), "profiles": profiles}
+    except (ValueError, TypeError):
+        return None
+
+
+# Callers use this name (tests replace it); read_windows_firewall is the real one.
+windows_firewall_snapshot = read_windows_firewall
+
+
 def interface_states() -> Optional[dict[str, str]]:
     """Read back every interface / service and its state right now.
 

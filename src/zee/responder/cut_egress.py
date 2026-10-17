@@ -30,6 +30,7 @@ from .cut_full import (
     kernel_ipv6_absent,
     record_or_report,
     sbin_which,
+    windows_firewall_snapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
     rule is not there or not in force; "unverified" = tool absent, output
     unreadable or in an unexpected form."""
     checks: list[tuple[str, list[str], object]] = []
+    win_names: list[str] = []
     for m in modified:
         if m.startswith((PF_TOKEN_PREFIX, IPT_BACKEND_PREFIX)):
             continue  # notes for restore, not rules to read back
@@ -96,13 +98,25 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
             checks.append(("pf other com.apple anchors", ["pfctl", "-a", "com.apple", "-s", "Anchors"],
                            _pf_siblings_clear))
         else:  # Windows rule name
+            win_names.append(m)
+    missing: list[str] = []
+    unverified: list[str] = []
+    # PowerShell objects first (the same in every display language). netsh
+    # text, English only, is read only when PowerShell cannot be used at all:
+    # a clean PowerShell answer (rule absent, disabled, ...) is never
+    # overruled by netsh.
+    snapshot = windows_firewall_snapshot(win_names) if win_names else None
+    if snapshot is not None:
+        miss, unver = _windows_verdicts(snapshot, win_names)
+        missing += miss
+        unverified += unver
+    else:
+        for m in win_names:
             checks.append((m, ["netsh", "advfirewall", "firewall", "show", "rule", f"name={m}"],
                            _netsh_rule_check(m)))
     if any(cmd[0] == "netsh" for _l, cmd, _m in checks):
         # Last, so the Profiles of every rule above are already collected.
         checks.append(("firewall profiles", ["netsh", "advfirewall", "show", "allprofiles", "state"], None))
-    missing: list[str] = []
-    unverified: list[str] = []
     rule_profiles: set[str] = set()
     for label, cmd, must in checks:
         exe = sbin_which(cmd[0])
@@ -285,6 +299,72 @@ def _intervals(entries) -> Optional[set[tuple[int, int, int]]]:
         else:
             merged.append([v, a, b])
     return {(v, a, b) for v, a, b in merged}
+
+
+_WIN_PROFILES = ("Domain", "Private", "Public")
+
+
+def _windows_rule_state(rule: dict, want_action: str) -> str:
+    """One PowerShell rule object against what Zee set: "confirmed" |
+    "missing" (readable, and not enabled / outbound / the action / the range)
+    | "unverified" (a value in a form not understood). Enum names (Outbound,
+    Block, True) are the same in every display language."""
+    if (rule["enabled"] not in ("True", "False") or rule["direction"] not in ("Inbound", "Outbound")
+            or rule["action"] not in ("Allow", "Block", "NotConfigured")):
+        return "unverified"
+    if rule["enabled"] != "True" or rule["direction"] != "Outbound" or rule["action"] != want_action:
+        return "missing"
+    if want_action == "Block":
+        if rule["remote"] is None:
+            return "unverified"
+        shown = _intervals(rule["remote"])
+        if shown is None:
+            return "unverified"
+        if shown != _intervals(WINDOWS_BLOCK_RANGES):
+            return "missing"
+    return "confirmed"
+
+
+def _windows_profile_set(rule: dict) -> Optional[set[str]]:
+    """Profiles a rule applies to (`Any` = all three); None if unreadable."""
+    names = {p.strip() for p in rule["profile"].split(",") if p.strip()}
+    if names == {"Any"}:
+        return set(_WIN_PROFILES)
+    return names if names and names <= set(_WIN_PROFILES) else None
+
+
+def _windows_verdicts(snap: dict, names: list[str]) -> tuple[list[str], list[str]]:
+    """(missing, unverified) labels from the ActiveStore (the policy in
+    force). Every rule with the name is looked at: one that is in force is
+    enough, extra copies do not matter, and a copy that cannot be read does
+    not count as one that is."""
+    missing: list[str] = []
+    unverified: list[str] = []
+    profiles: set[str] = set()
+    unreadable_profile = False
+    for name in names:
+        want = "Block" if name.endswith("-block") else "Allow"
+        states = [(r, _windows_rule_state(r, want)) for r in snap["active"] if name in (r["name"], r["display"])]
+        good = [r for r, st in states if st == "confirmed"]
+        if good:
+            for r in good:
+                ps = _windows_profile_set(r)
+                if ps is None:
+                    unreadable_profile = True
+                else:
+                    profiles |= ps
+        elif any(st == "unverified" for _r, st in states):
+            unverified.append(name)
+        else:
+            missing.append(name)  # zero rules, or only rules that are not in force
+    if not missing:  # a rule that is not in force already fails; profiles matter once it is
+        state = snap["profiles"]
+        wanted = profiles or set(_WIN_PROFILES)
+        if unreadable_profile or any(state.get(p) not in ("True", "False") for p in wanted):
+            unverified.append("firewall profiles")
+        elif any(state[p] != "True" for p in wanted):
+            missing.append("firewall profiles")
+    return missing, unverified
 
 
 def _netsh_rule_check(name: str):

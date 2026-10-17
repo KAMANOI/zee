@@ -38,6 +38,7 @@ from ..responder.cut_full import (
     PF_TOKEN_PREFIX,
     iptables_backend,
     kernel_ipv6_absent,
+    windows_firewall_snapshot,
     SENTINEL_LINUX_IP6TABLES_EGRESS,
     SENTINEL_LINUX_IPTABLES_EGRESS,
     SENTINEL_LINUX_NFT_EGRESS,
@@ -406,10 +407,29 @@ def _release_pf_tokens(recorded: tuple[str, ...]) -> list[Step]:
     return steps
 
 
+def _windows_rule_absent(name: str) -> Optional[bool]:
+    """Language-independent absence check through PowerShell objects: True =
+    no rule with this name (Name or DisplayName) in the PersistentStore (where
+    netsh made it) nor in the ActiveStore (what is in force); False = at
+    least one copy is still there; None = PowerShell could not be used, so
+    the caller may read netsh's English text instead."""
+    snap = windows_firewall_snapshot([name])
+    if snap is None:
+        return None
+    left = [r for key in ("persistent", "active") for r in snap[key] if name in (r["name"], r["display"])]
+    if left:
+        logger.warning("netsh rule %s still present after removal (%d copies)", name, len(left))
+    return not left
+
+
 def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
     """True = the backend itself answered "no such table / chain / rule";
     False = the rule is still listed; None = anything else (launch or loader
     failure, permission error, unexpected output) — never read as absent."""
+    if tool == "netsh":
+        verdict = _windows_rule_absent(show[-1].removeprefix("name="))
+        if verdict is not None:
+            return verdict  # PowerShell answered: netsh's text never overrules it
     ok, msg = _run(show)
     if ok:
         if tool == "pfctl":

@@ -104,3 +104,14 @@ def pytest_sessionfinish(session, exitstatus):
         red=True,
     )
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+
+@pytest.fixture(autouse=True)
+def _no_real_powershell_firewall_read(monkeypatch):
+    """The Windows firewall read-back runs PowerShell; on a Windows test
+    runner it would read the runner's real firewall. Tests that exercise the
+    PowerShell path patch these names themselves."""
+    from zee.recovery import restore
+    from zee.responder import cut_egress, cut_full
+    for mod in (cut_full, cut_egress, restore):
+        monkeypatch.setattr(mod, "windows_firewall_snapshot", lambda names: None)

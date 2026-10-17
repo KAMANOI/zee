@@ -172,6 +172,34 @@ jobs:
       - name: Firewall profile state before
         shell: pwsh
         run: netsh advfirewall show allprofiles state
+      - name: Probe - how a netsh rule looks to PowerShell (raw output, harmless range)
+        shell: pwsh
+        run: |
+          # 192.0.2.0/24 (TEST-NET-1) is not used by the runner. Raw outputs go
+          # to the log: they settle whether netsh puts the name in Name or
+          # DisplayName and how Profile / RemoteAddress print.
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\src"
+          netsh advfirewall firewall add rule name=zee-probe-block dir=out action=block enable=yes remoteip=192.0.2.0/24
+          "--- netsh show rule"; netsh advfirewall firewall show rule name=zee-probe-block
+          foreach ($store in "ActiveStore", "PersistentStore") {
+            "--- Get-NetFirewallRule $store"
+            Get-NetFirewallRule -PolicyStore $store | Where-Object { $_.Name -eq "zee-probe-block" -or $_.DisplayName -eq "zee-probe-block" } |
+              Format-List Name, DisplayName, Enabled, Direction, Action, Profile, PolicyStoreSource
+            "--- address filter $store"
+            Get-NetFirewallRule -PolicyStore $store | Where-Object { $_.Name -eq "zee-probe-block" -or $_.DisplayName -eq "zee-probe-block" } |
+              Get-NetFirewallAddressFilter -PolicyStore $store | Format-List RemoteAddress
+          }
+          "--- profiles"; Get-NetFirewallProfile -PolicyStore ActiveStore | Format-Table Name, Enabled
+          "--- Zee reader (JSON)"
+          # The PowerShell path itself must work here (else the netsh fallback
+          # would pass this job and hide a broken reader).
+          python -c "import json,sys; from zee.responder.cut_full import read_windows_firewall as r; d=r(['zee-probe-block']); print(json.dumps(d, indent=1)); sys.exit(0 if d and d['active'] and d['persistent'] else 1)"
+          $rc = $LASTEXITCODE
+          netsh advfirewall firewall delete rule name=zee-probe-block
+          if ($rc -ne 0) { throw "PowerShell reader did not see the probe rule in both stores" }
+          "--- after delete (Zee reader)"
+          python -c "import json,sys; from zee.responder.cut_full import read_windows_firewall as r; d=r(['zee-probe-block']); print(json.dumps(d, indent=1)); sys.exit(0 if d is not None and not d['active'] and not d['persistent'] else 1)"
+          if ($LASTEXITCODE -ne 0) { throw "rule still seen after delete, or reader failed" }
       - name: Cut -> measure -> restore -> measure
         shell: pwsh
         run: |
@@ -192,9 +220,17 @@ jobs:
           # Remove the safety task only once both Zee rules are confirmed gone;
           # otherwise keep it (it is the way back) and fail.
           $gone = $true
+          # Language-independent: count the rules by name in both stores with
+          # PowerShell objects (no localized netsh text). A read failure is not
+          # "gone": the safety task stays.
           foreach ($r in "zee-egress-cut-block", "zee-egress-cut-allow-local") {
-            $out = netsh advfirewall firewall show rule name=$r | Out-String
-            if ($out -notmatch "No rules match the specified criteria") { $gone = $false }
+            try {
+              foreach ($store in "PersistentStore", "ActiveStore") {
+                $n = @(Get-NetFirewallRule -PolicyStore $store -ErrorAction Stop |
+                       Where-Object { $_.Name -eq $r -or $_.DisplayName -eq $r }).Count
+                if ($n -ne 0) { $gone = $false }
+              }
+            } catch { $gone = $false; "read failed: $($_.Exception.Message)" }
           }
           if ($gone) { schtasks /delete /f /tn zee-safety } else { "Zee rule still present: safety task kept"; $rc = 1 }
           exit $rc
@@ -202,6 +238,5 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          netsh advfirewall firewall show rule name=zee-egress-cut-block
-          netsh advfirewall firewall show rule name=zee-egress-cut-allow-local
+          Get-NetFirewallRule -PolicyStore ActiveStore | Where-Object { $_.Name -like "zee-*" -or $_.DisplayName -like "zee-*" } | Format-List Name, DisplayName, Enabled, Direction, Action
           exit 0
