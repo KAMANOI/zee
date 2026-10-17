@@ -83,3 +83,9 @@ def test_init_next_step_quotes_path(tmp_path, capsys):
     target.parent.mkdir()
     assert main(["-c", str(target), "init"]) == 0
     assert f"zee -c '{target}' watch" in capsys.readouterr().err
+
+
+def test_shell_quote_powershell_and_posix():
+    from zee.cli import _shell_quote
+    assert _shell_quote(r"C:\work\a&b $x's.toml", True) == r"'C:\work\a&b $x''s.toml'"
+    assert _shell_quote("a b;$x", False) == "'a b;$x'"

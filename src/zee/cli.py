@@ -285,6 +285,12 @@ def _init_asset_id() -> str:
     return name[:63] or "this-machine"
 
 
+def _shell_quote(s: str, windows: bool) -> str:
+    """Quote for copy-paste: POSIX sh, or a PowerShell single-quoted literal."""
+    import shlex
+    return "'" + s.replace("'", "''") + "'" if windows else shlex.quote(s)
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     """Write a starter assets.toml so `uv tool install` users (no clone, no
     examples/) can start. Never overwrites; never touches decoys or tokens."""
@@ -301,10 +307,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
             raise ZeeError(Z105_CONFIG_ALREADY_EXISTS, str(path)) from e
         raise ZeeError(Z106_CONFIG_NOT_WRITABLE, e.detail) from e
     Config.load(path)  # self-check: what we wrote must load
-    import shlex
-    import subprocess
-    q = subprocess.list2cmdline([str(path)]) if sys.platform == "win32" else shlex.quote(str(path))
-    c = f"-c {q} " if path != Path("assets.toml") else ""
+    win = sys.platform == "win32"
+    c = f"-c {_shell_quote(str(path), win)} " if path != Path("assets.toml") else ""
     print(f"[zee init] wrote {path} (observe-only: dry_run=true, notify; "
           f"mode 0600 on macOS/Linux)",
           file=sys.stderr)
@@ -312,7 +316,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     print(f"  1. review decoy_paths in {path}", file=sys.stderr)
     print("  2. zee init-restore-token   # keep the printed token somewhere safe",
           file=sys.stderr)
-    print(f"  3. zee {c}watch", file=sys.stderr)
+    print(f"  3. zee {c}watch" + ("   # PowerShell" if win and c else ""), file=sys.stderr)
     return 0
 
 
