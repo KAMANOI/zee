@@ -201,6 +201,7 @@ def test_action_fails_when_python_dies_without_a_verdict(tmp_path):
     stub.chmod(0o755)
     env = {
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
+        "HOME": os.environ["HOME"],  # isolated by conftest; no pwd fallback
         "SOURCE": str(tmp_path),
         "KIND": "",
         "IMPORT_SCAN": "",
@@ -226,6 +227,7 @@ def test_action_fails_on_partial_verdict_end_to_end(tmp_path):
     (s / "package.json").write_text('{"scripts": 1}')
     env = {
         "PATH": os.environ["PATH"],
+        "HOME": os.environ["HOME"],  # isolated by conftest; no pwd fallback
         "PYTHONPATH": str(Path(zee.__file__).resolve().parents[1]),
         "XDG_STATE_HOME": str(tmp_path / "state"),
         "SOURCE": str(s),
