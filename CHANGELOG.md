@@ -14,7 +14,8 @@ releases.
   `examples/` folder — can start. One asset named after this machine,
   `dry_run = true`, `response_mode = "notify"`, decoys under
   `~/.local/share/zee-decoys/` (same defaults as
-  `examples/assets.example.toml`). Owner-only (0600). It never overwrites
+  `examples/assets.example.toml`). File mode 0600 on macOS / Linux (on
+  Windows the folder's inherited permissions apply). It never overwrites
   an existing file or follows a link there (Z105), reports a missing or
   unwritable folder as Z106, and does not create decoys or the restore
   token (it prints those as next steps).

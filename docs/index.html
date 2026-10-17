@@ -305,8 +305,8 @@ uv tool install "git+https://github.com/KAMANOI/zee@v0.14.0"
 <span class="c"># ※ pip install zee / npx zee は別の作者の無関係なパッケージです。使わないでください</span>
 
 <span class="c"># 2. 資産プロファイルを作成</span>
-zee init
-<span class="c"># 観測のみの ./assets.toml を作る（既にあれば上書きしない）。decoy_paths は必要に応じて編集</span>
+cp examples/assets.example.toml ./assets.toml
+<span class="c"># 編集して decoy_paths を自組織のパスに置き換える</span>
 
 <span class="c"># 3. 監視開始（既定は dry_run、実遮断なし）</span>
 zee watch -c ./assets.toml

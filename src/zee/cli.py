@@ -297,10 +297,14 @@ def _cmd_init(args: argparse.Namespace) -> int:
     try:
         _write_private_files([(path, text)], force=False)
     except ZeeError as e:  # re-label: the shared writer reports export codes
+        if os.path.lexists(path):  # appeared after our check: still never overwritten
+            raise ZeeError(Z105_CONFIG_ALREADY_EXISTS, str(path)) from e
         raise ZeeError(Z106_CONFIG_NOT_WRITABLE, e.detail) from e
     Config.load(path)  # self-check: what we wrote must load
-    c = f"-c {path} " if path != Path("assets.toml") else ""
-    print(f"[zee init] wrote {path} (owner-only, observe-only: dry_run=true, notify)",
+    import shlex
+    c = f"-c {shlex.quote(str(path))} " if path != Path("assets.toml") else ""
+    print(f"[zee init] wrote {path} (observe-only: dry_run=true, notify; "
+          f"mode 0600 on macOS/Linux)",
           file=sys.stderr)
     print("next:", file=sys.stderr)
     print(f"  1. review decoy_paths in {path}", file=sys.stderr)

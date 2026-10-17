@@ -33,8 +33,8 @@ def test_init_matches_example_defaults(tmp_path):
     ex = Config.load(EXAMPLE)
     got = Config.load(target)
     assert got.dry_run == ex.dry_run is True
-    ex_dirs = {str(Path(p).parent) for a in ex.assets for p in a.decoy_paths}
-    got_dirs = {str(Path(p).parent) for a in got.assets for p in a.decoy_paths}
+    ex_dirs = {Path(p).parent.as_posix() for a in ex.assets for p in a.decoy_paths}
+    got_dirs = {Path(p).parent.as_posix() for a in got.assets for p in a.decoy_paths}
     assert got_dirs == ex_dirs == {"~/.local/share/zee-decoys"}
     assert {a.response_mode for a in ex.assets} == {a.response_mode for a in got.assets}
 
@@ -60,3 +60,25 @@ def test_init_refuses_dangling_symlink(tmp_path):
 def test_init_missing_folder_is_z106(tmp_path, capsys):
     assert main(["-c", str(tmp_path / "nope" / "assets.toml"), "init"]) == 1
     assert "Z106" in capsys.readouterr().err
+
+
+def test_init_race_after_check_reports_z105(tmp_path, capsys, monkeypatch):
+    import zee.cli as cli
+    target = tmp_path / "assets.toml"
+    real = cli._write_private_files
+
+    def racer(outputs, force):
+        target.write_bytes(b"other")
+        return real(outputs, force)
+
+    monkeypatch.setattr(cli, "_write_private_files", racer)
+    assert main(["-c", str(target), "init"]) == 1
+    assert target.read_bytes() == b"other"
+    assert "Z105" in capsys.readouterr().err
+
+
+def test_init_next_step_quotes_path(tmp_path, capsys):
+    target = tmp_path / "my dir" / "a.toml"
+    target.parent.mkdir()
+    assert main(["-c", str(target), "init"]) == 0
+    assert f"zee -c '{target}' watch" in capsys.readouterr().err

@@ -134,7 +134,7 @@ pip install -e .
 
 ```bash
 # 1. Create an asset profile (observe-only; never overwrites an existing file)
-zee init
+zee init   # available after v0.14.0; with v0.14.0 use the cp line below
 # From a clone you can instead cp examples/assets.example.toml ./assets.toml (annotated example)
 # Edit decoy_paths to point at your own paths
 # The default example uses a Zee-only directory (~/.local/share/zee-decoys/)
