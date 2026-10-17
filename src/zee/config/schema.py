@@ -9,7 +9,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional
+from typing import BinaryIO, Literal, Optional
 
 from ..errors import (
     ZeeError,
@@ -49,7 +49,15 @@ class Config:
     def load(cls, path: Path) -> "Config":
         try:
             with path.open("rb") as f:  # tomllib requires binary mode
-                raw = tomllib.load(f)
+                return cls.load_file(f)
+        except OSError as e:
+            raise ZeeError(Z101_INVALID_ASSET_CONFIG, str(e)) from e
+
+    @classmethod
+    def load_file(cls, f: BinaryIO) -> "Config":
+        """Parse an already-open binary file (`zee doctor` checks the fd first)."""
+        try:
+            raw = tomllib.load(f)
         except (OSError, ValueError) as e:  # TOMLDecodeError / UnicodeDecodeError are ValueErrors
             raise ZeeError(Z101_INVALID_ASSET_CONFIG, str(e)) from e
 
@@ -77,7 +85,7 @@ class Config:
         privsep_socket = None
         if privsep is not None:
             sock = privsep.get("socket") if isinstance(privsep, dict) else None
-            if not isinstance(sock, str) or not sock.startswith("/"):
+            if not isinstance(sock, str) or not sock.startswith("/") or "\x00" in sock:
                 raise ZeeError(Z101_INVALID_ASSET_CONFIG, "[privsep] socket must be an absolute path")
             privsep_socket = sock
         return cls(
@@ -115,6 +123,13 @@ def _parse_asset(raw: dict) -> AssetProfile:
     decoys = raw.get("decoy_paths", [])
     if not isinstance(decoys, list) or not all(isinstance(d, str) for d in decoys):
         raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset '{asset_id}': decoy_paths must be a list of strings")
+    for d in decoys:
+        try:
+            if "\x00" in d:
+                raise ValueError("contains a NUL character")
+            Path(d).expanduser()
+        except (RuntimeError, ValueError) as e:  # RuntimeError: ~unknown_user
+            raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset '{asset_id}': decoy path {d!r}: {e}") from e
     asset_type = raw.get("type", "workstation")
     if asset_type not in _VALID_ASSET_TYPES:
         raise ZeeError(

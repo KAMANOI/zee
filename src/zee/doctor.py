@@ -70,44 +70,51 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     counts = {"OK": 0, "WARN": 0, "FAIL": 0, "INFO": 0}
     posix = sys.platform != "win32"
 
+    def emit(text: str) -> None:
+        enc = getattr(out, "encoding", None) or "utf-8"  # e.g. cp1252 when redirected on Windows
+        print(text.encode(enc, "replace").decode(enc), file=out)
+
     def say(level: str, topic: str, fact: str, nxt: str = "") -> None:
         counts[level] += 1
-        print(f"[{level}] {topic}: {fact}", file=out)
-        if nxt:
-            print(f"       → next: {nxt}", file=out)
+        emit(f"[{level}] {topic}: {fact}" + (f"\n       -> next: {nxt}" if nxt else ""))
 
     say("INFO", "version", f"zee {__version__} / Python {sys.version.split()[0]} / "
         f"{sys.platform} (local only; not compared with the latest release)")
 
     # --- config -----------------------------------------------------------
+    # Open once, check the open file (regular file, not the restore token),
+    # then parse that same descriptor: no stat/open race, no FIFO hang, and
+    # the token's value is never read.
     cfg: Optional[Config] = None
+    cst: Optional[os.stat_result] = None
     tok = default_token_path()
     try:
-        tst = _stat(tok)
-    except OSError:
-        tst = None  # reported in the restore token section
-    try:
-        cst = _stat(config_path)
-    except OSError as e:
-        cst = None
-        say("FAIL", "config", f"{config_path} cannot be checked: {e}")
+        fd = os.open(config_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+    except FileNotFoundError:
+        say("FAIL", "config", f"{config_path} not found", "zee init   (or pass the file with -c PATH)")
+    except (OSError, ValueError) as e:
+        say("FAIL", "config", f"{config_path} cannot be opened: {e}",
+            f"check that {config_path} is a file you can read")
     else:
-        if cst is None:
-            say("FAIL", "config", f"{config_path} not found",
-                "zee init   (or pass the file with -c PATH)")
-    if cst is None:
-        pass  # already reported
-    elif tst is not None and (cst.st_dev, cst.st_ino) == (tst.st_dev, tst.st_ino):
-        # never parse the token as a config (that would read its value)
-        say("FAIL", "config", f"{config_path} is the restore token file, not a config; not read",
-            "pass your assets.toml with -c PATH")
-        cst = None
-    else:
-        try:
-            cfg = Config.load(config_path)
-        except ZeeError as e:
-            say("FAIL", "config", f"{config_path} does not load: {e}",
-                "fix the file (see examples/assets.example.toml)")
+        with os.fdopen(fd, "rb") as f:
+            cst = os.fstat(fd)
+            try:
+                tst = _stat(tok)
+                same = tst is not None and (cst.st_dev, cst.st_ino) == (tst.st_dev, tst.st_ino)
+            except OSError:
+                same = True  # cannot rule it out: do not read
+            if not stat.S_ISREG(cst.st_mode):
+                say("FAIL", "config", f"{config_path} is not a regular file; not read",
+                    "pass your assets.toml with -c PATH")
+            elif same:
+                say("FAIL", "config", f"{config_path} is (or may be) the restore token file; not read",
+                    "pass your assets.toml with -c PATH")
+            else:
+                try:
+                    cfg = Config.load_file(f)
+                except ZeeError as e:
+                    say("FAIL", "config", f"{config_path} does not load: {e}",
+                        "fix the file (see examples/assets.example.toml)")
         if cfg is not None:
             if not cfg.assets:
                 say("FAIL", "config", "no [[assets]] defined; `zee watch` refuses to start",
@@ -145,11 +152,16 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                     "often synced to the cloud (iCloud / OneDrive / ...): the decoy and any "
                     "canary URL in it may be copied there",
                     "move it to a Zee-only folder such as ~/.local/share/zee-decoys/")
-            if os.path.lexists(p):
-                say("OK", "decoy", f"{p} present")
+            try:
+                os.lstat(p)
+            except FileNotFoundError:
+                say("INFO", "decoy", f"{p} not present yet; `zee watch` creates it on start if it "
+                    "can write there (if watch is already running, it may have been removed)")
+            except OSError as e:
+                say("FAIL", "decoy", f"{p} cannot be checked: {e}",
+                    f"check the folder {p.parent} exists and is yours")
             else:
-                say("INFO", "decoy", f"{p} not present yet; `zee watch` creates it on start "
-                    "(if watch is already running, it may have been removed)")
+                say("OK", "decoy", f"{p} present")
 
     # --- restore token (stat only: never read the value) ------------------
     try:
@@ -158,7 +170,8 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         say("WARN", "restore token", f"{tok} not found; `zee restore` cannot run after a cut",
             "zee init-restore-token   # keep the printed token somewhere safe")
     except OSError as e:
-        say("FAIL", "restore token", f"{tok} cannot be checked: {e}")
+        say("FAIL", "restore token", f"{tok} cannot be checked: {e}",
+            f"check the owner and permissions of {tok.parent}")
     else:
         # same bits load_token() refuses on
         if posix and stat.S_IMODE(st.st_mode) & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH | stat.S_IWOTH):
@@ -177,7 +190,8 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     except OSError as e:
         err = e
     if err is not None:
-        say("FAIL", "state dir", f"{log_dir} cannot be checked: {err}")
+        say("FAIL", "state dir", f"{log_dir} cannot be checked: {err}",
+            f"check the owner and permissions of {log_dir.parent}")
     elif lst is None:
         if not os.path.lexists(log_dir):
             say("INFO", "state dir", f"{log_dir} not created yet (`zee watch` creates it on start)")
@@ -222,7 +236,7 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         say("OK", "watch", f"{len(found)} process(es) that look like `zee watch` "
             "(process list only: not proof it is healthy or uses this config file)")
         for line in found[:3]:
-            print(f"       {line[:160]}", file=out)
+            emit(f"       {line[:160]}")
     else:
         say("WARN", "watch", "no process that looks like `zee watch` was found "
             "(process list only: a renamed launcher would be missed)",
@@ -233,7 +247,7 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         if cfg.privsep_socket:
             try:
                 is_sock = stat.S_ISSOCK(os.stat(cfg.privsep_socket).st_mode)
-            except OSError:
+            except (OSError, ValueError):
                 is_sock = False
             if is_sock:
                 say("OK", "cut privileges", f"cuts go to the privsep daemon at {cfg.privsep_socket} "
@@ -250,6 +264,6 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         else:
             say("OK", "cut privileges", "running as root")
 
-    print(f"summary: {counts['FAIL']} fail, {counts['WARN']} warn, {counts['OK']} ok, "
-          f"{counts['INFO']} info", file=out)
+    emit(f"summary: {counts['FAIL']} fail, {counts['WARN']} warn, {counts['OK']} ok, "
+          f"{counts['INFO']} info")
     return 1 if counts["FAIL"] else 0

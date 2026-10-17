@@ -154,7 +154,7 @@ def test_config_pointing_at_token_is_not_read(home):
     link = home / "assets.toml"
     link.symlink_to(home / ".zee" / "restore_token")
     rc, out = _run(link)
-    assert rc == 1 and "is the restore token file" in out
+    assert rc == 1 and "restore token file; not read" in out
     assert "SECRET-VALUE" not in out
 
 
@@ -193,3 +193,38 @@ def test_privsep_path_that_is_not_a_socket_fails(home, monkeypatch):
                 '[[assets]]\nid = "a"\nresponse_mode = "auto"\ndecoy_paths = ["~/z/x"]\n')
     rc, out = _run(cfg)
     assert rc == 1 and "not a socket" in out
+
+
+# --- Codex review 2 regressions -------------------------------------------
+
+@posix_only
+def test_hardlink_to_token_is_not_read(home):
+    _token(home)
+    (home / ".zee" / "restore_token").write_text("SECRET-VALUE\n")
+    os.link(home / ".zee" / "restore_token", home / "assets.toml")
+    rc, out = _run(home / "assets.toml")
+    assert rc == 1 and "not read" in out and "SECRET-VALUE" not in out
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+def test_fifo_config_does_not_hang(home):
+    fifo = home / "assets.toml"
+    os.mkfifo(fifo)
+    rc, out = _run(fifo)
+    assert rc == 1 and "not a regular file" in out
+
+
+@pytest.mark.parametrize("decoy", ["~zee_no_such_user_xyz/x", "/tmp/a\\u0000b"])
+def test_unusable_decoy_path_is_z101(home, decoy):
+    cfg = home / "assets.toml"
+    _write(cfg, f'[[assets]]\nid = "a"\ndecoy_paths = ["{decoy}"]\n')
+    rc, out = _run(cfg)
+    assert rc == 1 and "Z101" in out
+
+
+def test_output_survives_a_narrow_encoding(home):
+    raw = io.BytesIO()
+    out = io.TextIOWrapper(raw, encoding="cp1252")
+    rc = doctor.run(home / "missing.toml", ps=lambda: ["\u732b zee watch"], out=out)
+    out.flush()
+    assert rc == 1 and b"-> next" in raw.getvalue()
