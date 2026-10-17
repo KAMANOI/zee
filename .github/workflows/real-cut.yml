@@ -200,6 +200,19 @@ jobs:
           "--- after delete (Zee reader)"
           python -c "import json,sys; from zee.responder.cut_full import read_windows_firewall as r; d=r(['zee-probe-block']); print(json.dumps(d, indent=1)); sys.exit(0 if d is not None and not d['active'] and not d['persistent'] else 1)"
           if ($LASTEXITCODE -ne 0) { throw "rule still seen after delete, or reader failed" }
+      - name: Probe - the real block ranges as PowerShell prints them (ALLOW rule, so nothing is blocked)
+        shell: pwsh
+        run: |
+          # Same remoteip list as Zee's block rule, but action=allow under another
+          # name: shows how the ranges read back and that Zee's comparison accepts them.
+          $env:PYTHONPATH = "$env:GITHUB_WORKSPACE\src"
+          $ranges = python -c "from zee.responder.cut_egress import WINDOWS_BLOCK_RANGES as R; print(','.join(R))"
+          netsh advfirewall firewall add rule name=zee-probe-ranges dir=out action=allow enable=yes remoteip=$ranges
+          if ($LASTEXITCODE -ne 0) { throw "probe rule not added" }
+          python -c "import json,sys; from zee.responder.cut_full import read_windows_firewall as r; from zee.responder.cut_egress import _intervals, WINDOWS_BLOCK_RANGES as R; d=r(['zee-probe-ranges']); print(json.dumps(d, indent=1)); ok = d is not None and len(d['active'])==1 and _intervals(d['active'][0]['remote'])==_intervals(R); print('ranges equal:', ok); sys.exit(0 if ok else 1)"
+          $rc = $LASTEXITCODE
+          netsh advfirewall firewall delete rule name=zee-probe-ranges
+          if ($rc -ne 0) { throw "block ranges did not read back equal through PowerShell" }
       - name: Cut -> measure -> restore -> measure
         shell: pwsh
         run: |
