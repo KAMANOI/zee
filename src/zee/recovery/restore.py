@@ -407,19 +407,27 @@ def _release_pf_tokens(recorded: tuple[str, ...]) -> list[Step]:
     return steps
 
 
-def _windows_rule_absent(name: str) -> Optional[bool]:
-    """Language-independent absence check through PowerShell objects: True =
-    no rule with this name (Name or DisplayName) in the PersistentStore (where
-    netsh made it) nor in the ActiveStore (what is in force); False = at
-    least one copy is still there; None = PowerShell could not be used, so
-    the caller may read netsh's English text instead."""
+def _windows_rule_absent(name: str) -> tuple[Optional[bool], bool]:
+    """(verdict, powershell_answered). Language-independent absence check
+    through PowerShell objects: True = no rule with this name (Name or
+    DisplayName, any case) in the PersistentStore (where netsh made it) nor in
+    the ActiveStore (what is in force); False = at least one copy is still
+    there, seen in either store; None = a store could not be read and no
+    survivor was seen in the other. The second value is False only when
+    PowerShell could not be used at all: then, and only then, the caller may
+    read netsh's English text instead."""
     snap = windows_firewall_snapshot([name])
     if snap is None:
-        return None
-    left = [r for key in ("persistent", "active") for r in snap[key] if name in (r["name"], r["display"])]
+        return None, False
+    stores = [snap["persistent"], snap["active"]]
+    left = [r for rules in stores if rules for r in rules if name.casefold() in (r["name"].casefold(), r["display"].casefold())]
     if left:
         logger.warning("netsh rule %s still present after removal (%d copies)", name, len(left))
-    return not left
+        return False, True
+    if any(rules is None for rules in stores):
+        logger.warning("netsh rule %s: a firewall store could not be read; absence not confirmed", name)
+        return None, True
+    return True, True
 
 
 def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
@@ -427,8 +435,8 @@ def _verify_absent(tool: str, show: list[str]) -> Optional[bool]:
     False = the rule is still listed; None = anything else (launch or loader
     failure, permission error, unexpected output) — never read as absent."""
     if tool == "netsh":
-        verdict = _windows_rule_absent(show[-1].removeprefix("name="))
-        if verdict is not None:
+        verdict, answered = _windows_rule_absent(show[-1].removeprefix("name="))
+        if answered:
             return verdict  # PowerShell answered: netsh's text never overrules it
     ok, msg = _run(show)
     if ok:

@@ -69,7 +69,7 @@ def test_reader_accepts_powershell_51_single_object_forms(monkeypatch):
     out = json.dumps({"ok": True, "active": r, "persistent": None, "profiles": {"name": "Public", "enabled": "True"}})
     _fake_ps(monkeypatch, out)
     got = fn([BLOCK])
-    assert got["active"] == [r] and got["persistent"] == [] and got["profiles"] == {"Public": "True"}
+    assert got["active"] == [r] and got["persistent"] is None and got["profiles"] == {"Public": "True"}  # null = that query failed
 
 
 @pytest.mark.parametrize("stdout, rc, raises", [
@@ -77,7 +77,9 @@ def test_reader_accepts_powershell_51_single_object_forms(monkeypatch):
     ("not json", 0, None),                                   # uninterpretable
     (json.dumps({"ok": False, "error": "x"}), 0, None),      # the script caught an error
     (_envelope(), 1, None),                                  # PowerShell failed
-    (json.dumps({"ok": True, "active": [{"name": "x"}], "persistent": [], "profiles": []}), 0, None),  # missing keys
+    (json.dumps({"ok": True}), 0, None),                      # store keys missing: not an empty read
+    (json.dumps({"ok": True, "active": [], "persistent": []}), 0, None),  # profiles key missing
+    (json.dumps({"ok": True, "active": [{"name": "x"}], "persistent": [], "profiles": []}), 0, None),  # rule keys missing
     (json.dumps({"ok": True, "active": [rule(enabled=True)], "persistent": [], "profiles": []}), 0, None),  # wrong type
     ("", 0, subprocess.TimeoutExpired("ps", 60)),
 ])
@@ -164,7 +166,8 @@ def test_rule_found_by_display_name_when_name_differs(monkeypatch):
 @pytest.mark.parametrize("profile, states, verdict", [
     ("Any", PROFILES_ON, "confirmed"),
     ("Domain, Private, Public", PROFILES_ON, "confirmed"),
-    ("Public", {"Domain": "False", "Private": "False", "Public": "True"}, "confirmed"),  # only its profile counts
+    ("Public", PROFILES_ON, "missing"),         # covers one profile only: the host's network may be another
+    ("Domain, Private", PROFILES_ON, "missing"),
     ("Any", {**PROFILES_ON, "Public": "False"}, "missing"),
     ("Any", {**PROFILES_ON, "Public": "NotConfigured"}, "unverified"),
     ("Any", {"Domain": "True", "Private": "True"}, "unverified"),                         # profile not listed
@@ -230,3 +233,59 @@ def test_restore_without_powershell_uses_english_netsh_or_stays_unverified(monke
     assert _absent(monkeypatch, None, netsh=(False, "No rules match the specified criteria.")) is True
     assert _absent(monkeypatch, None, netsh=(False, "指定された条件に一致する規則はありません。")) is None
     assert _absent(monkeypatch, None, netsh=(True, "Rule Name: zee-egress-cut-block")) is False
+
+
+# ── review findings (ASTRA 2026-10-17) ─────────────────────────────────
+
+
+def test_a_failed_query_is_null_and_the_others_keep_their_answer(monkeypatch):
+    out = json.dumps({"ok": True, "active": [rule()], "persistent": None, "profiles": None})
+    _fake_ps(monkeypatch, out)
+    got = full_mod.read_windows_firewall([BLOCK])
+    assert got["active"] == [rule()] and got["persistent"] is None and got["profiles"] is None
+
+
+def test_name_match_ignores_case_in_cut_and_restore(monkeypatch):
+    upper = rule(name="{GUID}", display=BLOCK.upper())
+    (verdict, _b), _n = _verify(monkeypatch, snap(active=[upper]))
+    assert verdict == "confirmed"
+    assert _absent(monkeypatch, snap(active=[upper])) is False  # a surviving copy in other case
+
+
+def test_restore_survivor_seen_survives_a_failed_other_store(monkeypatch):
+    s = snap(active=[rule()])
+    s["persistent"] = None
+    netsh = []
+    monkeypatch.setattr(restore_mod, "windows_firewall_snapshot", lambda names: s)
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"C:/{n}")
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: netsh.append(cmd) or (False, "No rules match the specified criteria."))
+    show = ["netsh", "advfirewall", "firewall", "show", "rule", f"name={BLOCK}"]
+    assert restore_mod._verify_absent("netsh", show) is False and netsh == []
+
+
+def test_restore_zero_rules_but_a_store_unreadable_is_unverified_without_netsh(monkeypatch):
+    s = snap()
+    s["active"] = None
+    netsh = []
+    monkeypatch.setattr(restore_mod, "windows_firewall_snapshot", lambda names: s)
+    monkeypatch.setattr(restore_mod, "_which", lambda n: f"C:/{n}")
+    monkeypatch.setattr(restore_mod, "_run", lambda cmd: netsh.append(cmd) or (False, "No rules match the specified criteria."))
+    show = ["netsh", "advfirewall", "firewall", "show", "rule", f"name={BLOCK}"]
+    assert restore_mod._verify_absent("netsh", show) is None and netsh == []  # netsh text must not fill the gap
+
+
+def test_cut_rule_mismatch_stands_when_the_profile_query_failed(monkeypatch):
+    (verdict, bad), _n = _verify(monkeypatch, snap(active=[rule(enabled="False")], profiles=None))
+    assert verdict == "missing" and bad == [BLOCK]
+
+
+def test_cut_in_force_but_profile_query_failed_is_unverified(monkeypatch):
+    (verdict, bad), _n = _verify(monkeypatch, snap(active=[rule()], profiles=None))
+    assert verdict == "unverified" and bad == ["firewall profiles"]
+
+
+def test_cut_active_query_failed_means_powershell_is_of_no_use(monkeypatch):
+    s = snap()
+    s["active"] = None
+    (verdict, _bad), netsh = _verify(monkeypatch, s)
+    assert netsh and verdict == "unverified"  # fell back to netsh text, which cannot confirm here

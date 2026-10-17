@@ -434,39 +434,41 @@ def _windows_states_via_netsh() -> Optional[dict[str, str]]:
 _WINFW_NAME = re.compile(r"^[A-Za-z0-9-]+$")
 _WINFW_SCRIPT = """
 $ErrorActionPreference = 'Stop'
-try {
-  $names = @(%s)
-  function Dump($store) {
-    $rules = @(Get-NetFirewallRule -PolicyStore $store | Where-Object { ($names -contains $_.Name) -or ($names -contains $_.DisplayName) })
-    foreach ($r in $rules) {
-      $af = $r | Get-NetFirewallAddressFilter -PolicyStore $store
-      $remote = $null
-      if ($af) { $remote = @($af.RemoteAddress | ForEach-Object { [string]$_ }) }
-      [pscustomobject]@{ name = [string]$r.Name; display = [string]$r.DisplayName; enabled = [string]$r.Enabled;
-        direction = [string]$r.Direction; action = [string]$r.Action; profile = [string]$r.Profile; remote = $remote }
-    }
+$names = @(%s)
+function Dump($store) {
+  $rules = @(Get-NetFirewallRule -PolicyStore $store | Where-Object { ($names -contains $_.Name) -or ($names -contains $_.DisplayName) })
+  foreach ($r in $rules) {
+    $af = $r | Get-NetFirewallAddressFilter -PolicyStore $store
+    $remote = $null
+    if ($af) { $remote = @($af.RemoteAddress | ForEach-Object { [string]$_ }) }
+    [pscustomobject]@{ name = [string]$r.Name; display = [string]$r.DisplayName; enabled = [string]$r.Enabled;
+      direction = [string]$r.Direction; action = [string]$r.Action; profile = [string]$r.Profile; remote = $remote }
   }
-  $active = @(Dump 'ActiveStore')
-  $persistent = @(Dump 'PersistentStore')
-  $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore | ForEach-Object { [pscustomobject]@{ name = [string]$_.Name; enabled = [string]$_.Enabled } })
-  [ordered]@{ ok = $true; active = $active; persistent = $persistent; profiles = $profiles } | ConvertTo-Json -Depth 6 -Compress
-} catch {
-  [ordered]@{ ok = $false; error = [string]$_.Exception.Message } | ConvertTo-Json -Compress
 }
+# Each query on its own: one that fails is null, the others keep their answer.
+$out = [ordered]@{ ok = $true; active = $null; persistent = $null; profiles = $null }
+try { $out.active = @(Dump 'ActiveStore') } catch { }
+try { $out.persistent = @(Dump 'PersistentStore') } catch { }
+try { $out.profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore | ForEach-Object { [pscustomobject]@{ name = [string]$_.Name; enabled = [string]$_.Enabled } }) } catch { }
+$out | ConvertTo-Json -Depth 6 -Compress
 """
 _WINFW_RULE_KEYS = ("name", "display", "enabled", "direction", "action", "profile")
 
 
 def read_windows_firewall(names: list[str]) -> Optional[dict]:
-    """Zee's rules (by Name or DisplayName) in the ActiveStore (what is in
-    force) and the PersistentStore (where netsh creates them), plus the
-    ActiveStore profile states: {"active": [rule], "persistent": [rule],
-    "profiles": {"Domain": "True", ...}}; a rule is a dict with name, display,
-    enabled, direction, action, profile (strings) and remote (list or None).
+    """Zee's rules (by Name or DisplayName, upper/lower case alike) in the
+    ActiveStore (what is in force) and the PersistentStore (where netsh
+    creates them), plus the ActiveStore profile states:
+    {"active": [rule] | None, "persistent": [rule] | None,
+    "profiles": {"Domain": "True", ...} | None}; a rule is a dict with name,
+    display, enabled, direction, action, profile (strings) and remote (list or
+    None). Each of the three is read on its own: None = that query failed
+    (the others keep their answer); an empty list is a successful read of
+    zero rules.
 
-    An empty "active" list is a successful read of zero rules. None = could not
-    read (no PowerShell, the script failed, output not in the expected shape):
-    callers may then fall back to netsh, and must treat it as unverified."""
+    Returns None as a whole when PowerShell cannot be used or the output is
+    not in the expected shape: callers may then fall back to netsh, and must
+    treat it as unverified."""
     if sys.platform != "win32" or not names or not all(_WINFW_NAME.match(n) for n in names):
         return None
     exe = sbin_which("powershell") or sbin_which("pwsh")
@@ -481,14 +483,21 @@ def read_windows_firewall(names: list[str]) -> Optional[dict]:
         data = json.loads(cp.stdout.strip())
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
-    if not isinstance(data, dict) or data.get("ok") is not True:
+    # All three keys must be present (null = that query failed): a missing key
+    # is a different program's output, never an empty read.
+    if not isinstance(data, dict) or data.get("ok") is not True or any(
+            k not in data for k in ("active", "persistent", "profiles")):
         return None
 
+    def listed(v):
+        # PowerShell 5.1 prints a one-element array as a bare object.
+        return [v] if isinstance(v, dict) else v
+
     def rules(key):
-        # PowerShell 5.1 prints a one-element array as a bare object and an
-        # empty one as null/[]: normalize, then check every field's type.
-        v = data.get(key)
-        v = [] if v is None else [v] if isinstance(v, dict) else v
+        v = data[key]
+        if v is None:
+            return None
+        v = listed(v)
         if not isinstance(v, list):
             raise ValueError(key)
         for r in v:
@@ -502,10 +511,15 @@ def read_windows_firewall(names: list[str]) -> Optional[dict]:
         return v
 
     try:
-        prof = data.get("profiles")
-        prof = [] if prof is None else [prof] if isinstance(prof, dict) else prof
-        profiles = {p["name"]: p["enabled"] for p in prof
-                    if isinstance(p, dict) and isinstance(p.get("name"), str) and isinstance(p.get("enabled"), str)}
+        prof = data["profiles"]
+        profiles = None
+        if prof is not None:
+            prof = listed(prof)
+            if not isinstance(prof, list) or any(
+                    not (isinstance(p, dict) and isinstance(p.get("name"), str)
+                         and isinstance(p.get("enabled"), str)) for p in prof):
+                raise ValueError("profiles")
+            profiles = {p["name"]: p["enabled"] for p in prof}
         return {"active": rules("active"), "persistent": rules("persistent"), "profiles": profiles}
     except (ValueError, TypeError):
         return None

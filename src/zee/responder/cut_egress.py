@@ -106,6 +106,8 @@ def _verify_egress(modified: list[str]) -> tuple[str, list[str]]:
     # a clean PowerShell answer (rule absent, disabled, ...) is never
     # overruled by netsh.
     snapshot = windows_firewall_snapshot(win_names) if win_names else None
+    if snapshot is not None and snapshot["active"] is None:
+        snapshot = None  # the one query the cut verdict needs failed: PowerShell is of no use here
     if snapshot is not None:
         miss, unver = _windows_verdicts(snapshot, win_names)
         missing += miss
@@ -315,6 +317,13 @@ def _windows_rule_state(rule: dict, want_action: str) -> str:
     if rule["enabled"] != "True" or rule["direction"] != "Outbound" or rule["action"] != want_action:
         return "missing"
     if want_action == "Block":
+        # Zee installs the rule for every profile; one that covers fewer
+        # leaves the others (e.g. the network the host is on) unrestricted.
+        profiles = _windows_profile_set(rule)
+        if profiles is None:
+            return "unverified"
+        if profiles != set(_WIN_PROFILES):
+            return "missing"
         if rule["remote"] is None:
             return "unverified"
         shown = _intervals(rule["remote"])
@@ -333,36 +342,35 @@ def _windows_profile_set(rule: dict) -> Optional[set[str]]:
     return names if names and names <= set(_WIN_PROFILES) else None
 
 
+def _name_is(rule: dict, name: str) -> bool:
+    """Windows compares rule names without regard to case (PowerShell -contains
+    and netsh alike), so a copy in other case is still the same rule."""
+    return name.casefold() in (rule["name"].casefold(), rule["display"].casefold())
+
+
 def _windows_verdicts(snap: dict, names: list[str]) -> tuple[list[str], list[str]]:
     """(missing, unverified) labels from the ActiveStore (the policy in
-    force). Every rule with the name is looked at: one that is in force is
-    enough, extra copies do not matter, and a copy that cannot be read does
-    not count as one that is."""
+    force; snap["active"] is not None here). Every rule with the name is
+    looked at: one that is in force is enough, extra copies do not matter, and
+    a copy that cannot be read does not count as one that is. A rule verdict
+    from the ActiveStore stands even if the profile query then failed."""
     missing: list[str] = []
     unverified: list[str] = []
-    profiles: set[str] = set()
-    unreadable_profile = False
+    in_force = False
     for name in names:
         want = "Block" if name.endswith("-block") else "Allow"
-        states = [(r, _windows_rule_state(r, want)) for r in snap["active"] if name in (r["name"], r["display"])]
-        good = [r for r, st in states if st == "confirmed"]
-        if good:
-            for r in good:
-                ps = _windows_profile_set(r)
-                if ps is None:
-                    unreadable_profile = True
-                else:
-                    profiles |= ps
-        elif any(st == "unverified" for _r, st in states):
+        states = [_windows_rule_state(r, want) for r in snap["active"] if _name_is(r, name)]
+        if "confirmed" in states:
+            in_force = True
+        elif "unverified" in states:
             unverified.append(name)
         else:
             missing.append(name)  # zero rules, or only rules that are not in force
-    if not missing:  # a rule that is not in force already fails; profiles matter once it is
+    if not missing and in_force:  # a rule that is not in force already fails; the firewall must be on for it to matter
         state = snap["profiles"]
-        wanted = profiles or set(_WIN_PROFILES)
-        if unreadable_profile or any(state.get(p) not in ("True", "False") for p in wanted):
+        if state is None or any(state.get(p) not in ("True", "False") for p in _WIN_PROFILES):
             unverified.append("firewall profiles")
-        elif any(state[p] != "True" for p in wanted):
+        elif any(state[p] != "True" for p in _WIN_PROFILES):
             missing.append("firewall profiles")
     return missing, unverified
 
