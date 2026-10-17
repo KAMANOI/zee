@@ -308,16 +308,16 @@ uv tool install "git+https://github.com/KAMANOI/zee@v0.15.0"
 zee init
 <span class="c"># 編集して decoy_paths を自組織のパスに置き換える</span>
 
-<span class="c"># 3. 監視開始（既定は dry_run、実遮断なし）</span>
-zee -c ./assets.toml watch
-
-<span class="c"># 4.（任意）macOS / Windows での「読み取り検知」を有効化</span>
+<span class="c"># 3.（任意）macOS / Windows での「読み取り検知」を有効化（監視開始の前に）</span>
 <span class="c">#   外部 webhook 受信器（Canarytokens.org / 自前 / Lambda 等）の URL を渡す</span>
 export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 
-<span class="c"># 5. 復旧トークンを 1 回だけ生成（v0.3 以降必須）</span>
+<span class="c"># 4. 復旧トークンを 1 回だけ生成（v0.3 以降必須）</span>
 zee init-restore-token   <span class="c"># 表示されたトークンを安全な場所に控える</span>
 zee doctor   <span class="c"># 読むだけの自己診断。足りない所に次の手順を表示</span>
+
+<span class="c"># 5. 監視開始（既定は dry_run、実遮断なし）</span>
+zee -c ./assets.toml watch
 
 <span class="c"># 6. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
 echo "tampered $(date)" &gt;&gt; ~/.local/share/zee-decoys/.env

@@ -261,3 +261,28 @@ def test_state_dir_discovery_error_is_reported(home, monkeypatch):
     monkeypatch.setattr(doctor, "default_log_dir", boom)
     rc, out = _run(home / "missing.toml")
     assert "[FAIL] state dir" in out and "summary:" in out
+
+
+# --- v0.15.0 release review regressions -------------------------------------
+
+@pytest.mark.parametrize("decoy", [
+    pytest.param("~zee_no_such_user_xyz/x", marks=posix_only),
+    "/tmp/a\\u0000b",
+])
+def test_stale_decoy_path_still_loads_for_restore_but_not_watch(home, decoy):
+    # restore / cut only load the config; a decoy path that went stale after a
+    # cut must not stop the restore (v0.14.0 behaviour). watch / doctor refuse.
+    from zee.config.schema import Config, duplicate_decoys
+    from zee.errors import ZeeError
+    cfg = home / "assets.toml"
+    _write(cfg, f'[[assets]]\nid = "a"\ndecoy_paths = ["{decoy}"]\n')
+    loaded = Config.load(cfg)
+    with pytest.raises(ZeeError) as e:
+        duplicate_decoys(loaded)
+    assert "Z101" in str(e.value) or e.value.code == "Z101"
+
+
+def test_watch_command_lines_are_not_echoed(home):
+    line = "/u/bin/zee restore watch --token SECRET-VALUE"
+    rc, out = _run(home / "missing.toml", ps=lambda: [line])
+    assert "process(es) that look like" in out and "SECRET-VALUE" not in out

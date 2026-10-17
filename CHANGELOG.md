@@ -44,10 +44,16 @@ releases.
   or contains a NUL character, a `[privsep] socket` with a NUL character,
   or bytes that are not UTF-8 now stops with Z101 instead of an uncaught
   Python error.
-- README (run step 4) and the site (step 3) showed `zee watch -c ./assets.toml`,
+  A decoy path that cannot be expanded or contains a NUL is checked by
+  `zee watch` and `zee doctor` only; `zee restore` and `zee cut` do not
+  check decoy paths, so a restore keeps working if a decoy path goes stale.
+- README (run step 4) and the site showed `zee watch -c ./assets.toml`,
   which the command line rejects; they now show `zee -c ./assets.toml watch`
   (`-c` goes before the subcommand). The `zee doctor` and `zee init` next
-  steps say the same.
+  steps say the same. The site now sets `ZEE_CANARY_BASE_URL` before
+  starting watch (as the README does): watch writes the canary URL into a
+  decoy only when it creates that decoy, and it does not rewrite existing
+  decoys.
 
 ## [0.14.0] — 2026-10-16
 

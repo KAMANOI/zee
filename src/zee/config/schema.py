@@ -105,6 +105,7 @@ def duplicate_decoys(config: Config) -> list[tuple[str, str, str]]:
     """(path, first_asset, other_asset) for decoys listed under two assets.
 
     `zee watch` refuses to start on any; `zee doctor` reports them."""
+    check_decoy_paths(config)
     seen: dict[str, str] = {}
     dups: list[tuple[str, str, str]] = []
     for asset in config.assets:
@@ -116,6 +117,22 @@ def duplicate_decoys(config: Config) -> list[tuple[str, str, str]]:
     return dups
 
 
+def check_decoy_paths(config: "Config") -> None:
+    """Z101 for a decoy path that cannot be expanded (~unknown_user) or has a NUL.
+
+    Only watch / doctor need decoy paths, so this is not part of loading:
+    restore and cut must keep working with a config whose decoy path went
+    stale (e.g. its user was removed) after a cut."""
+    for asset in config.assets:
+        for d in asset.decoy_paths:
+            try:
+                if "\x00" in d:
+                    raise ValueError("contains a NUL character")
+                Path(d).expanduser()
+            except (RuntimeError, ValueError) as e:  # RuntimeError: ~unknown_user
+                raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset '{asset.id}': decoy path {d!r}: {e}") from e
+
+
 def _parse_asset(raw: dict) -> AssetProfile:
     asset_id = raw["id"]
     if isinstance(asset_id, int) and not isinstance(asset_id, bool):
@@ -125,13 +142,6 @@ def _parse_asset(raw: dict) -> AssetProfile:
     decoys = raw.get("decoy_paths", [])
     if not isinstance(decoys, list) or not all(isinstance(d, str) for d in decoys):
         raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset '{asset_id}': decoy_paths must be a list of strings")
-    for d in decoys:
-        try:
-            if "\x00" in d:
-                raise ValueError("contains a NUL character")
-            Path(d).expanduser()
-        except (RuntimeError, ValueError) as e:  # RuntimeError: ~unknown_user
-            raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset '{asset_id}': decoy path {d!r}: {e}") from e
     asset_type = raw.get("type", "workstation")
     if asset_type not in _VALID_ASSET_TYPES:
         raise ZeeError(

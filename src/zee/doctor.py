@@ -120,11 +120,16 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                 say("FAIL", "config", "no [[assets]] defined; `zee watch` refuses to start",
                     f"add an asset to {config_path}")
             else:
-                dups = duplicate_decoys(cfg)
+                try:
+                    dups = duplicate_decoys(cfg)
+                except ZeeError as e:  # decoy path watch cannot use
+                    say("FAIL", "config", f"{config_path}: {e}; `zee watch` refuses to start",
+                        "fix decoy_paths")
+                    dups, cfg = [], None
                 for path, a, b in dups:
                     say("FAIL", "config", f"decoy {path} is under both {a!r} and {b!r}; "
                         "`zee watch` refuses to start", "keep each decoy under one asset")
-                if not dups:
+                if cfg is not None and not dups:
                     say("OK", "config", f"{config_path} loads ({len(cfg.assets)} asset(s))")
             if posix and stat.S_IMODE(cst.st_mode) & _LOOSE:
                 say("WARN", "config", f"{config_path} is writable by other users "
@@ -237,10 +242,10 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     if lines is None:
         say("INFO", "watch", "not checked on this platform (no process list)")
     elif found := [line for line in lines if _looks_like_watch(line)]:
+        # Count only: a command line can carry a token (`zee restore watch --token ...`)
+        # or a home path with a personal name.
         say("OK", "watch", f"{len(found)} process(es) that look like `zee watch` "
             "(process list only: not proof it is healthy or uses this config file)")
-        for line in found[:3]:
-            emit(f"       {line[:160]}")
     else:
         say("WARN", "watch", "no process that looks like `zee watch` was found "
             "(process list only: a renamed launcher would be missed)",
