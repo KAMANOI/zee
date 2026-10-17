@@ -8,6 +8,7 @@ rule is: no backend → never execute on the bare host.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -171,9 +172,13 @@ def test_clean_artifact_adds_no_behavioural_flags(tmp_path):
     assert "ran via" in " ".join(v.notes)
 
 
+# conftest isolates HOME; this live check needs the real one.
+_REAL_HOME = Path(os.environ.get("ZEE_TEST_REAL_HOME") or Path.home())
+
+
 @_needs_backend
 @pytest.mark.skipif(
-    not str(Path.home()).startswith(("/Users/", "/private/var/root", "/var/root")),
+    not str(_REAL_HOME).startswith(("/Users/", "/private/var/root", "/var/root")),
     reason="real home is not under a profile-denied root on this host",
 )
 def test_real_host_secret_cannot_be_exfiltrated(tmp_path):
@@ -185,7 +190,7 @@ def test_real_host_secret_cannot_be_exfiltrated(tmp_path):
     marker = "REALHOSTSECRET_" + _secrets.token_hex(8)
     # A sentinel under the real home, auto-removed when the test ends.
     with _tempfile.TemporaryDirectory(
-        prefix=".zee-gate-test-", dir=str(Path.home())
+        prefix=".zee-gate-test-", dir=str(_REAL_HOME)
     ) as real_dir:
         secret_path = Path(real_dir) / "creds"
         secret_path.write_text(marker + "\n")

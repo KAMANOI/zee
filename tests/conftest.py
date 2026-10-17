@@ -52,6 +52,9 @@ def _point_home_at(home: Path) -> None:
 
 
 _BEFORE = _snapshot()
+# For the one live sandbox test that must place a (self-removing) sentinel
+# under the real home to prove the sandbox denies reads there.
+os.environ["ZEE_TEST_REAL_HOME"] = str(_REAL_HOME)
 # Session-wide fallback so module-level code and broader-scope fixtures
 # never see the real home either.
 _point_home_at(Path(tempfile.mkdtemp(prefix="zee-test-home-")))
