@@ -118,6 +118,8 @@ def duplicate_decoys(config: Config) -> list[tuple[str, str, str]]:
 
 def _parse_asset(raw: dict) -> AssetProfile:
     asset_id = raw["id"]
+    if isinstance(asset_id, int) and not isinstance(asset_id, bool):
+        asset_id = str(asset_id)  # v0.14.0 and earlier accepted `id = 1`; keep it loading
     if not isinstance(asset_id, str):
         raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset id must be a string, got {asset_id!r}")
     decoys = raw.get("decoy_paths", [])

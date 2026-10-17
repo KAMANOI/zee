@@ -286,7 +286,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     path: Path = args.config
     if os.path.lexists(path):
-        raise ZeeError(Z105_CONFIG_ALREADY_EXISTS, f"{path}（中身を確認して編集するか、別の場所を -c で指定）")
+        raise ZeeError(Z105_CONFIG_ALREADY_EXISTS, f"{path}（中身を確認して編集するか、別の場所を zee -c <PATH> init で指定）")
     text = _INIT_TEMPLATE.format(version=__version__)
     try:
         _write_private_files([(path, text)], force=False)
@@ -304,7 +304,8 @@ def _cmd_init(args: argparse.Namespace) -> int:
     print(f"  1. review decoy_paths in {path}", file=sys.stderr)
     print("  2. zee init-restore-token   # keep the printed token somewhere safe",
           file=sys.stderr)
-    print(f"  3. zee {c}watch" + ("   # PowerShell" if win and c else ""), file=sys.stderr)
+    print(f"  3. zee {c}doctor   # read-only check of the setup", file=sys.stderr)
+    print(f"  4. zee {c}watch" + ("   # PowerShell" if win and c else ""), file=sys.stderr)
     return 0
 
 

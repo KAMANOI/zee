@@ -38,11 +38,16 @@ releases.
 
 ### Fixed
 
-- Loading `assets.toml` with a non-string asset `id`, non-string entries in
+- Loading `assets.toml` with an asset `id` that is neither a string nor an
+  integer (an integer such as `id = 1` still loads, as `"1"`), non-string entries in
   `decoy_paths`, a decoy path that cannot be expanded (`~unknown_user/...`)
   or contains a NUL character, a `[privsep] socket` with a NUL character,
   or bytes that are not UTF-8 now stops with Z101 instead of an uncaught
   Python error.
+- README (run step 4) and the site (step 3) showed `zee watch -c ./assets.toml`,
+  which the command line rejects; they now show `zee -c ./assets.toml watch`
+  (`-c` goes before the subcommand). The `zee doctor` and `zee init` next
+  steps say the same.
 
 ## [0.14.0] — 2026-10-16
 

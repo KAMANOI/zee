@@ -159,8 +159,9 @@ def test_config_pointing_at_token_is_not_read(home):
 
 
 @pytest.mark.parametrize("body", [
-    b'[[assets]]\nid = 1\ndecoy_paths = ["~/z/x"]\n',
+    b'[[assets]]\nid = true\ndecoy_paths = ["~/z/x"]\n',
     b'[[assets]]\nid = "a"\ndecoy_paths = [123]\n',
+    b'[[assets]]\nid = "a"\ndecoy_paths = "~/z/x"\n',
     b'\xff\xfe not utf-8',
 ])
 def test_malformed_config_is_fail_not_crash(home, body):
@@ -168,6 +169,19 @@ def test_malformed_config_is_fail_not_crash(home, body):
     cfg.write_bytes(body)
     rc, out = _run(cfg)
     assert rc == 1 and "[FAIL] config" in out and "summary:" in out
+
+
+def test_numeric_asset_id_still_loads(home):
+    # v0.14.0 accepted `id = 1`; upgrading must not stop such a watch.
+    from zee.config.schema import Config
+    cfg = home / "assets.toml"
+    cfg.write_bytes(b'[[assets]]\nid = 1\ndecoy_paths = ["~/z/x"]\n')
+    assert Config.load(cfg).assets[0].id == "1"
+
+
+def test_next_steps_put_c_before_the_subcommand(home):
+    rc, out = _run(home / "missing.toml")
+    assert "zee -c PATH doctor" in out and "doctor -c" not in out
 
 
 def test_canary_same_rule_as_watch(home, monkeypatch):

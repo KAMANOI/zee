@@ -91,7 +91,7 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     try:
         fd = os.open(config_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     except FileNotFoundError:
-        say("FAIL", "config", f"{config_path} not found", "zee init   (or pass the file with -c PATH)")
+        say("FAIL", "config", f"{config_path} not found", "zee init   (or point at your file: zee -c PATH doctor)")
     except (OSError, ValueError) as e:
         say("FAIL", "config", f"{config_path} cannot be opened: {e}",
             f"check that {config_path} is a file you can read")
@@ -105,10 +105,10 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                 same = True  # cannot rule it out: do not read
             if not stat.S_ISREG(cst.st_mode):
                 say("FAIL", "config", f"{config_path} is not a regular file; not read",
-                    "pass your assets.toml with -c PATH")
+                    "point at your assets.toml: zee -c PATH doctor")
             elif same:
                 say("FAIL", "config", f"{config_path} is (or may be) the restore token file; not read",
-                    "pass your assets.toml with -c PATH")
+                    "point at your assets.toml: zee -c PATH doctor")
             else:
                 try:
                     cfg = Config.load_file(f)
