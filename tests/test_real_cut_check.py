@@ -52,7 +52,9 @@ def test_windows_safety_task_checked_before_and_kept_unless_rules_gone():
     create = WF.index("schtasks /create")
     assert WF.index('throw "safety task not created', create) < WF.index("real_cut_check.py", create)
     delete = WF.index("schtasks /delete")
-    assert WF.index("No rules match the specified criteria") < delete
+    # The removal check reads PowerShell objects in both stores, not a localized netsh message.
+    assert WF.index("-PolicyStore $store -ErrorAction Stop") < delete
+    assert "No rules match" not in WF
     assert "if ($gone) { schtasks /delete" in WF
 
 
