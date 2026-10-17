@@ -11,7 +11,8 @@ releases.
 
 - **`zee init`** writes a starter `assets.toml` (or the path given with
   `-c`) so people who installed with `uv tool install` — and so have no
-  `examples/` folder — can start. One asset named after this machine,
+  `examples/` folder — can start. One asset (`this-machine` — rename it; the
+  hostname is not used so no personal name lands in logs or reports),
   `dry_run = true`, `response_mode = "notify"`, decoys under
   `~/.local/share/zee-decoys/` (same defaults as
   `examples/assets.example.toml`). File mode 0600 on macOS / Linux (on

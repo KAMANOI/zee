@@ -20,7 +20,7 @@ def test_init_writes_loadable_observe_only_config(tmp_path, capsys):
     assert cfg.dry_run is True
     assert len(cfg.assets) == 1
     a = cfg.assets[0]
-    assert a.id and a.response_mode == "notify"
+    assert a.id == "this-machine" and a.response_mode == "notify"
     if sys.platform != "win32":
         assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
     assert "zee init-restore-token" in capsys.readouterr().err

@@ -266,7 +266,7 @@ _INIT_TEMPLATE = """\
 dry_run = true
 
 [[assets]]
-id = "{asset_id}"
+id = "this-machine"        # rename freely; avoid personal names (it appears in logs and reports)
 type = "workstation"
 overnight_active = false
 decoy_paths = [
@@ -276,13 +276,6 @@ decoy_paths = [
 response_mode = "notify"   # auto / staged / notify  (start with notify)
 cut_method = "full"        # full / egress  (only used when mode != notify)
 """
-
-
-def _init_asset_id() -> str:
-    import re
-    import socket
-    name = re.sub(r"[^A-Za-z0-9-]+", "-", socket.gethostname().split(".")[0]).strip("-")
-    return name[:63] or "this-machine"
 
 
 def _shell_quote(s: str, windows: bool) -> str:
@@ -299,7 +292,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     path: Path = args.config
     if os.path.lexists(path):
         raise ZeeError(Z105_CONFIG_ALREADY_EXISTS, f"{path}（中身を確認して編集するか、別の場所を -c で指定）")
-    text = _INIT_TEMPLATE.format(version=__version__, asset_id=_init_asset_id())
+    text = _INIT_TEMPLATE.format(version=__version__)
     try:
         _write_private_files([(path, text)], force=False)
     except ZeeError as e:  # re-label: the shared writer reports export codes
