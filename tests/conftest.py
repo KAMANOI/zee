@@ -31,16 +31,35 @@ _REAL_DIRS = sorted({
 })
 
 
+def _stat_both(p: str) -> tuple:
+    # The link itself and, for a link, what it points at: a write through
+    # ~/.zee/events.jsonl -> elsewhere changes only the target.
+    out = []
+    for f in (os.lstat, os.stat):
+        try:
+            st = f(p)
+            out.append((st.st_mode, st.st_size, st.st_mtime_ns))
+        except OSError as e:  # unreadable or dangling still count
+            out.append(("err", e.errno))
+    return tuple(out)
+
+
 def _snapshot() -> dict[str, tuple]:
     snap: dict[str, tuple] = {}
+    seen: set[str] = set()  # real paths already walked (link loops)
     for d in _REAL_DIRS:
-        for p in [d, *d.rglob("*")] if d.exists() else []:
-            try:
-                st = p.lstat()
-            except OSError as e:  # unreadable entries still count
-                snap[str(p)] = ("err", e.errno)
+        if not d.exists():
+            continue
+        snap[str(d)] = _stat_both(str(d))
+        for root, dirs, files in os.walk(d, followlinks=True):
+            real = os.path.realpath(root)
+            if real in seen:
+                dirs[:] = []
                 continue
-            snap[str(p)] = (st.st_mode, st.st_size, st.st_mtime_ns)
+            seen.add(real)
+            for name in dirs + files:
+                p = os.path.join(root, name)
+                snap[p] = _stat_both(p)
     return snap
 
 
