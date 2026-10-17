@@ -214,7 +214,10 @@ def test_fifo_config_does_not_hang(home):
     assert rc == 1 and "not a regular file" in out
 
 
-@pytest.mark.parametrize("decoy", ["~zee_no_such_user_xyz/x", "/tmp/a\\u0000b"])
+@pytest.mark.parametrize("decoy", [
+    pytest.param("~zee_no_such_user_xyz/x", marks=posix_only),  # ntpath guesses ~user instead
+    "/tmp/a\\u0000b",
+])
 def test_unusable_decoy_path_is_z101(home, decoy):
     cfg = home / "assets.toml"
     _write(cfg, f'[[assets]]\nid = "a"\ndecoy_paths = ["{decoy}"]\n')
