@@ -31,7 +31,7 @@ PROFILES_ON = {"Domain": "True", "Private": "True", "Public": "True"}
 
 
 def snap(active=(), persistent=(), profiles=PROFILES_ON):
-    return {"active": list(active), "persistent": list(persistent), "profiles": dict(profiles)}
+    return {"active": list(active), "persistent": list(persistent), "profiles": None if profiles is None else dict(profiles)}
 
 
 # ── the PowerShell reader ──────────────────────────────────────────────
