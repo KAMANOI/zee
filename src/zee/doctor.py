@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 from . import __version__
 from .config.schema import Config, duplicate_decoys
+from .decoy.canary_token import normalize_base_url
 from .errors import ZeeError
 from .recovery.auth import default_token_path
 from .telemetry.events_log import default_log_dir
@@ -43,6 +44,14 @@ def _looks_like_watch(line: str) -> bool:
     parts = line.split()
     return "watch" in parts and any(Path(p).name in ("zee", "zee.exe") or p == "zee.cli"
                                     for p in parts)
+
+
+def _stat(p: Path) -> Optional[os.stat_result]:
+    """stat() that follows links; None if missing. Other OSErrors propagate."""
+    try:
+        return p.stat()
+    except FileNotFoundError:
+        return None
 
 
 def _synced(p: Path) -> Optional[str]:
@@ -72,9 +81,27 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
 
     # --- config -----------------------------------------------------------
     cfg: Optional[Config] = None
-    if not config_path.exists():
-        say("FAIL", "config", f"{config_path} not found",
-            "zee init   (or pass the file with -c PATH)")
+    tok = default_token_path()
+    try:
+        tst = _stat(tok)
+    except OSError:
+        tst = None  # reported in the restore token section
+    try:
+        cst = _stat(config_path)
+    except OSError as e:
+        cst = None
+        say("FAIL", "config", f"{config_path} cannot be checked: {e}")
+    else:
+        if cst is None:
+            say("FAIL", "config", f"{config_path} not found",
+                "zee init   (or pass the file with -c PATH)")
+    if cst is None:
+        pass  # already reported
+    elif tst is not None and (cst.st_dev, cst.st_ino) == (tst.st_dev, tst.st_ino):
+        # never parse the token as a config (that would read its value)
+        say("FAIL", "config", f"{config_path} is the restore token file, not a config; not read",
+            "pass your assets.toml with -c PATH")
+        cst = None
     else:
         try:
             cfg = Config.load(config_path)
@@ -92,7 +119,7 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                         "`zee watch` refuses to start", "keep each decoy under one asset")
                 if not dups:
                     say("OK", "config", f"{config_path} loads ({len(cfg.assets)} asset(s))")
-            if posix and stat.S_IMODE(config_path.stat().st_mode) & _LOOSE:
+            if posix and stat.S_IMODE(cst.st_mode) & _LOOSE:
                 say("WARN", "config", f"{config_path} is writable by other users "
                     "(they could change dry_run / response_mode)", f"chmod 600 {config_path}")
 
@@ -125,7 +152,6 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                     "(if watch is already running, it may have been removed)")
 
     # --- restore token (stat only: never read the value) ------------------
-    tok = default_token_path()
     try:
         st = tok.stat()
     except FileNotFoundError:
@@ -145,20 +171,38 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
 
     # --- state directory --------------------------------------------------
     log_dir = default_log_dir()
-    if not log_dir.exists():
-        say("INFO", "state dir", f"{log_dir} not created yet (made on the first record)")
-    elif not os.access(log_dir, os.W_OK):
+    lst, err = None, None
+    try:
+        lst = _stat(log_dir)
+    except OSError as e:
+        err = e
+    if err is not None:
+        say("FAIL", "state dir", f"{log_dir} cannot be checked: {err}")
+    elif lst is None:
+        if not os.path.lexists(log_dir):
+            say("INFO", "state dir", f"{log_dir} not created yet (`zee watch` creates it on start)")
+        else:
+            say("FAIL", "state dir", f"{log_dir} is a broken link; `zee watch` cannot record",
+                f"move {log_dir} aside")
+    elif not stat.S_ISDIR(lst.st_mode):
+        say("FAIL", "state dir", f"{log_dir} exists but is not a directory; `zee watch` cannot record",
+            f"move {log_dir} aside")
+    elif not os.access(log_dir, os.W_OK | os.X_OK):
         say("FAIL", "state dir", f"{log_dir} is not writable by this user; events cannot be recorded",
             f"check the owner of {log_dir}")
-    elif posix and stat.S_IMODE(log_dir.stat().st_mode) & _LOOSE:
+    elif posix and stat.S_IMODE(lst.st_mode) & _LOOSE:
         say("WARN", "state dir", f"{log_dir} is writable by other users (records could be altered)",
             f"chmod 700 {log_dir}")
     else:
         say("OK", "state dir", f"{log_dir}")
 
     # --- canary -----------------------------------------------------------
-    url = os.environ.get("ZEE_CANARY_BASE_URL", "").strip()
-    if url and url.split("://", 1)[0].lower() != "https":
+    try:
+        url = normalize_base_url(os.environ.get("ZEE_CANARY_BASE_URL"))
+        bad = False
+    except ValueError:
+        url, bad = "", True
+    if bad:
         say("FAIL", "canary", "ZEE_CANARY_BASE_URL is set but not https://; `zee watch` refuses to start",
             "use an https:// receiver URL or unset it")
     elif url:
@@ -180,17 +224,22 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         for line in found[:3]:
             print(f"       {line[:160]}", file=out)
     else:
-        say("WARN", "watch", "no process that looks like `zee watch` was found; decoys are not watched",
+        say("WARN", "watch", "no process that looks like `zee watch` was found "
+            "(process list only: a renamed launcher would be missed)",
             f"zee -c {shlex.quote(str(config_path))} watch   (or check your launchd / systemd / Task Scheduler entry)")
 
     # --- privileges for cuts ----------------------------------------------
     if armed and cfg is not None:
         if cfg.privsep_socket:
-            if Path(cfg.privsep_socket).exists():
+            try:
+                is_sock = stat.S_ISSOCK(os.stat(cfg.privsep_socket).st_mode)
+            except OSError:
+                is_sock = False
+            if is_sock:
                 say("OK", "cut privileges", f"cuts go to the privsep daemon at {cfg.privsep_socket} "
-                    "(socket present; not contacted)")
+                    "(socket file present; daemon not contacted, so not known to be up)")
             else:
-                say("FAIL", "cut privileges", f"privsep socket {cfg.privsep_socket} not found; "
+                say("FAIL", "cut privileges", f"privsep socket {cfg.privsep_socket} missing or not a socket; "
                     "automatic cuts will fail", "start the cut daemon (docs/maintenance/privsep_install.md)")
         elif not posix:
             say("INFO", "cut privileges", "administrator rights not checked on Windows; cuts need them")

@@ -32,7 +32,14 @@ releases.
   automatic cut is on, root or a present privsep socket. It never writes,
   never reads the token's value, never contacts the privsep daemon and
   never goes to the network (the version shown is the local one). Exit
-  code 1 if any line is `[FAIL]`.
+  code 1 if any line is `[FAIL]`. If `-c` points at the restore token file
+  (directly or through a link) it says so and does not parse it.
+
+### Fixed
+
+- Loading `assets.toml` with a non-string asset `id`, non-string entries in
+  `decoy_paths`, or bytes that are not UTF-8 now stops with Z101 instead of
+  an uncaught Python error.
 
 ## [0.14.0] — 2026-10-16
 

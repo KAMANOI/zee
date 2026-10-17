@@ -143,3 +143,53 @@ def test_doctor_changes_nothing(home):
     _run(cfg)
     assert main(["-c", str(cfg), "doctor"]) in (0, 1)
     assert snap() == before
+
+
+# --- Codex review 1 regressions -------------------------------------------
+
+@posix_only
+def test_config_pointing_at_token_is_not_read(home):
+    _token(home)
+    (home / ".zee" / "restore_token").write_text("SECRET-VALUE\n")
+    link = home / "assets.toml"
+    link.symlink_to(home / ".zee" / "restore_token")
+    rc, out = _run(link)
+    assert rc == 1 and "is the restore token file" in out
+    assert "SECRET-VALUE" not in out
+
+
+@pytest.mark.parametrize("body", [
+    b'[[assets]]\nid = 1\ndecoy_paths = ["~/z/x"]\n',
+    b'[[assets]]\nid = "a"\ndecoy_paths = [123]\n',
+    b'\xff\xfe not utf-8',
+])
+def test_malformed_config_is_fail_not_crash(home, body):
+    cfg = home / "assets.toml"
+    cfg.write_bytes(body)
+    rc, out = _run(cfg)
+    assert rc == 1 and "[FAIL] config" in out and "summary:" in out
+
+
+def test_canary_same_rule_as_watch(home, monkeypatch):
+    monkeypatch.setenv("ZEE_CANARY_BASE_URL", "https")  # no scheme separator: watch refuses
+    rc, out = _run(home / "missing.toml")
+    assert "[FAIL] canary" in out
+
+
+def test_state_dir_that_is_a_file_fails(home):
+    (home / "state").mkdir()
+    (home / "state" / "zee").write_text("not a dir")
+    rc, out = _run(home / "missing.toml")
+    assert "[FAIL] state dir" in out
+
+
+@posix_only
+def test_privsep_path_that_is_not_a_socket_fails(home, monkeypatch):
+    monkeypatch.setattr(os, "geteuid", lambda: 501)
+    fake = home / "cutd.sock"
+    fake.write_text("")
+    cfg = home / "assets.toml"
+    _write(cfg, f'dry_run = false\n[privsep]\nsocket = "{fake}"\n'
+                '[[assets]]\nid = "a"\nresponse_mode = "auto"\ndecoy_paths = ["~/z/x"]\n')
+    rc, out = _run(cfg)
+    assert rc == 1 and "not a socket" in out

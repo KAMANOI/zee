@@ -50,7 +50,7 @@ class Config:
         try:
             with path.open("rb") as f:  # tomllib requires binary mode
                 raw = tomllib.load(f)
-        except (OSError, tomllib.TOMLDecodeError) as e:
+        except (OSError, ValueError) as e:  # TOMLDecodeError / UnicodeDecodeError are ValueErrors
             raise ZeeError(Z101_INVALID_ASSET_CONFIG, str(e)) from e
 
         if not isinstance(raw, dict):
@@ -110,6 +110,11 @@ def duplicate_decoys(config: Config) -> list[tuple[str, str, str]]:
 
 def _parse_asset(raw: dict) -> AssetProfile:
     asset_id = raw["id"]
+    if not isinstance(asset_id, str):
+        raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset id must be a string, got {asset_id!r}")
+    decoys = raw.get("decoy_paths", [])
+    if not isinstance(decoys, list) or not all(isinstance(d, str) for d in decoys):
+        raise ZeeError(Z101_INVALID_ASSET_CONFIG, f"asset '{asset_id}': decoy_paths must be a list of strings")
     asset_type = raw.get("type", "workstation")
     if asset_type not in _VALID_ASSET_TYPES:
         raise ZeeError(
@@ -135,7 +140,7 @@ def _parse_asset(raw: dict) -> AssetProfile:
         id=asset_id,
         type=asset_type,
         overnight_active=bool(raw.get("overnight_active", False)),
-        decoy_paths=tuple(raw.get("decoy_paths", [])),
+        decoy_paths=tuple(decoys),
         response_mode=response_mode,
         cut_method=cut_method,
     )

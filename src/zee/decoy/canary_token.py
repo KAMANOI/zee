@@ -73,6 +73,23 @@ def default_registry_path() -> Path:
     return home / ".zee" / "canary_tokens.jsonl"
 
 
+def normalize_base_url(base_url: Optional[str]) -> str:
+    """Strip the URL; raise ValueError unless it is empty or https://.
+    Pure (no file access): `zee doctor` uses it too."""
+    cleaned = (base_url or "").strip().rstrip("/")
+    # URL schemes are case-insensitive per RFC 3986; accept HTTPS://
+    # / Https:// etc. but require the scheme to resolve to "https".
+    scheme = cleaned.split("://", 1)[0].lower() if "://" in cleaned else ""
+    if cleaned and scheme != "https":
+        raise ValueError(
+            "CanaryTokenRegistry base_url must use https:// — canary URLs "
+            "are embedded in decoys and dereferenced by attackers; their "
+            "destination must not be observable in plaintext on the wire. "
+            f"Got: {base_url!r}"
+        )
+    return cleaned
+
+
 class CanaryTokenRegistry:
     """Persisted registry of canary tokens issued by this Zee instance.
 
@@ -87,18 +104,7 @@ class CanaryTokenRegistry:
         *,
         registry_path: Optional[Path] = None,
     ) -> None:
-        cleaned = (base_url or "").strip().rstrip("/")
-        # URL schemes are case-insensitive per RFC 3986; accept HTTPS://
-        # / Https:// etc. but require the scheme to resolve to "https".
-        scheme = cleaned.split("://", 1)[0].lower() if "://" in cleaned else ""
-        if cleaned and scheme != "https":
-            raise ValueError(
-                "CanaryTokenRegistry base_url must use https:// — canary URLs "
-                "are embedded in decoys and dereferenced by attackers; their "
-                "destination must not be observable in plaintext on the wire. "
-                f"Got: {base_url!r}"
-            )
-        self._base_url = cleaned
+        self._base_url = normalize_base_url(base_url)
         self._registry_path = registry_path or default_registry_path()
         self._tokens: dict[str, CanaryToken] = {}
         self._decoy_to_token: dict[str, CanaryToken] = {}
