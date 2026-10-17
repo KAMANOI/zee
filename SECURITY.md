@@ -159,7 +159,12 @@ honestly-published boundaries of what Zee is and is not:
   CLI smoke (`zee --version`, `zee capability`,
   `zee init-restore-token`), and PowerShell / netsh enumeration
   parsers. Continuous-run verification on Japanese / German / French
-  Windows hosts is still pending — the CI runner is en-US.
+  Windows hosts is still pending — the CI runner is en-US. Since
+  2026-10-17 the Windows firewall read-back after a cut or restore uses
+  PowerShell objects (enum values that do not change with the display
+  language) and falls back to English `netsh` text only when PowerShell
+  cannot be used; this has not yet been verified on a non-English
+  Windows.
 - **What `cut_egress` leaves open differs by path.** IPv4: every path
   passes `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` and loopback
   (`lo` / `lo0`; `127.0.0.0/8` on Windows); IPv4 link-local
