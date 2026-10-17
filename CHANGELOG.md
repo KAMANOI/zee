@@ -5,6 +5,20 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+### Added
+
+- **`zee init`** writes a starter `assets.toml` (or the path given with
+  `-c`) so people who installed with `uv tool install` — and so have no
+  `examples/` folder — can start. One asset named after this machine,
+  `dry_run = true`, `response_mode = "notify"`, decoys under
+  `~/.local/share/zee-decoys/` (same defaults as
+  `examples/assets.example.toml`). Owner-only (0600). It never overwrites
+  an existing file or follows a link there (Z105), reports a missing or
+  unwritable folder as Z106, and does not create decoys or the restore
+  token (it prints those as next steps).
+
 ## [0.14.0] — 2026-10-16
 
 Prototype shipped in v0.14.0, off by default (only with [privsep]); not applied on the author's machines; verified only on disposable CI runners.

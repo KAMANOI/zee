@@ -133,8 +133,9 @@ pip install -e .
 ### Run
 
 ```bash
-# 1. Create an asset profile
-cp examples/assets.example.toml ./assets.toml
+# 1. Create an asset profile (observe-only; never overwrites an existing file)
+zee init
+# From a clone you can instead cp examples/assets.example.toml ./assets.toml (annotated example)
 # Edit decoy_paths to point at your own paths
 # The default example uses a Zee-only directory (~/.local/share/zee-decoys/)
 # Avoid ~/Documents and ~/Desktop: with iCloud "Desktop & Documents" (macOS) or OneDrive

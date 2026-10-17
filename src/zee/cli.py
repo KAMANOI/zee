@@ -249,6 +249,67 @@ def _cmd_restore(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+# Starter profile written by `zee init`. Same safe defaults as
+# examples/assets.example.toml (tests/test_init_cli.py keeps them in step):
+# observe-only, notify, decoys in a Zee-only directory.
+_INIT_TEMPLATE = """\
+# Zee asset profile — written by `zee init` (Zee {version}).
+# Full annotated example: examples/assets.example.toml in the repository.
+#
+# Observe-only: dry_run = true and response_mode = "notify" never cut the
+# network. Promote to "auto" only after watching for false positives.
+#
+# Decoys live in a Zee-only directory. Keep it out of ~/Documents and
+# ~/Desktop (iCloud / OneDrive copy those to the cloud) and add it to your
+# backup / antivirus / search-index exclusions to avoid false positives.
+
+dry_run = true
+
+[[assets]]
+id = "{asset_id}"
+type = "workstation"
+overnight_active = false
+decoy_paths = [
+    "~/.local/share/zee-decoys/aws-credentials.decoy",
+    "~/.local/share/zee-decoys/.env",
+]
+response_mode = "notify"   # auto / staged / notify  (start with notify)
+cut_method = "full"        # full / egress  (only used when mode != notify)
+"""
+
+
+def _init_asset_id() -> str:
+    import re
+    import socket
+    name = re.sub(r"[^A-Za-z0-9-]+", "-", socket.gethostname().split(".")[0]).strip("-")
+    return name[:63] or "this-machine"
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    """Write a starter assets.toml so `uv tool install` users (no clone, no
+    examples/) can start. Never overwrites; never touches decoys or tokens."""
+    from .errors import Z105_CONFIG_ALREADY_EXISTS, Z106_CONFIG_NOT_WRITABLE
+
+    path: Path = args.config
+    if os.path.lexists(path):
+        raise ZeeError(Z105_CONFIG_ALREADY_EXISTS, f"{path}（中身を確認して編集するか、別の場所を -c で指定）")
+    text = _INIT_TEMPLATE.format(version=__version__, asset_id=_init_asset_id())
+    try:
+        _write_private_files([(path, text)], force=False)
+    except ZeeError as e:  # re-label: the shared writer reports export codes
+        raise ZeeError(Z106_CONFIG_NOT_WRITABLE, e.detail) from e
+    Config.load(path)  # self-check: what we wrote must load
+    c = f"-c {path} " if path != Path("assets.toml") else ""
+    print(f"[zee init] wrote {path} (owner-only, observe-only: dry_run=true, notify)",
+          file=sys.stderr)
+    print("next:", file=sys.stderr)
+    print(f"  1. review decoy_paths in {path}", file=sys.stderr)
+    print("  2. zee init-restore-token   # keep the printed token somewhere safe",
+          file=sys.stderr)
+    print(f"  3. zee {c}watch", file=sys.stderr)
+    return 0
+
+
 def _cmd_init_restore_token(args: argparse.Namespace) -> int:
     """Generate (or rotate) the restore_token at ~/.zee/restore_token.
 
@@ -688,6 +749,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_init = sub.add_parser(
+        "init",
+        help="write a starter assets.toml (observe-only; refuses to overwrite)",
+    )
+    p_init.set_defaults(func=_cmd_init)
+
     p_watch = sub.add_parser("watch", help="start monitoring decoys")
     p_watch.set_defaults(func=_cmd_watch)
 
@@ -945,6 +1012,8 @@ _DISCUSSIONS_URL = (
 # place by default.
 _USER_INPUT_CODES = frozenset({
     "Z102",  # unknown asset_id
+    "Z105",  # init: assets.toml already exists
+    "Z106",  # init: target folder missing or not writable
     "Z602",  # restore token required
     "Z603",  # restore token not initialised
     "Z604",  # restore token invalid

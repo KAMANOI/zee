@@ -134,8 +134,9 @@ pip install -e .
 ### 起動
 
 ```bash
-# 1. 資産プロファイルを作成
-cp examples/assets.example.toml ./assets.toml
+# 1. 資産プロファイルを作成（観測のみ・既にあれば上書きしない）
+zee init
+# clone した場合は代わりに cp examples/assets.example.toml ./assets.toml でも可（注釈つきの例）
 # 編集して decoy_paths を自組織のパスに置き換える
 # 既定では Zee 専用ディレクトリ（~/.local/share/zee-decoys/）を例示
 # ※ ~/Documents や ~/Desktop は避ける：macOS の iCloud「デスクトップと書類」や Windows の OneDrive

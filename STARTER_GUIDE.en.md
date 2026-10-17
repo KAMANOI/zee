@@ -91,7 +91,7 @@ The MVP runs **dry_run** by default. It does not actually cut connections; it re
 
 Strongly recommended order for the first run:
 
-1. Copy `examples/assets.example.toml` to `./assets.toml`.
+1. Run `zee init` to write `./assets.toml` (observe-only settings; it never overwrites an existing file). From a clone you can instead copy the annotated `examples/assets.example.toml`.
 2. Edit `decoy_paths` to point at dummy paths under a Zee-only directory (e.g. `~/.local/share/zee-decoys/aws-credentials.decoy`). Keep them OUT of real tool directories like `~/.aws/`.
 3. **(macOS / Windows — recommended) Configure a canary receiver.** Linux observes reads directly via inotify and does not need a canary. On macOS / Windows, without `ZEE_CANARY_BASE_URL` set, read-only attacker touches against a decoy are not observed at all. Quickest path using Canarytokens.org:
    1. Open [https://canarytokens.org/](https://canarytokens.org/), choose "DNS / HTTP canary", and generate a token.
