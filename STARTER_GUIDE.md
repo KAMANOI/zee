@@ -91,13 +91,13 @@ MVP は既定で **dry_run** で動きます。実遮断はせず、「もし遮
 
 最初の試行はこの順序を強く推奨します：
 
-1. `zee init` で `./assets.toml` を作る（観測のみの設定・既にあれば上書きしない。v0.14.0 より後の版のみ）。リポジトリを clone した場合は注釈つきの `examples/assets.example.toml` をコピーしてもよい
+1. `zee init` で `./assets.toml` を作る（観測のみの設定・既にあれば上書きしない）。リポジトリを clone した場合は注釈つきの `examples/assets.example.toml` をコピーしてもよい
 2. `decoy_paths` を Zee 専用ディレクトリ配下のダミーパスに書き換える（例：`~/.local/share/zee-decoys/aws-credentials.decoy`）。`~/.aws/` などの正規ツールのディレクトリへの配置は誤検知温床になるため避ける
 3. **（macOS / Windows・推奨）canary レシーバーを設定する** — Linux は inotify で読み取りを直接観察するため不要。macOS / Windows では `ZEE_CANARY_BASE_URL` が未設定だと「読むだけ」の攻撃を一切検知できません。最短手順は Canarytokens.org を使う方法です：
    1. [https://canarytokens.org/](https://canarytokens.org/) を開いて「DNS / HTTP canary」を選び、トークンを生成する
    2. 生成された URL を環境変数に設定する：`export ZEE_CANARY_BASE_URL="https://canarytokens.org/..."`
    3. この状態で `zee watch` を起動すると、seeder が囮ファイルに canary URL を自動埋め込みする。攻撃者がその URL を辿った瞬間に Canarytokens.org 経由で通知が届く（Zee 本体には戻らない）
-4. `zee doctor` で設定・おとり・復旧トークン・監視の有無を確かめる（読むだけ・v0.14.0 より後の版のみ）。`[FAIL]`/`[WARN]` の行には次の手順が出る
+4. `zee doctor` で設定・おとり・復旧トークン・監視の有無を確かめる（読むだけ）。`[FAIL]`/`[WARN]` の行には次の手順が出る
 5. `response_mode: notify` のまま起動（最初は遮断系の挙動も dry_run も走らせない）
 6. 数日〜1 週間、自分の業務をいつも通りやってみる。誤検知（自分のバックアップツールや IDE が囮を踏むなど）が **ゼロ** であることを確認する
 7. 誤検知ゼロが確認できたら、資産ごとに `response_mode: staged` か `auto` に昇格する

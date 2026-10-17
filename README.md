@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.14.0
+Early Public / Research Project — v0.15.0
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.14.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.15.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -113,13 +113,13 @@ zee gate audit
 
 > **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも v0.13.0 の規則で確認）。**v0.13.0 以降に更新してください。**
 
-> **外向き遮断と IPv6（v0.13.1・2026-10-16）** — v0.13.0 までは、iptables の経路（nft の無い Linux）と Windows の経路が IPv4 の規則だけを入れ、**IPv6 の外向き通信を止めていませんでした**（遮断の結果に `IPv6 NOT blocked` と出ていました）。v0.13.1 で、iptables の経路は同じバックエンドの ip6tables にも規則を入れ（入れられなければ遮断は「失敗」）、Windows は同じ規則に IPv6 の範囲を足しました。どちらの経路も、ループバック・リンクローカル（`fe80::/10`）・ULA（`fc00::/7`）・リンク内マルチキャスト（`ff02::/16`）以外の IPv6 を止めます。Linux（名前空間内の nft・iptables nf_tables 版・legacy 版）では IPv6 の通信が止まって復旧で戻ることを実測しました。**Windows は規則が入り読み直しで一致することまでを確認し、IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が無いため）。**v0.13.1 以降（最新は v0.14.0）に更新してください。** **VPN・オーバーレイの注意**：Tailscale（`fd7a:115c:a1e0::/48`）・ZeroTier などのオーバーレイや VPN が、私用アドレス（IPv4 の RFC 1918）や ULA（`fc00::/7`）で遠くの相手につながっている場合、egress 遮断はそこへの通信を止めません（その宛先は「ローカル」として通すため）。そうした端末で確実に止めたい場合は `cut_method: full` を使ってください。なお IPv6 のリンクローカル・ULA は、iptables・Windows の経路では通し、nft・pf の経路では止めます（経路で扱いが違います）。
+> **外向き遮断と IPv6（v0.13.1・2026-10-16）** — v0.13.0 までは、iptables の経路（nft の無い Linux）と Windows の経路が IPv4 の規則だけを入れ、**IPv6 の外向き通信を止めていませんでした**（遮断の結果に `IPv6 NOT blocked` と出ていました）。v0.13.1 で、iptables の経路は同じバックエンドの ip6tables にも規則を入れ（入れられなければ遮断は「失敗」）、Windows は同じ規則に IPv6 の範囲を足しました。どちらの経路も、ループバック・リンクローカル（`fe80::/10`）・ULA（`fc00::/7`）・リンク内マルチキャスト（`ff02::/16`）以外の IPv6 を止めます。Linux（名前空間内の nft・iptables nf_tables 版・legacy 版）では IPv6 の通信が止まって復旧で戻ることを実測しました。**Windows は規則が入り読み直しで一致することまでを確認し、IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が無いため）。**v0.13.1 以降（最新は v0.15.0）に更新してください。** **VPN・オーバーレイの注意**：Tailscale（`fd7a:115c:a1e0::/48`）・ZeroTier などのオーバーレイや VPN が、私用アドレス（IPv4 の RFC 1918）や ULA（`fc00::/7`）で遠くの相手につながっている場合、egress 遮断はそこへの通信を止めません（その宛先は「ローカル」として通すため）。そうした端末で確実に止めたい場合は `cut_method: full` を使ってください。なお IPv6 のリンクローカル・ULA は、iptables・Windows の経路では通し、nft・pf の経路では止めます（経路で扱いが違います）。
 
 ### インストール
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.14.0"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.15.0"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git
@@ -135,8 +135,7 @@ pip install -e .
 
 ```bash
 # 1. 資産プロファイルを作成（観測のみ・既にあれば上書きしない）
-zee init   # v0.14.0 より後の版で使えます
-# v0.14.0 では https://github.com/KAMANOI/zee/blob/v0.14.0/examples/assets.example.toml の内容を ./assets.toml として保存
+zee init
 # clone した場合は代わりに cp examples/assets.example.toml ./assets.toml でも可（注釈つきの例）
 # 編集して decoy_paths を自組織のパスに置き換える
 # 既定では Zee 専用ディレクトリ（~/.local/share/zee-decoys/）を例示
@@ -153,11 +152,11 @@ export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 # 3. 復旧トークンを 1 回だけ生成（v0.3 以降必須）
 zee init-restore-token   # 表示されたトークンを安全な場所に控える
 
-#    ここまでの状態を確かめる（読むだけ・何も書き換えない。v0.14.0 より後の版で使えます）
+#    ここまでの状態を確かめる（読むだけ・何も書き換えない）
 zee doctor   # 設定・おとり・復旧トークン・監視の有無・遮断の権限を確かめ、足りない所に次の手順を表示
 
 # 4. 監視開始（既定は dry_run、実遮断なし）
-zee watch -c ./assets.toml
+zee -c ./assets.toml watch   # -c はサブコマンドの前に置く
 
 # 5. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換えてみる
 echo "tampered $(date)" >> ~/.local/share/zee-decoys/.env

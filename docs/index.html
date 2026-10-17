@@ -195,7 +195,7 @@
       <b>PROJECT STATUS</b> — Early Public / Research Project<br />
       Zee is not a production-ready security product.<br />
       Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.<br />
-      Implemented (v0.14.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.<br />
+      Implemented (v0.15.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.<br />
       What has been verified, under which conditions, and what has not: <a href="https://github.com/KAMANOI/zee/blob/main/docs/verification/README.md" style="color:var(--accent)">docs/verification/</a>
     </div>
   </div>
@@ -300,16 +300,16 @@ zee gate audit</div>
     <h2>既定 dry_run。明示昇格まで実遮断はしない。</h2>
     <p class="lead" style="margin-bottom:6px">Zee は侵入を防ぐ層ではなく、侵入後に<b>狭く高信頼な検知信号（囮への接触）</b>を1本足す層です。「あなたの検知体制全般」を肩代わりするものではありません。</p>
     <div class="code"><span class="c"># 1. インストール（タグを固定して1行で）</span>
-uv tool install "git+https://github.com/KAMANOI/zee@v0.14.0"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.15.0"
 <span class="c"># 手元で開発する場合: git clone https://github.com/KAMANOI/zee.git &amp;&amp; cd zee &amp;&amp; pip install -e .</span>
 <span class="c"># ※ pip install zee / npx zee は別の作者の無関係なパッケージです。使わないでください</span>
 
-<span class="c"># 2. 資産プロファイルを作成</span>
-cp examples/assets.example.toml ./assets.toml
+<span class="c"># 2. 資産プロファイルを作成（観測のみ・既にあれば上書きしない）</span>
+zee init
 <span class="c"># 編集して decoy_paths を自組織のパスに置き換える</span>
 
 <span class="c"># 3. 監視開始（既定は dry_run、実遮断なし）</span>
-zee watch -c ./assets.toml
+zee -c ./assets.toml watch
 
 <span class="c"># 4.（任意）macOS / Windows での「読み取り検知」を有効化</span>
 <span class="c">#   外部 webhook 受信器（Canarytokens.org / 自前 / Lambda 等）の URL を渡す</span>
@@ -317,6 +317,7 @@ export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 
 <span class="c"># 5. 復旧トークンを 1 回だけ生成（v0.3 以降必須）</span>
 zee init-restore-token   <span class="c"># 表示されたトークンを安全な場所に控える</span>
+zee doctor   <span class="c"># 読むだけの自己診断。足りない所に次の手順を表示</span>
 
 <span class="c"># 6. 別ウィンドウで「攻撃者の改ざんを真似て」囮を書き換える</span>
 echo "tampered $(date)" &gt;&gt; ~/.local/share/zee-decoys/.env
@@ -532,7 +533,7 @@ zee restore &lt;asset_id&gt; --token &lt;TOKEN&gt;
     <h2 style="max-width:760px">万能ではありません。Zee は“もう一層”です。</h2>
     <div class="feat">
       <ul>
-        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b>（v0.14.0）の段階で、MIT ライセンス・無保証で提供します。本番導入の前に、ご自身の環境での検証を推奨します。</li>
+        <li>Zee は現在 <b style="color:var(--text)">Early Public / Research Project</b>（v0.15.0）の段階で、MIT ライセンス・無保証で提供します。本番導入の前に、ご自身の環境での検証を推奨します。</li>
         <li>侵入そのものを防ぐものでも、すべての攻撃を検知できるものでもありません。</li>
       </ul>
       <ul>

@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.14.0
+Early Public / Research Project — v0.15.0
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.14.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.15.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -112,13 +112,13 @@ The MVP lives under `src/zee/`. **It runs dry_run by default and does not actual
 
 > **If you used `cut_method: egress` on macOS or Windows with v0.12.0 or earlier (2026-10-15)** — Up to v0.12.0, the outbound cut **did not stop traffic** on either: on macOS its rules were loaded into an anchor the stock `/etc/pf.conf` does not reference, and on Windows `netsh` rejected the rule (Zee reported that cut as failed). v0.13.0 fixes both; traffic was confirmed to stop and come back on GitHub's virtual runners (macOS and en-US Windows), and on macOS also on one real Mac with the v0.13.0 rules. **Please update to v0.13.0 or later.**
 
-> **Outbound cut and IPv6 (v0.13.1, 2026-10-16)** — Up to v0.13.0, the iptables path (Linux without nft) and the Windows path installed IPv4 rules only and **did not stop outbound IPv6** (the cut result said `IPv6 NOT blocked`). In v0.13.1 the iptables path installs the same chain through ip6tables of the same backend (if it cannot, the cut is reported as failed), and the Windows rule also carries the IPv6 ranges. Both now stop IPv6 except loopback, link-local (`fe80::/10`), ULA (`fc00::/7`) and link-scope multicast (`ff02::/16`). On Linux (nft, iptables nf_tables and legacy, inside a network namespace) IPv6 was measured to stop and come back. **On Windows, the rule was accepted and read back as set, but IPv6 traffic stopping was not measured** (the runner has no outbound IPv6). **Please update to v0.13.1 or later (latest: v0.14.0).** **VPNs and overlays:** if an overlay or VPN (Tailscale `fd7a:115c:a1e0::/48`, ZeroTier, ...) reaches remote peers over private IPv4 (RFC 1918) or ULA (`fc00::/7`) addresses, the egress cut does not stop traffic to them (those destinations are passed as "local"). Use `cut_method: full` on such hosts. IPv6 link-local and ULA are passed on the iptables and Windows paths but blocked on the nft and pf paths.
+> **Outbound cut and IPv6 (v0.13.1, 2026-10-16)** — Up to v0.13.0, the iptables path (Linux without nft) and the Windows path installed IPv4 rules only and **did not stop outbound IPv6** (the cut result said `IPv6 NOT blocked`). In v0.13.1 the iptables path installs the same chain through ip6tables of the same backend (if it cannot, the cut is reported as failed), and the Windows rule also carries the IPv6 ranges. Both now stop IPv6 except loopback, link-local (`fe80::/10`), ULA (`fc00::/7`) and link-scope multicast (`ff02::/16`). On Linux (nft, iptables nf_tables and legacy, inside a network namespace) IPv6 was measured to stop and come back. **On Windows, the rule was accepted and read back as set, but IPv6 traffic stopping was not measured** (the runner has no outbound IPv6). **Please update to v0.13.1 or later (latest: v0.15.0).** **VPNs and overlays:** if an overlay or VPN (Tailscale `fd7a:115c:a1e0::/48`, ZeroTier, ...) reaches remote peers over private IPv4 (RFC 1918) or ULA (`fc00::/7`) addresses, the egress cut does not stop traffic to them (those destinations are passed as "local"). Use `cut_method: full` on such hosts. IPv6 link-local and ULA are passed on the iptables and Windows paths but blocked on the nft and pf paths.
 
 ### Install
 
 ```bash
 # Install in one line, pinned to a tag (recommended — no external registry involved)
-uv tool install "git+https://github.com/KAMANOI/zee@v0.14.0"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.15.0"
 
 # Or, to develop locally
 git clone https://github.com/KAMANOI/zee.git
@@ -134,8 +134,7 @@ pip install -e .
 
 ```bash
 # 1. Create an asset profile (observe-only; never overwrites an existing file)
-zee init   # available after v0.14.0
-# With v0.14.0, save https://github.com/KAMANOI/zee/blob/v0.14.0/examples/assets.example.toml as ./assets.toml
+zee init
 # From a clone you can instead cp examples/assets.example.toml ./assets.toml (annotated example)
 # Edit decoy_paths to point at your own paths
 # The default example uses a Zee-only directory (~/.local/share/zee-decoys/)
@@ -152,11 +151,11 @@ export ZEE_CANARY_BASE_URL="https://your-receiver.example.com/r"
 # 3. Generate a restore token once (required from v0.3)
 zee init-restore-token   # capture the printed token somewhere safe
 
-#    Check the setup so far (read-only, changes nothing; available after v0.14.0)
+#    Check the setup so far (read-only, changes nothing)
 zee doctor   # config, decoys, restore token, a running watch, cut privileges — with next steps
 
 # 4. Start monitoring (default dry_run — no real cut)
-zee watch -c ./assets.toml
+zee -c ./assets.toml watch   # -c goes before the subcommand
 
 # 5. In another window, simulate an attacker tampering with the decoy
 echo "tampered $(date)" >> ~/.local/share/zee-decoys/.env

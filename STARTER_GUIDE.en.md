@@ -91,13 +91,13 @@ The MVP runs **dry_run** by default. It does not actually cut connections; it re
 
 Strongly recommended order for the first run:
 
-1. Run `zee init` to write `./assets.toml` (observe-only settings; it never overwrites an existing file; versions after v0.14.0 only). From a clone you can instead copy the annotated `examples/assets.example.toml`.
+1. Run `zee init` to write `./assets.toml` (observe-only settings; it never overwrites an existing file). From a clone you can instead copy the annotated `examples/assets.example.toml`.
 2. Edit `decoy_paths` to point at dummy paths under a Zee-only directory (e.g. `~/.local/share/zee-decoys/aws-credentials.decoy`). Keep them OUT of real tool directories like `~/.aws/`.
 3. **(macOS / Windows — recommended) Configure a canary receiver.** Linux observes reads directly via inotify and does not need a canary. On macOS / Windows, without `ZEE_CANARY_BASE_URL` set, read-only attacker touches against a decoy are not observed at all. Quickest path using Canarytokens.org:
    1. Open [https://canarytokens.org/](https://canarytokens.org/), choose "DNS / HTTP canary", and generate a token.
    2. Set the generated URL as an environment variable: `export ZEE_CANARY_BASE_URL="https://canarytokens.org/..."`
    3. Start `zee watch` with this variable set. The seeder will embed the canary URL into decoy content; when an attacker dereferences it, Canarytokens.org notifies you (out-of-band — never re-enters Zee's local responder).
-4. Run `zee doctor` to check the config, decoys, restore token and whether watch is running (read-only; versions after v0.14.0 only). `[FAIL]` / `[WARN]` lines come with a next step.
+4. Run `zee doctor` to check the config, decoys, restore token and whether watch is running (read-only). `[FAIL]` / `[WARN]` lines come with a next step.
 5. Leave `response_mode: notify` (no cut, no would-have-cut path).
 6. Run your normal workflow for several days to a week. Confirm **zero false positives** — your backup tool, IDE, or indexing daemon should not be tripping the decoys.
 7. Once you observe zero false positives, promote individual assets to `response_mode: staged` or `auto`.
