@@ -302,7 +302,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
         raise ZeeError(Z106_CONFIG_NOT_WRITABLE, e.detail) from e
     Config.load(path)  # self-check: what we wrote must load
     import shlex
-    c = f"-c {shlex.quote(str(path))} " if path != Path("assets.toml") else ""
+    import subprocess
+    q = subprocess.list2cmdline([str(path)]) if sys.platform == "win32" else shlex.quote(str(path))
+    c = f"-c {q} " if path != Path("assets.toml") else ""
     print(f"[zee init] wrote {path} (observe-only: dry_run=true, notify; "
           f"mode 0600 on macOS/Linux)",
           file=sys.stderr)

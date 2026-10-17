@@ -77,6 +77,7 @@ def test_init_race_after_check_reports_z105(tmp_path, capsys, monkeypatch):
     assert "Z105" in capsys.readouterr().err
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX quoting")
 def test_init_next_step_quotes_path(tmp_path, capsys):
     target = tmp_path / "my dir" / "a.toml"
     target.parent.mkdir()

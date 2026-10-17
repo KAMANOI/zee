@@ -135,7 +135,8 @@ pip install -e .
 
 ```bash
 # 1. 資産プロファイルを作成（観測のみ・既にあれば上書きしない）
-zee init   # v0.14.0 より後の版で使えます。v0.14.0 では下の cp を使ってください
+zee init   # v0.14.0 より後の版で使えます
+# v0.14.0 では https://github.com/KAMANOI/zee/blob/v0.14.0/examples/assets.example.toml の内容を ./assets.toml として保存
 # clone した場合は代わりに cp examples/assets.example.toml ./assets.toml でも可（注釈つきの例）
 # 編集して decoy_paths を自組織のパスに置き換える
 # 既定では Zee 専用ディレクトリ（~/.local/share/zee-decoys/）を例示
