@@ -16,11 +16,14 @@ place name. Keep that jsonl apart from the places it describes.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
 from dataclasses import dataclass
 
 from .canary_token import CanaryTokenRegistry
+from .query_canary import _check_domain as check_domain
 from .query_canary import issue_query_canary
 
 PLACE_PREFIX = "place:"
@@ -38,47 +41,77 @@ class Hit:
     breaches: tuple[str, ...]
 
 
-def _place_by_alias(registry: CanaryTokenRegistry) -> dict[str, str]:
-    out: dict[str, str] = {}
+def _records(registry: CanaryTokenRegistry) -> list[tuple[str, str, str]]:
+    """(alias, place, domain) for every place record. A corrupt table stops
+    the run (raises) instead of being read as "no such decoy"."""
+    out: list[tuple[str, str, str]] = []
     path = registry.registry_path
     if not path.exists():
         return out
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    if path.stat().st_mode & 0o077:
+        raise PermissionError(f"{path} must be owner-only (0600)")
+    for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
         try:
             rec = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        purpose = rec.get("purpose", "")
-        if purpose.startswith(PLACE_PREFIX) and rec.get("decoy_path"):
-            out[rec["decoy_path"].rsplit("/", 1)[-1]] = purpose[len(PLACE_PREFIX):]
+            purpose, alias = rec["purpose"], rec["decoy_path"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            raise ValueError(f"{path}:{n} is not a valid mapping record") from e
+        if purpose.startswith(PLACE_PREFIX):
+            place, _, domain = purpose[len(PLACE_PREFIX):].partition("|")
+            out.append((alias.rsplit("/", 1)[-1], place, domain))
     return out
 
 
 def issue_place_email(registry: CanaryTokenRegistry, domain: str, place: str) -> str:
-    """Return the address for ``place`` (one per place; idempotent)."""
+    """Return the address for ``place`` (one per place; idempotent).
+
+    Serialised by a lock file next to the table so two runs cannot both
+    pass the cap or mint two addresses for one place.
+    """
+    domain = domain.strip().lower()
     if not _PLACE_RE.match(place):
         raise ValueError(f"place name must match {_PLACE_RE.pattern!r}: {place!r}")
-    existing = {p: a for a, p in _place_by_alias(registry).items()}
-    if place in existing:
-        return f"{existing[place]}@{domain}"
-    if len(existing) >= FREE_TIER_MAX_ADDRESSES:
-        raise ValueError(
-            f"{len(existing)} places already hold an address; more than "
-            f"{FREE_TIER_MAX_ADDRESSES} could exceed the free domain-monitoring tier"
-        )
-    return issue_query_canary(registry, "email", PLACE_PREFIX + place, domain=domain).value
+    check_domain(domain)  # also for an already-issued place
+    registry.registry_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock = os.open(str(registry.registry_path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        recs = _records(registry)
+        for alias, p, d in recs:
+            if p == place:
+                if d != domain:
+                    raise ValueError(f"{place!r} already has an address on another domain")
+                return f"{alias}@{domain}"
+        if len({p for _, p, _ in recs}) >= FREE_TIER_MAX_ADDRESSES:
+            raise ValueError(
+                f"{FREE_TIER_MAX_ADDRESSES} places already hold an address; more could "
+                "exceed the free domain-monitoring tier"
+            )
+        value = issue_query_canary(
+            registry, "email", f"{PLACE_PREFIX}{place}|{domain}", domain=domain
+        ).value
+        owners = [p for a, p, _ in _records(registry) if a == value.split("@")[0]]
+        if owners != [place]:  # token collision: refuse rather than mis-attribute
+            raise RuntimeError("decoy token collision; retry")
+        return value
+    finally:
+        os.close(lock)
 
 
 def locate(
-    registry: CanaryTokenRegistry, breached: dict[str, list[str]]
+    registry: CanaryTokenRegistry, domain: str, breached: dict[str, list[str]]
 ) -> tuple[list[Hit], list[str]]:
-    """Map ``{alias: [breach names]}`` to (hits on our decoys, unknown aliases).
+    """Map ``{alias: [breach names]}`` for ``domain`` to (candidate places, unknown aliases).
 
-    Unknown aliases are addresses on the watched domain that are not in
-    the table (a real user or an address leaked from somewhere we did
-    not seed); report them, do not drop them.
+    A hit means "this decoy was in the leaked data", i.e. the place is a
+    *candidate* (a dump copied elsewhere carries its decoy along). Unknown
+    aliases are addresses on the domain that are not in the table; report
+    them, do not drop them.
     """
-    table = _place_by_alias(registry)
+    domain = domain.strip().lower()
+    table = {a: p for a, p, d in _records(registry) if d == domain}
     hits = [
         Hit(table[a.lower()], a.lower(), tuple(b))
         for a, b in breached.items()
