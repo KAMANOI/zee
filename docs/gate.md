@@ -53,16 +53,16 @@ the configuration; they never run it.
 
 | Code | Severity | What it flags |
 |---|---|---|
-| G205 | MEDIUM | A value interpolated into a shell command string without quoting (f-string, `.format`, `%`, `+`; JS template literal) that reaches `os.system`, `shell=True`, `create_subprocess_shell` or a helper that calls them. `shlex.quote`, `int()` / `{x:d}` and constants are not flagged. |
+| G205 | MEDIUM | A value interpolated into a shell command string without quoting (f-string, `.format`, `%`, `+`; JS template literal) that reaches `os.system`, `shell=True`, `create_subprocess_shell` or a helper that calls them. `shlex.quote` (and `shellquote`-style names), `int()` / `float()`, `{x:d}` and constants are not flagged; a type hint such as `x: int` is not treated as proof. |
 | G206 | LOW | A tool named `computer` / `browser` declared with a custom `input_schema` and no vendor tool type (`computer_20…`): the API's screen-specific safety classifiers do not apply to a custom definition. |
-| G207 | LOW | A Python tool class whose literal `input_schema` and handler (`execute` / `__call__` / `run` …) parameters disagree. Handlers with `**kwargs` are skipped. |
+| G207 | LOW | A Python tool class whose literal `input_schema` and handler (`execute` / `__call__` / `run` …) parameters disagree. Handlers with `**kwargs`, or a single parameter that unpacks the whole input, are skipped. |
 | G208 | MEDIUM | A command allowlist (Python / JS names containing `allow`, or Claude `permissions.allow` `Bash(...)` rules) that includes `bash`, `sh`, `python`, `node`, `env`, `sudo`, a single `*.sh` script, or an inline-code form (`node -e`, `python -c`). The agent can write the script or the code. |
 | G209 | MEDIUM | A network policy (YAML / JSON / TOML that mentions endpoints / egress / allowed hosts) in `audit` / log-only mode, `enforce: false`, a wildcard host, or a path rule that allows every path. A wildcard *inside* a path (`/work/*/heartbeat`) is not flagged. |
 | G210 | MEDIUM | `NOPASSWD` sudo rules. |
 | G211 | MEDIUM | `x11vnc` started without a password option, or `-nopw` / `-SecurityTypes None`. Package-install lines are not flagged. |
-| G602 | MEDIUM | `cat` / `head` / `grep` (without `-q` / `-c` / `-l`) or "read/print the …" on `.env`, `.aws/credentials`, `.ssh/id_*`, `.npmrc`, `.pypirc`, `.netrc`. Lines that say *never / do not / without* are not flagged. |
+| G602 | MEDIUM | `cat` / `head` / `grep` (without `-q` / `-c` / `-l`) or "read/print the …" on `.env`, `.aws/credentials`, `.ssh/id_*`, `.npmrc`, `.pypirc`, `.netrc`. Lines that say *never / do not / without*, public keys (`id_*.pub`) and `.env.example` / `.sample` / `.template` are not flagged. |
 
-Limits, stated plainly: these are heuristics, one flag per code per file.
+Limits, stated plainly: these are heuristics, one flag per code per file. Files over 2 MiB get G910 from the main pass; a Python file too deeply nested to walk gets G911.
 Data flow across files is followed by function name only; a value validated
 in a place Zee cannot follow is still reported; JS/TS handler signatures are
 not compared (G207), and schemas that are not literals are skipped. A clean

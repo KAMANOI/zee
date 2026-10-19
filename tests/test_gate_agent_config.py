@@ -51,7 +51,8 @@ _SAFE_TOOL = (
     "class Tool:\n"
     "    async def shell(self, command):\n"
     "        return await run(command)\n"
-    "    async def __call__(self, action, text, x: int):\n"
+    "    async def __call__(self, action, text, x):\n"
+    "        x = int(x)\n"
     "        parts = ['xdotool', f'key -- {shlex.quote(text)}', f'mousemove {x}']\n"
     "        return await self.shell(' '.join(parts))\n"
 )
@@ -91,6 +92,52 @@ def test_g205_js_template_literal(tmp_path):
             "exec(`xdotool key -- ${shellQuote(text)}`);\n")
     assert "G205" in _scan(tmp_path / "bad", {"a.js": bad})
     assert "G205" not in _scan(tmp_path / "good", {"a.js": good})
+
+
+def test_g205_quote_inside_is_clean_and_annotation_is_not_proof(tmp_path):
+    ok = ("import os, shlex\ndef f(x, y):\n"
+          "    os.system('echo ' + shlex.quote(f'hello {x}'))\n"
+          "    os.system('echo %s' % (shlex.quote(y),))\n")
+    bad = "import os\ndef f(x: int):\n    os.system(f'echo {x}')\n"
+    assert "G205" not in _scan(tmp_path / "ok", {"a.py": ok})
+    assert "G205" in _scan(tmp_path / "bad", {"a.py": bad})
+
+
+def test_python_adversarial_shapes_stay_fast_and_do_not_crash(tmp_path):
+    n = 3000
+    chain = "import os\n" + "".join(f"def f{i}(c):\n    return f{i + 1}(c)\n" for i in range(n)) \
+        + f"def f{n}(c):\n    os.system(c)\n"
+    selfref = "import os\ndef g(t, c):\n" + "    c = f'{c} {t}'\n" * n + "    os.system(c)\n"
+    deep = "def h(x):\n    return f'{" + "+".join(["x"] * 1500) + "}'\n"
+    for name, body in (("chain", chain), ("selfref", selfref), ("deep", deep)):
+        (tmp_path / f"{name}.py").write_text(body)
+    t = time.perf_counter()
+    got = _scan(tmp_path, {})
+    assert time.perf_counter() - t < 5.0
+    assert any("selfref.py" in e for e in got["G205"])
+
+
+def test_size_gap_is_not_silent(tmp_path):
+    # between the old 512 KiB cut-off and the main pass's 2 MiB limit the checks still run
+    pad = "# " + "x" * 100 + "\n"
+    body = "import os\ndef f(n):\n    os.system('ls ' + n)\n" + pad * 6000
+    assert len(body) > 600_000
+    assert "G205" in _scan(tmp_path, {"big.py": body})
+
+
+def test_safe_spellings_stay_clean(tmp_path):
+    got = _scan(tmp_path, {
+        "k.md": "show your key: `cat ~/.ssh/id_ed25519.pub` ; `cat .env.example`\n",
+        "d.py": "DISALLOWED_COMMANDS = {'bash', 'sh'}\nALLOWED_EXTENSIONS = {'.sh', '.py'}\n",
+        "d.ts": "const disallowedCommands = ['bash'];\n",
+        "t.py": "class T:\n    input_schema = {'properties': {'a': {}, 'b': {}}}\n"
+                "    def execute(self, arguments: dict):\n        return arguments\n",
+        "l.yaml": "logging:\n  mode: audit\nnetwork_policies: {}\n",
+    })
+    for code in ("G602", "G208", "G207", "G209"):
+        assert code not in got, (code, got.get(code))
+    assert "G602" in _scan(tmp_path / "e", {"a.md": "run `cat .env.local`\n"})
+    assert "G209" in _scan(tmp_path / "j", {"p.json": '{"egress": {"enforcement": "audit"}}'})
 
 
 # ---- G206 -----------------------------------------------------------------

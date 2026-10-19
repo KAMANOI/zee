@@ -35,7 +35,7 @@ from pathlib import Path
 
 from .model import Flag, Severity
 
-_MAX_BYTES = 512 * 1024  # larger files are left to the main pass's G910
+_MAX_BYTES = 2 * 1024 * 1024  # = static_checks._MAX_READ_BYTES: bigger files get G910 there
 _MAX_LINE = 2000  # a longer line is cut: every line pattern stays bounded
 _PY = {".py"}
 _JS = {".js", ".ts", ".mjs", ".cjs"}
@@ -60,7 +60,7 @@ def _lines(text: str):
 _SHELL_SINKS = {"system", "popen", "create_subprocess_shell", "getoutput",
                 "getstatusoutput"}
 _SUBPROC = {"run", "call", "check_call", "check_output", "Popen"}
-_QUOTERS = {"quote", "shlex_quote", "escape", "shell_escape", "shellquote"}
+_QUOTERS = {"quote", "shlex_quote", "shell_escape", "shellquote"}
 _SAFE_CONVERT = {"int", "float", "bool", "len", "abs", "round"}
 
 
@@ -87,24 +87,24 @@ def _py_functions(tree: ast.AST):
 def _shell_helpers(trees: dict[str, ast.AST]) -> set[str]:
     """Names of functions that pass one of their own parameters to a shell
     sink (directly or through another such function). Matched by name across
-    the whole tree: `self.shell(cmd)` -> `run(cmd)` -> create_subprocess_shell."""
-    funcs = [f for t in trees.values() for f in _py_functions(t)]
+    the whole tree: `self.shell(cmd)` -> `run(cmd)` -> create_subprocess_shell.
+    Built once as a reverse call graph and walked from the sinks: linear."""
     helpers: set[str] = set()
-    changed = True
-    while changed:
-        changed = False
-        for f in funcs:
-            if f.name in helpers:
-                continue
-            params = {a.arg for a in f.args.args + f.args.kwonlyargs} - {"self", "cls"}
-            for call in (n for n in ast.walk(f) if isinstance(n, ast.Call)):
-                if _is_shell_call(call, helpers) and any(
-                    isinstance(n, ast.Name) and n.id in params
-                    for a in call.args for n in ast.walk(a)
-                ):
+    callers: dict[str, set[str]] = {}  # callee name -> functions passing a parameter to it
+    for f in (f for t in trees.values() for f in _py_functions(t)):
+        params = {a.arg for a in f.args.args + f.args.kwonlyargs} - {"self", "cls"}
+        for call in (n for n in ast.walk(f) if isinstance(n, ast.Call)):
+            if any(isinstance(n, ast.Name) and n.id in params
+                   for a in call.args for n in ast.walk(a)):
+                callers.setdefault(_callee(call), set()).add(f.name)
+                if _is_shell_call(call, set()):
                     helpers.add(f.name)
-                    changed = True
-                    break
+    todo = list(helpers)
+    while todo:
+        for caller in callers.get(todo.pop(), ()):
+            if caller not in helpers:
+                helpers.add(caller)
+                todo.append(caller)
     return helpers
 
 
@@ -126,7 +126,16 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
             return False
         return True
 
-    for n in ast.walk(expr):
+    def walk(root: ast.AST):
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            yield n
+            if isinstance(n, ast.Call) and _callee(n) in _QUOTERS | _SAFE_CONVERT:
+                continue  # whatever is inside a quoter / int() is made safe
+            stack.extend(ast.iter_child_nodes(n))
+
+    for n in walk(expr):
         if isinstance(n, ast.JoinedStr):
             for fv in n.values:
                 if isinstance(fv, ast.FormattedValue) and dynamic(fv.value):
@@ -143,7 +152,8 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
                 return n
         elif isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Mod, ast.Add)) \
                 and (isinstance(n.left, ast.Constant) and isinstance(n.left.value, str)):
-            if dynamic(n.right):
+            right = n.right.elts if isinstance(n.right, ast.Tuple) else [n.right]
+            if any(dynamic(r) for r in right):
                 return n
     return None
 
@@ -151,9 +161,7 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
 def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
     hits: list[ast.AST] = []
     for fn in _py_functions(tree):
-        safe = {a.arg for a in fn.args.args + fn.args.kwonlyargs
-                if isinstance(a.annotation, ast.Name)
-                and a.annotation.id in _SAFE_CONVERT}
+        safe: set[str] = set()  # names set from int()/float(): a type hint proves nothing at run time
         # names that hold a built-up command: `parts = [.., f"key -- {t}"]`,
         # `cmd = "x " + t`, `parts.append(f"..{t}")`
         tainted: dict[str, list[ast.AST]] = {}
@@ -181,7 +189,8 @@ def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
                     safe.add(tgt)
                     continue
                 have = tainted.setdefault(tgt, [])
-                have += [h for h in bad_in(val) if all(h is not x for x in have)]
+                if len(have) < 3:  # evidence shows 3; the cap keeps this linear
+                    have += [h for h in bad_in(val)[:3] if all(h is not x for x in have)]
         for call in (n for n in ast.walk(fn) if isinstance(n, ast.Call)):
             if _is_shell_call(call, helpers) and call.args:
                 hits += bad_in(call.args[0])
@@ -209,9 +218,10 @@ _INTERP = {"bash", "sh", "zsh", "dash", "python", "python3", "node", "nodejs",
            "deno", "bun", "perl", "ruby", "php", "env", "xargs", "sudo",
            "eval", "exec", "npx", "source"}
 _INLINE = re.compile(r"^\s*(?:bash|sh|zsh|python3?|node|perl|ruby|php)\s+-[ce]\b")
-_G208_NAME = re.compile(r"allow|whitelist|permitted", re.I)
+_G208_NAME = re.compile(r"(?<!dis)(?<!not_)(?<!un)(?<!not)allow|whitelist|permitted", re.I)
+_G208_DENY = re.compile(r"dis_?allow|deny|denied|block|forbid|not_?allow|ext", re.I)
 _G208_JSL = re.compile(
-    r"(?i)\b\w*(?:allow|whitelist|permitted)\w*\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
+    r"(?i)\b(?!\w*(?:disallow|deny|denied|block|forbid|ext))\w*(?:allow|whitelist|permitted)\w*\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
 _QSTR = re.compile(r"""["']([^"'\n]{1,80})["']""")
 _BASH_PERM = re.compile(r"^Bash(?:\(([^)]*)\))?$")
 
@@ -222,7 +232,8 @@ def _g208_bad(entry: str) -> bool:
         return True
     first = e.split(None, 1)[0] if e.split() else ""
     base = first.rsplit("/", 1)[-1]
-    return base in _INTERP or (base.endswith(".sh") and len(e.split()) == 1)
+    return base in _INTERP or (base.endswith(".sh") and not base.startswith(".")
+                               and len(e.split()) == 1)
 
 
 def _g208_python(rel: str, tree: ast.AST) -> Flag | None:
@@ -234,7 +245,8 @@ def _g208_python(rel: str, tree: ast.AST) -> Flag | None:
             names, value = [n.target.id], n.value
         else:
             continue
-        if not any(_G208_NAME.search(x) for x in names) or value is None:
+        if not any(_G208_NAME.search(x) and not _G208_DENY.search(x) for x in names) \
+                or value is None:
             continue
         if isinstance(value, ast.Call) and value.args:
             value = value.args[0]  # frozenset({...}) / set([...])
@@ -282,9 +294,9 @@ def _g208_json(rel: str, text: str) -> Flag | None:
 _NET_CONTEXT = re.compile(
     r"network_polic|egress|allowed_hosts|allowed_domains|endpoints|allow_hosts", re.I)
 _G209_AUDIT = re.compile(
-    r"""^\s*(?:-\s*)?["']?(?:enforcement|enforce_mode|network_mode|mode)["']?\s*[:=]\s*"""
+    r"""(?:^|[\s{,])["']?(?:enforcement|enforce_mode|network_mode)["']?\s*[:=]\s*"""
     r"""["']?(audit|log|log_only|monitor|permissive|report)\b""", re.I)
-_G209_OFF = re.compile(r"""^\s*["']?enforce(?:ment)?["']?\s*[:=]\s*["']?(false|off|no)\b""", re.I)
+_G209_OFF = re.compile(r"""(?:^|[\s{,])["']?enforce(?:ment)?["']?\s*[:=]\s*["']?(false|off|no)\b""", re.I)
 _G209_HOST = re.compile(
     r"""["']?host(?:name)?["']?\s*[:=]\s*["']?([^"'\s,}]{0,200})""", re.I)
 _G209_PATH = re.compile(r"""["']?path["']?\s*[:=]\s*["']?(/?\*{1,2}/?)["']?\s*[,}]?\s*$""")
@@ -317,7 +329,7 @@ def _g209(rel: str, text: str) -> list[Flag]:
                 out.append(_flag(Severity.MEDIUM, "G209",
                                  "network allowlist contains a wildcard host", rel, n, line))
             continue
-        if _G209_AUDIT.match(line) or _G209_OFF.match(line):
+        if _G209_AUDIT.search(line) or _G209_OFF.search(line):
             out.append(_flag(Severity.MEDIUM, "G209",
                              "network policy is in log-only mode: violations are "
                              "recorded but let through (not enforced)", rel, n, line))
@@ -335,7 +347,8 @@ def _g209(rel: str, text: str) -> list[Flag]:
 
 # --- G602 / G210 / G211: shell-ish text -------------------------------------
 
-_SECRET = r"(?:\.env(?![.\w-])|\.aws/credentials|\.ssh/id_\w+|\.npmrc|\.pypirc|\.netrc)"
+_SECRET = (r"(?:\.env(?!\.(?:example|sample|template|dist)\b)(?![\w-])|\.aws/credentials|"
+           r"\.ssh/id_\w+(?!\w|\.pub\b)|\.npmrc|\.pypirc|\.netrc)")
 _G602 = re.compile(
     r"\b(?:cat|head|tail|bat|strings|xxd|source)\s+[^\n|;&]{0,60}?" + _SECRET
     + r"|\bgrep\s+(?!-\w*[qcl]\b)[^\n|;&]{0,60}?" + _SECRET
@@ -439,6 +452,8 @@ def _g207(rel: str, tree: ast.AST) -> Flag | None:
         no_default = {x.arg for x in a.posonlyargs + a.args[: len(a.args) - n_def]} | {
             x.arg for x, d in zip(a.kwonlyargs, a.kw_defaults) if d is None}
         params = {x.arg for x in named}
+        if len(named) == 1 and named[0].arg not in props:
+            continue  # f(self, arguments: dict): the handler unpacks the input itself
         problems = []
         if props - params:
             problems.append(f"schema declares {sorted(props - params)} the handler does not accept")
@@ -453,6 +468,20 @@ def _g207(rel: str, tree: ast.AST) -> Flag | None:
                          "tool schema and handler parameters do not match",
                          rel, st.lineno, f"{cls.name}: " + "; ".join(problems))
     return None
+
+
+def _python_flags(rel: str, tree: ast.AST, helpers: set[str]) -> list[Flag]:
+    out: list[Flag] = []
+    hits = sorted({getattr(h, "lineno", 0): h for h in _g205_python(rel, tree, helpers)}.items())
+    if hits:
+        out.append(Flag(Severity.MEDIUM, "G205",
+                        "value interpolated into a shell command without quoting "
+                        "(command injection if it comes from a model)",
+                        evidence=f"{rel}: " + " | ".join(
+                            f"{n}: {' '.join(ast.unparse(h).split())[:70]}"
+                            for n, h in hits[:3])[:200]))
+    out += [f for f in (_g207(rel, tree), _g208_python(rel, tree)) if f]
+    return out
 
 
 def _is_test(rel: str) -> bool:
@@ -502,17 +531,15 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
     for rel, text in texts.items():
         suf = Path(rel).suffix.lower()
         if rel in trees:
-            hits = sorted({getattr(h, "lineno", 0): h for h in
-                           _g205_python(rel, trees[rel], helpers)}.items())
-            if hits:
-                add(Flag(Severity.MEDIUM, "G205",
-                         "value interpolated into a shell command without quoting "
-                         "(command injection if it comes from a model)",
-                         evidence=f"{rel}: " + " | ".join(
-                             f"{n}: {' '.join(ast.unparse(h).split())[:70]}"
-                             for n, h in hits[:3])[:200]), rel)
-            add(_g207(rel, trees[rel]), rel)
-            add(_g208_python(rel, trees[rel]), rel)
+            try:
+                for f in _python_flags(rel, trees[rel], helpers):
+                    add(f, rel)
+            except (RecursionError, MemoryError, ValueError):
+                # a tree this deep can be parsed but not walked: say so, never "clean"
+                add(Flag(Severity.LOW, "G911",
+                         "file could not be analysed for agent-config checks; "
+                         "its contents were not inspected",
+                         evidence=f"{rel} (nesting too deep)"), rel)
         if suf in _JS:
             if "child_process" in text:
                 for n, line in _lines(text):
