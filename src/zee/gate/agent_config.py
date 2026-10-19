@@ -178,12 +178,17 @@ def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
         # names whose every assignment is int()/float()/shlex.quote(): a type hint
         # proves nothing at run time, and one unsafe assignment cancels the rest
         # (flow-insensitive: a use before the conversion is not told apart)
-        assigned: dict[str, bool] = {}
+        stores: dict[str, int] = {}  # every binding of a name: =, +=, for, tuple, with, :=
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                stores[n.id] = stores.get(n.id, 0) + 1
+        safe_stores: dict[str, int] = {}
         for n in ast.walk(fn):
             if isinstance(n, ast.Assign) and len(n.targets) == 1 \
-                    and isinstance(n.targets[0], ast.Name):
-                ok = isinstance(n.value, ast.Call) and _is_safe_call(n.value)
-                assigned[n.targets[0].id] = assigned.get(n.targets[0].id, True) and ok
+                    and isinstance(n.targets[0], ast.Name) \
+                    and isinstance(n.value, ast.Call) and _is_safe_call(n.value):
+                safe_stores[n.targets[0].id] = safe_stores.get(n.targets[0].id, 0) + 1
+        assigned = {k: v == stores.get(k) for k, v in safe_stores.items()}
         safe = {k for k, v in assigned.items() if v}
         # names that hold a built-up command: `parts = [.., f"key -- {t}"]`,
         # `cmd = "x " + t`, `parts.append(f"..{t}")`

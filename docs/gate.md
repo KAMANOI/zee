@@ -62,7 +62,7 @@ the configuration; they never run it.
 | G211 | MEDIUM | `x11vnc` started without a password option, or `-nopw` / `-SecurityTypes None`. Package-install lines are not flagged. |
 | G602 | MEDIUM | `cat` / `head` / `grep` (without `-q` / `-c` / `-l`) or "read/print the …" on `.env`, `.aws/credentials`, `.ssh/id_*`, `.npmrc`, `.pypirc`, `.netrc`. Lines that say *never / do not / without*, public keys (`id_*.pub`) and `.env.example` / `.sample` / `.template` are not flagged. |
 
-Limits, stated plainly: these are heuristics, one flag per code per file. Files over 2 MiB get G910 from the main pass; a Python file too deeply nested to walk gets G911.
+Limits, stated plainly: these are heuristics, one flag per code per file. Files over 2 MiB get G910 from the main pass; a Python file too deeply nested to walk gets G911. The line patterns are easy to evade on purpose (renamed variables, split expressions, unusual layout); they find the common honest mistakes, not a determined author.
 Data flow across files is followed by function name only; a value validated
 in a place Zee cannot follow is still reported; JS/TS handler signatures are
 not compared (G207), and schemas that are not literals are skipped. A clean
