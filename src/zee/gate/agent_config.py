@@ -69,6 +69,16 @@ def _callee(node: ast.Call) -> str:
     return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
 
 
+def _is_safe_call(node: ast.Call) -> bool:
+    """shlex.quote / pipes.quote / a bare quote-style name, or int()/float()...
+    A `.quote` on any other object (html, urllib) is not a shell quoter."""
+    f = node.func
+    if isinstance(f, ast.Name):
+        return f.id in _QUOTERS or f.id in _SAFE_CONVERT
+    return isinstance(f, ast.Attribute) and f.attr == "quote" \
+        and isinstance(f.value, ast.Name) and f.value.id in ("shlex", "pipes")
+
+
 def _is_shell_call(node: ast.Call, helpers: set[str]) -> bool:
     name = _callee(node)
     if name in _SHELL_SINKS or name in helpers:
@@ -122,7 +132,7 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
             base = v.value.id if isinstance(v.value, ast.Name) else v.value.attr
             if base.isupper():
                 return False
-        if isinstance(v, ast.Call) and _callee(v) in _QUOTERS | _SAFE_CONVERT:
+        if isinstance(v, ast.Call) and _is_safe_call(v):
             return False
         return True
 
@@ -131,7 +141,7 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
         while stack:
             n = stack.pop()
             yield n
-            if isinstance(n, ast.Call) and _callee(n) in _QUOTERS | _SAFE_CONVERT:
+            if isinstance(n, ast.Call) and _is_safe_call(n):
                 continue  # whatever is inside a quoter / int() is made safe
             stack.extend(ast.iter_child_nodes(n))
 
@@ -185,7 +195,8 @@ def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
                     tgt, val = n.value.func.value.id, n.value.args[-1]
                 if tgt is None:
                     continue
-                if isinstance(val, ast.Call) and _callee(val) in _SAFE_CONVERT:
+                if isinstance(val, ast.Call) and isinstance(val.func, ast.Name) \
+                        and val.func.id in _SAFE_CONVERT:
                     safe.add(tgt)
                     continue
                 have = tainted.setdefault(tgt, [])
@@ -219,9 +230,10 @@ _INTERP = {"bash", "sh", "zsh", "dash", "python", "python3", "node", "nodejs",
            "eval", "exec", "npx", "source"}
 _INLINE = re.compile(r"^\s*(?:bash|sh|zsh|python3?|node|perl|ruby|php)\s+-[ce]\b")
 _G208_NAME = re.compile(r"(?<!dis)(?<!not_)(?<!un)(?<!not)allow|whitelist|permitted", re.I)
-_G208_DENY = re.compile(r"dis_?allow|deny|denied|block|forbid|not_?allow|ext", re.I)
+_G208_DENY = re.compile(r"dis_?allow|deny|denied|forbid|not_?allow", re.I)
+_G208_EXT = re.compile(r"(?:^|_)ext|[a-z]Ext")  # case-sensitive: `text_allowlist` is not an extension list
 _G208_JSL = re.compile(
-    r"(?i)\b(?!\w*(?:disallow|deny|denied|block|forbid|ext))\w*(?:allow|whitelist|permitted)\w*\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
+    r"(?i)\b(?!\w*(?:disallow|deny|denied|forbid)|\w*(?-i:_ext|[a-z]Ext))\w*(?:allow|whitelist|permitted)\w*\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
 _QSTR = re.compile(r"""["']([^"'\n]{1,80})["']""")
 _BASH_PERM = re.compile(r"^Bash(?:\(([^)]*)\))?$")
 
@@ -245,7 +257,8 @@ def _g208_python(rel: str, tree: ast.AST) -> Flag | None:
             names, value = [n.target.id], n.value
         else:
             continue
-        if not any(_G208_NAME.search(x) and not _G208_DENY.search(x) for x in names) \
+        if not any(_G208_NAME.search(x) and not _G208_DENY.search(x) and not _G208_EXT.search(x)
+                   for x in names) \
                 or value is None:
             continue
         if isinstance(value, ast.Call) and value.args:
@@ -296,6 +309,7 @@ _NET_CONTEXT = re.compile(
 _G209_AUDIT = re.compile(
     r"""(?:^|[\s{,])["']?(?:enforcement|enforce_mode|network_mode)["']?\s*[:=]\s*"""
     r"""["']?(audit|log|log_only|monitor|permissive|report)\b""", re.I)
+_G209_MODE = re.compile(r"""(?:^|[\s{,])["']?mode["']?\s*[:=]\s*["']?(audit|log|log_only|monitor|permissive)\b""", re.I)
 _G209_OFF = re.compile(r"""(?:^|[\s{,])["']?enforce(?:ment)?["']?\s*[:=]\s*["']?(false|off|no)\b""", re.I)
 _G209_HOST = re.compile(
     r"""["']?host(?:name)?["']?\s*[:=]\s*["']?([^"'\s,}]{0,200})""", re.I)
@@ -310,6 +324,7 @@ def _g209(rel: str, text: str) -> list[Flag]:
         return []
     out: list[Flag] = []
     in_list_indent = -1
+    window: list[str] = []  # the 8 lines above: `mode` counts only inside a network block
     for n, line in _lines(text):
         indent = len(line) - len(line.lstrip())
         if in_list_indent >= 0:
@@ -329,7 +344,10 @@ def _g209(rel: str, text: str) -> list[Flag]:
                 out.append(_flag(Severity.MEDIUM, "G209",
                                  "network allowlist contains a wildcard host", rel, n, line))
             continue
-        if _G209_AUDIT.search(line) or _G209_OFF.search(line):
+        near_net = _NET_CONTEXT.search("\n".join(window))
+        window = (window + [line])[-8:]
+        if _G209_AUDIT.search(line) or _G209_OFF.search(line) \
+                or (near_net and _G209_MODE.search(line)):
             out.append(_flag(Severity.MEDIUM, "G209",
                              "network policy is in log-only mode: violations are "
                              "recorded but let through (not enforced)", rel, n, line))

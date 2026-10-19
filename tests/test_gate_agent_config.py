@@ -137,6 +137,10 @@ def test_safe_spellings_stay_clean(tmp_path):
     for code in ("G602", "G208", "G207", "G209"):
         assert code not in got, (code, got.get(code))
     assert "G602" in _scan(tmp_path / "e", {"a.md": "run `cat .env.local`\n"})
+    assert "G209" in _scan(tmp_path / "m", {"p.yaml": "network_policies:\n  a:\n    mode: audit\n"})
+    assert "G208" in _scan(tmp_path / "t", {"s.py": "text_allowlist = ['bash']\n"})
+    html = "import html, os\ndef f(x):\n    os.system('echo ' + html.quote(x))\n"
+    assert "G205" in _scan(tmp_path / "h", {"a.py": html})
     assert "G209" in _scan(tmp_path / "j", {"p.json": '{"egress": {"enforcement": "audit"}}'})
 
 
