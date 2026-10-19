@@ -136,6 +136,16 @@ def test_safe_spellings_stay_clean(tmp_path):
     })
     for code in ("G602", "G208", "G207", "G209"):
         assert code not in got, (code, got.get(code))
+    more = _scan(tmp_path / "q", {
+        "q.py": "import os, shlex\ndef f(t):\n    q = shlex.quote(t)\n    os.system(f'ls {q}')\n",
+        "r.md": "Open the .env file and add your key.\n",
+        "e.py": "ALLOWED_EXTENSIONS = {'sh', 'py'}\n",
+        "x.js": "const { exec } = require('child_process');\nexec('ls ' + shellQuote(x));\n",
+    })
+    for code in ("G205", "G602", "G208"):
+        assert code not in more, (code, more.get(code))
+    esc = "const { exec } = require('child_process');\nexec(`ls ${escapeHtml(x)}`);\n"
+    assert "G205" in _scan(tmp_path / "es", {"x.js": esc})
     assert "G602" in _scan(tmp_path / "e", {"a.md": "run `cat .env.local`\n"})
     assert "G209" in _scan(tmp_path / "m", {"p.yaml": "network_policies:\n  a:\n    mode: audit\n"})
     assert "G208" in _scan(tmp_path / "t", {"s.py": "text_allowlist = ['bash']\n"})
@@ -176,9 +186,11 @@ def test_g207_mismatch_and_match(tmp_path):
 
 
 def test_g207_required_with_default_and_extra_required(tmp_path):
-    required_default = _MATCH.replace("def execute(self, a, b=None)", "def execute(self, a=1, b=None)")
+    required_default = _MATCH.replace("def execute(self, a, b=None)", "def execute(self, a, b)")
     extra = _MATCH.replace("def execute(self, a, b=None)", "def execute(self, a, b, c)")
-    assert "G207" in _scan(tmp_path / "d", {"t.py": required_default})
+    assert "G207" in _scan(tmp_path / "d", {"t.py": required_default})  # b is optional in the schema
+    lenient = _MATCH.replace("def execute(self, a, b=None)", "def execute(self, a=1, b=None)")
+    assert "G207" not in _scan(tmp_path / "l", {"t.py": lenient})  # a default is fine for a required key
     assert "G207" in _scan(tmp_path / "e", {"t.py": extra})
 
 
@@ -305,10 +317,29 @@ def test_flags_reach_the_verdict(tmp_path):
     "NOPASSWD " * 20000,
     "allowed_hosts: " + "a*" * 50000,
     "- " * 100000,
+    "allowedCommands = [" + "a" * 100000,
 ])
 def test_adversarial_lines_stay_fast(tmp_path, body):
     (tmp_path / "p.yaml").write_text("network_policies:\n" + body + "\n")
+    (tmp_path / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + body[:1500] + "\n") * 300)
     (tmp_path / "s.sh").write_text(body + "\n" + (body + " \\\n") * 25)
     t = time.perf_counter()
     static_checks.scan_tree(tmp_path)
     assert time.perf_counter() - t < 3.0
+
+
+def test_review_round2_cases(tmp_path):
+    # G205: a quoted whole command, a later unsafe reassignment, quote via a variable
+    ok = ("import os, shlex\ndef f(x):\n    cmd = f'echo {x}'\n    os.system(shlex.quote(cmd))\n")
+    reassigned = "import os\ndef f(x):\n    y = int(0)\n    y = x\n    os.system(f'echo {y}')\n"
+    assert "G205" not in _scan(tmp_path / "ok", {"a.py": ok})
+    assert "G205" in _scan(tmp_path / "re", {"a.py": reassigned})
+    # G209: a later top-level section, and a deny block
+    later = "network_policies: {}\nlogging:\n  mode: audit\n"
+    deny = "egress:\n  deny:\n    - host: \"*\"\n"
+    assert "G209" not in _scan(tmp_path / "la", {"p.yaml": later})
+    assert "G209" not in _scan(tmp_path / "de", {"p.yaml": deny})
+    # G206: a vendor-typed tool elsewhere in the file does not excuse a custom one
+    two = ('A = {"type": "computer_20251124", "name": "computer"}\n' + "# pad\n" * 200
+           + 'B = {"name": "computer", "input_schema": {}}\n')
+    assert "G206" in _scan(tmp_path / "two", {"t.py": two})

@@ -36,6 +36,7 @@ from pathlib import Path
 from .model import Flag, Severity
 
 _MAX_BYTES = 2 * 1024 * 1024  # = static_checks._MAX_READ_BYTES: bigger files get G910 there
+_MAX_HELD = 256 * 1024 * 1024  # text kept in memory for the whole tree
 _MAX_LINE = 2000  # a longer line is cut: every line pattern stays bounded
 _PY = {".py"}
 _JS = {".js", ".ts", ".mjs", ".cjs"}
@@ -118,6 +119,18 @@ def _shell_helpers(trees: dict[str, ast.AST]) -> set[str]:
     return helpers
 
 
+def _walk_unsafe(root: ast.AST):
+    """ast.walk that does not descend into shlex.quote(...) / int(...): what
+    is inside them is made safe, so it must not re-enter as a finding."""
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        yield n
+        if isinstance(n, ast.Call) and _is_safe_call(n):
+            continue
+        stack.extend(ast.iter_child_nodes(n))
+
+
 def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
     """First sub-expression that interpolates a non-constant value into a
     string without quoting it (f-string, .format, %, +), or None."""
@@ -136,16 +149,7 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
             return False
         return True
 
-    def walk(root: ast.AST):
-        stack = [root]
-        while stack:
-            n = stack.pop()
-            yield n
-            if isinstance(n, ast.Call) and _is_safe_call(n):
-                continue  # whatever is inside a quoter / int() is made safe
-            stack.extend(ast.iter_child_nodes(n))
-
-    for n in walk(expr):
+    for n in _walk_unsafe(expr):
         if isinstance(n, ast.JoinedStr):
             for fv in n.values:
                 if isinstance(fv, ast.FormattedValue) and dynamic(fv.value):
@@ -171,14 +175,23 @@ def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
 def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
     hits: list[ast.AST] = []
     for fn in _py_functions(tree):
-        safe: set[str] = set()  # names set from int()/float(): a type hint proves nothing at run time
+        # names whose every assignment is int()/float()/shlex.quote(): a type hint
+        # proves nothing at run time, and one unsafe assignment cancels the rest
+        # (flow-insensitive: a use before the conversion is not told apart)
+        assigned: dict[str, bool] = {}
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                    and isinstance(n.targets[0], ast.Name):
+                ok = isinstance(n.value, ast.Call) and _is_safe_call(n.value)
+                assigned[n.targets[0].id] = assigned.get(n.targets[0].id, True) and ok
+        safe = {k for k, v in assigned.items() if v}
         # names that hold a built-up command: `parts = [.., f"key -- {t}"]`,
         # `cmd = "x " + t`, `parts.append(f"..{t}")`
         tainted: dict[str, list[ast.AST]] = {}
 
         def bad_in(expr: ast.AST) -> list[ast.AST]:
             first = _unsafe_parts(expr, safe)
-            via = [h for x in ast.walk(expr) if isinstance(x, ast.Name)
+            via = [h for x in _walk_unsafe(expr) if isinstance(x, ast.Name)
                    for h in tainted.get(x.id, [])]
             return ([first] if first is not None else []) + via
 
@@ -195,9 +208,7 @@ def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
                     tgt, val = n.value.func.value.id, n.value.args[-1]
                 if tgt is None:
                     continue
-                if isinstance(val, ast.Call) and isinstance(val.func, ast.Name) \
-                        and val.func.id in _SAFE_CONVERT:
-                    safe.add(tgt)
+                if tgt in safe:
                     continue
                 have = tainted.setdefault(tgt, [])
                 if len(have) < 3:  # evidence shows 3; the cap keeps this linear
@@ -210,9 +221,10 @@ def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
     return hits
 
 
+_JS_QUOTER = r"(?:shell_?quote|shell_?escape|shlex|quote)\b"
 _G205_JS = re.compile(
-    r"\b(?:exec|execSync)\s*\(\s*(?:`[^`\n]{0,300}\$\{(?![^}\n]{0,80}(?:quote|escape))"
-    r"|[\"'][^\"'\n]{0,300}[\"']\s*\+\s*[A-Za-z_])", re.I)
+    r"\b(?:exec|execSync)\s*\(\s*(?:`[^`\n]{0,300}\$\{(?!\s*" + _JS_QUOTER + r")"
+    r"|[\"'][^\"'\n]{0,300}[\"']\s*\+\s*(?!" + _JS_QUOTER + r")[A-Za-z_])", re.I)
 
 
 # --- G206: custom definition of a computer/browser tool ---------------------
@@ -231,9 +243,9 @@ _INTERP = {"bash", "sh", "zsh", "dash", "python", "python3", "node", "nodejs",
 _INLINE = re.compile(r"^\s*(?:bash|sh|zsh|python3?|node|perl|ruby|php)\s+-[ce]\b")
 _G208_NAME = re.compile(r"(?<!dis)(?<!not_)(?<!un)(?<!not)allow|whitelist|permitted", re.I)
 _G208_DENY = re.compile(r"dis_?allow|deny|denied|forbid|not_?allow", re.I)
-_G208_EXT = re.compile(r"(?:^|_)ext|[a-z]Ext")  # case-sensitive: `text_allowlist` is not an extension list
+_G208_EXT = re.compile(r"(?:^|_)[eE][xX][tT]|[a-z]Ext")  # case-sensitive: `text_allowlist` is not an extension list
 _G208_JSL = re.compile(
-    r"(?i)\b(?!\w*(?:disallow|deny|denied|forbid)|\w*(?-i:_ext|[a-z]Ext))\w*(?:allow|whitelist|permitted)\w*\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
+    r"(?i)\b(?!\w*(?:disallow|deny|denied|forbid)|\w*(?-i:_ext|[a-z]Ext))\w{0,60}(?:allow|whitelist|permitted)\w{0,60}\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
 _QSTR = re.compile(r"""["']([^"'\n]{1,80})["']""")
 _BASH_PERM = re.compile(r"^Bash(?:\(([^)]*)\))?$")
 
@@ -310,6 +322,7 @@ _G209_AUDIT = re.compile(
     r"""(?:^|[\s{,])["']?(?:enforcement|enforce_mode|network_mode)["']?\s*[:=]\s*"""
     r"""["']?(audit|log|log_only|monitor|permissive|report)\b""", re.I)
 _G209_MODE = re.compile(r"""(?:^|[\s{,])["']?mode["']?\s*[:=]\s*["']?(audit|log|log_only|monitor|permissive)\b""", re.I)
+_G209_DENY = re.compile(r"\s*[\"']?(?:deny|denied|disallow|blocklist|blocked)\w*[\"']?\s*[:=]", re.I)
 _G209_OFF = re.compile(r"""(?:^|[\s{,])["']?enforce(?:ment)?["']?\s*[:=]\s*["']?(false|off|no)\b""", re.I)
 _G209_HOST = re.compile(
     r"""["']?host(?:name)?["']?\s*[:=]\s*["']?([^"'\s,}]{0,200})""", re.I)
@@ -324,6 +337,7 @@ def _g209(rel: str, text: str) -> list[Flag]:
         return []
     out: list[Flag] = []
     in_list_indent = -1
+    deny_indent = -1  # inside a `deny:` block a wildcard is a refusal, not an allowance
     window: list[str] = []  # the 8 lines above: `mode` counts only inside a network block
     for n, line in _lines(text):
         indent = len(line) - len(line.lstrip())
@@ -344,6 +358,12 @@ def _g209(rel: str, text: str) -> list[Flag]:
                 out.append(_flag(Severity.MEDIUM, "G209",
                                  "network allowlist contains a wildcard host", rel, n, line))
             continue
+        if indent == 0 and line.strip() and not line.lstrip().startswith("#"):
+            window = []  # a new top-level section: earlier network keys no longer apply
+        if deny_indent >= 0 and line.strip() and indent <= deny_indent:
+            deny_indent = -1
+        if deny_indent < 0 and _G209_DENY.match(line):
+            deny_indent = indent
         near_net = _NET_CONTEXT.search("\n".join(window))
         window = (window + [line])[-8:]
         if _G209_AUDIT.search(line) or _G209_OFF.search(line) \
@@ -353,7 +373,7 @@ def _g209(rel: str, text: str) -> list[Flag]:
                              "recorded but let through (not enforced)", rel, n, line))
             continue
         hm = _G209_HOST.search(line)
-        if hm and "*" in hm.group(1):
+        if hm and "*" in hm.group(1) and deny_indent < 0:
             out.append(_flag(Severity.MEDIUM, "G209",
                              "network rule uses a wildcard host", rel, n, line))
             continue
@@ -370,7 +390,8 @@ _SECRET = (r"(?:\.env(?!\.(?:example|sample|template|dist)\b)(?![\w-])|\.aws/cre
 _G602 = re.compile(
     r"\b(?:cat|head|tail|bat|strings|xxd|source)\s+[^\n|;&]{0,60}?" + _SECRET
     + r"|\bgrep\s+(?!-\w*[qcl]\b)[^\n|;&]{0,60}?" + _SECRET
-    + r"|\b(?:read|open|print|show|display|dump|output)\s+(?:the\s+)?(?:contents?\s+of\s+)?"
+    + r"|\b(?:read|open)\s+(?:the\s+)?contents?\s+of\s+(?:your\s+|the\s+)?" + _SECRET
+    + r"|\b(?:print|show|display|dump|output)\s+(?:the\s+)?(?:contents?\s+of\s+)?"
     r"(?:your\s+|the\s+)?" + _SECRET, re.I)
 _G602_NEG = re.compile(
     r"\b(?:never|do not|don't|dont|must not|without|avoid)\b|\bgrep\s+-\w*[qcl]\b|"
@@ -478,9 +499,10 @@ def _g207(rel: str, tree: ast.AST) -> Flag | None:
         if (no_default - {"self", "cls"}) - props:
             problems.append(f"handler requires {sorted((no_default - {'self', 'cls'}) - props)} "
                             "the schema never offers")
-        if set(required) & (params - no_default):
-            problems.append(f"{sorted(set(required) & (params - no_default))} marked required "
-                            "but the handler gives a default")
+        optional_but_needed = ((no_default - {"self", "cls"}) & props) - set(required)
+        if optional_but_needed:
+            problems.append(f"{sorted(optional_but_needed)} optional in the schema "
+                            "but required by the handler")
         if problems:
             return _flag(Severity.LOW, "G207",
                          "tool schema and handler parameters do not match",
@@ -523,6 +545,7 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
             flags.append(f)
 
     texts: dict[str, str] = {}
+    held = 0
     trees: dict[str, ast.AST] = {}
     for p in paths:
         suf = p.suffix.lower()
@@ -530,10 +553,18 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
                 and not p.name.startswith("Dockerfile"):
             continue
         try:
-            if p.stat().st_size > _MAX_BYTES:
+            size = p.stat().st_size
+            if size > _MAX_BYTES:
+                continue
+            if held + size > _MAX_HELD:
+                flags.append(Flag(Severity.LOW, "G911",
+                                  "tree too large to hold for agent-config checks; "
+                                  "this file was not inspected",
+                                  evidence=str(p.relative_to(root))))
                 continue
             text = p.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+            held += size
+        except (OSError, MemoryError):
             continue
         if "\0" in text:
             continue
@@ -580,8 +611,11 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
             for f in _g209(rel, text):
                 add(f, rel)
         if suf in _PY | _JS | _CONFIGISH and not _is_test(rel):
-            m = _G206_NAME.search(text)
-            if m and _G206_SCHEMA.search(text) and not _G206_VENDOR.search(text):
+            # judged per definition (the text around each name), not per file
+            m = next((x for x in _G206_NAME.finditer(text)
+                      if not _G206_VENDOR.search(text[max(0, x.start() - 400): x.end() + 600])),
+                     None) if _G206_SCHEMA.search(text) else None
+            if m:
                 add(Flag(Severity.LOW, "G206",
                          "computer/browser tool declared with a custom schema: the API's "
                          "screen-specific safety classifiers (e.g. injected-instruction "
