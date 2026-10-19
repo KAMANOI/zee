@@ -68,6 +68,34 @@ in a place Zee cannot follow is still reported; JS/TS handler signatures are
 not compared (G207), and schemas that are not literals are skipped. A clean
 result does not mean the configuration is safe.
 
+## Tampering plugins (G212–G216)
+
+A plugin can be harmless to read and still change the host it is installed
+on: it overwrites another vendor's package, re-applies itself on every start,
+and injects a prompt text the installer cannot read. These checks look for
+that shape. They read files; they never run them.
+
+| Code | Severity | What it flags |
+|---|---|---|
+| G212 | HIGH | Code that writes, copies over, renames or links a file within 4 lines of a line that names another package (`node_modules`, `site-packages`, a `require.resolve` path); in shell scripts, on the same line. The message adds "backup-style name" when a `.bak` / `.orig` / `.backup` name sits next to the write. A `node_modules/.cache`-style path is skipped (only that path, not the rest of the line). |
+| G213 | MEDIUM | A setting or function named like "apply on every start" (`autoApplyOnStart`, `reapply_on_launch`, `autoReapply` …) that is not set to false right after the name. A function with that name is flagged whether or not it is called: Zee does not follow calls. |
+| G214 | HIGH | System-prompt / agent-instruction text set within a few lines of a decrypt call, a 200+ character encoded string, a reference to an `*.enc` / `*.sealed` / `*.gpg` prompt file, or a network fetch (same line, or just above while the prompt line takes a value such as `await` / `.text`). A shipped file named like `prompt*.enc` also counts. Zee reports what sits next to what; it does not decrypt or follow the data, so the installer cannot read such a prompt in plain text and a person must open the source. |
+| G215 | MEDIUM | Code that names an agent's plugin / extension / skills folder (`.claude/plugins`, `.vscode/extensions`, …) within the window of a patch-style word (`patch`, `wrap`, `inject`, `shim`, `overwrite` …) and a file write. A plain installer copying its own files is not flagged; an updater of the plugin's own files that uses those words can be. |
+| G216 | MEDIUM | Documentation addressed to an AI assistant ("paste this to your assistant", `<!-- AI-AGENT-START -->`, "このまま貼れば", "给 AI 助手"). Zee only warns; whether the assistant may act on it is decided by the operator's own rules. |
+
+G212 and G214 are HIGH (blocked at the default `fail-on: high`). G213, G215 and
+G216 are MEDIUM (a person reads them). Tools that patch `node_modules` on
+purpose (patch-package style) are flagged G212 by design.
+
+Limits, stated plainly: line patterns, one flag per code per file. A renamed
+variable, a path built in pieces more than 4 lines apart, a prompt fetched
+under another name, or a payload in a non-text file passes. Files over 2 MiB
+get G910 from the main pass. A line over 2,000 characters (minified code) is read
+in overlapping 600-character pieces, so "near" means within about 1,200
+characters there. Comment lines are not read by the code checks (G212–G215).
+A clean result
+does not mean the plugin is safe.
+
 ## Use it as a pre-install / CI check
 
 ### GitHub Action
