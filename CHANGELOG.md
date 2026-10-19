@@ -5,6 +5,24 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+### Added
+
+- **Agent tool / sandbox configuration checks in `zee gate`** (static, nothing
+  is executed): `G205` model-controlled text interpolated into a shell command
+  without quoting (Python via `ast`, following helper functions and built-up
+  command lists; JS/TS `exec` with a template literal), `G206` a computer /
+  browser tool declared with a custom schema instead of the vendor tool type
+  (LOW), `G207` a tool's `input_schema` and its handler parameters disagree
+  (LOW), `G208` a command allowlist that includes interpreters, scripts or
+  inline-code forms (`node -e`, `python -c`) — Python/JS allowlists and
+  Claude `permissions.allow` rules, `G209` a network policy in log-only mode
+  or with wildcard hosts / any-path rules, `G210` passwordless `sudo`, `G211`
+  screen sharing (x11vnc / VNC) without a password, `G602` a procedure that
+  reads the contents of a secret file where checking it exists is enough.
+  Design, limits and what was left out: `docs/design/agent-config-checks.md`.
+
 ## [0.15.0] — 2026-10-17
 
 ### Added

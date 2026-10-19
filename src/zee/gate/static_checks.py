@@ -12,6 +12,10 @@ Flag codes:
     G3xx  obfuscation / encoding
     G4xx  file-type / magic-byte mismatch
     G5xx  prompt injection in metadata
+    G205-G211, G602  how an agent's tools / sandbox are configured
+          (agent_config.py: unquoted shell interpolation, custom computer
+          tool, schema mismatch, code-running allowlists, log-only network
+          policy, passwordless sudo, passwordless VNC, secret-file reads)
     (G6xx denylist lives in denylist.py)
     G7xx  symlinks (G701 escapes the tree = HIGH, G702 in-tree = LOW)
     G91x  gaps: not inspected / unreadable (G910 too large, G911 unreadable;
@@ -31,6 +35,7 @@ import sys
 import unicodedata
 from pathlib import Path
 
+from . import agent_config
 from .model import Flag, Severity
 
 # Files we will read as text for pattern scanning.
@@ -520,4 +525,5 @@ def scan_tree(root: Path) -> list[Flag]:
             if ev:
                 ev = ev if len(ev) <= 120 else ev[:117] + "…"
                 flags.append(Flag(sev, "G501", msg, evidence=f"{rel}: {ev}"))
+    flags += agent_config.scan_tree(root, list(_iter_files(root)))
     return flags

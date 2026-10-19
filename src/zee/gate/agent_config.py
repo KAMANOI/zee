@@ -1,0 +1,549 @@
+"""Static checks for how an AI-agent tool / sandbox is *configured*.
+
+The other static checks look for malicious content. These look for the
+ways an agent's tools and containment are commonly set up unsafely, so
+a skill / MCP server / agent sample is flagged before its pattern is copied.
+Nothing is executed: Python is parsed with `ast`, everything else is read
+line by line with bounded patterns (no pattern here backtracks over a
+whole file).
+
+Flag codes:
+    G205  model-controlled text interpolated into a shell command unquoted
+    G206  computer/browser tool declared with a custom schema (no vendor
+          safety classifiers apply)
+    G207  tool input_schema and the handler's parameters do not match
+    G208  command allowlist includes interpreters / scripts / inline code
+    G209  network policy only logs (audit) or allows wildcard hosts/paths
+    G210  passwordless sudo
+    G211  screen sharing (VNC) without a password
+    G602  a procedure reads the *contents* of a secret file
+
+Best-effort heuristics (invariant I5): a flag means "look here", a clean
+result is not a proof. A value Zee cannot see being validated is reported;
+a value validated somewhere Zee cannot follow (another file's wrapper, a
+decorator) is still reported. Known blind spots: data flow across files is
+followed by function name only; JS/TS handler signatures (G207) and
+non-literal schemas are not checked; shell scripts are matched per line.
+"""
+
+from __future__ import annotations
+
+import ast
+import json
+import re
+from pathlib import Path
+
+from .model import Flag, Severity
+
+_MAX_BYTES = 512 * 1024  # larger files are left to the main pass's G910
+_MAX_LINE = 2000  # a longer line is cut: every line pattern stays bounded
+_PY = {".py"}
+_JS = {".js", ".ts", ".mjs", ".cjs"}
+_SHELLISH = {".sh", ".bash", ".zsh", ".md", ".txt", ".yaml", ".yml", ".json",
+             ".toml", ".cfg", ".ini", ""}
+_CONFIGISH = {".yaml", ".yml", ".json", ".toml"}
+
+
+def _flag(sev: Severity, code: str, msg: str, rel: str, line: int, snippet: str) -> Flag:
+    snippet = " ".join(snippet.split())
+    snippet = snippet if len(snippet) <= 80 else snippet[:77] + "…"
+    return Flag(sev, code, msg, evidence=f"{rel}:{line}: {snippet}")
+
+
+def _lines(text: str):
+    for n, raw in enumerate(text.splitlines(), 1):
+        yield n, raw[:_MAX_LINE]
+
+
+# --- G205: unquoted interpolation into a shell command (Python, JS) --------
+
+_SHELL_SINKS = {"system", "popen", "create_subprocess_shell", "getoutput",
+                "getstatusoutput"}
+_SUBPROC = {"run", "call", "check_call", "check_output", "Popen"}
+_QUOTERS = {"quote", "shlex_quote", "escape", "shell_escape", "shellquote"}
+_SAFE_CONVERT = {"int", "float", "bool", "len", "abs", "round"}
+
+
+def _callee(node: ast.Call) -> str:
+    f = node.func
+    return f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
+
+
+def _is_shell_call(node: ast.Call, helpers: set[str]) -> bool:
+    name = _callee(node)
+    if name in _SHELL_SINKS or name in helpers:
+        return True
+    if name in _SUBPROC:  # only with shell=True
+        return any(k.arg == "shell" and isinstance(k.value, ast.Constant)
+                   and k.value.value is True for k in node.keywords)
+    return False
+
+
+def _py_functions(tree: ast.AST):
+    return [n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _shell_helpers(trees: dict[str, ast.AST]) -> set[str]:
+    """Names of functions that pass one of their own parameters to a shell
+    sink (directly or through another such function). Matched by name across
+    the whole tree: `self.shell(cmd)` -> `run(cmd)` -> create_subprocess_shell."""
+    funcs = [f for t in trees.values() for f in _py_functions(t)]
+    helpers: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for f in funcs:
+            if f.name in helpers:
+                continue
+            params = {a.arg for a in f.args.args + f.args.kwonlyargs} - {"self", "cls"}
+            for call in (n for n in ast.walk(f) if isinstance(n, ast.Call)):
+                if _is_shell_call(call, helpers) and any(
+                    isinstance(n, ast.Name) and n.id in params
+                    for a in call.args for n in ast.walk(a)
+                ):
+                    helpers.add(f.name)
+                    changed = True
+                    break
+    return helpers
+
+
+def _unsafe_parts(expr: ast.AST, safe_names: set[str]) -> ast.AST | None:
+    """First sub-expression that interpolates a non-constant value into a
+    string without quoting it (f-string, .format, %, +), or None."""
+    def dynamic(v: ast.AST) -> bool:
+        if isinstance(v, ast.Constant):
+            return False
+        if isinstance(v, ast.Name) and (v.id.isupper() or v.id in safe_names):
+            return False
+        if isinstance(v, ast.Attribute) and v.attr.isupper():
+            return False
+        if isinstance(v, ast.Subscript) and isinstance(v.value, (ast.Name, ast.Attribute)):
+            base = v.value.id if isinstance(v.value, ast.Name) else v.value.attr
+            if base.isupper():
+                return False
+        if isinstance(v, ast.Call) and _callee(v) in _QUOTERS | _SAFE_CONVERT:
+            return False
+        return True
+
+    for n in ast.walk(expr):
+        if isinstance(n, ast.JoinedStr):
+            for fv in n.values:
+                if isinstance(fv, ast.FormattedValue) and dynamic(fv.value):
+                    spec = fv.format_spec
+                    if isinstance(spec, ast.JoinedStr) and any(
+                        isinstance(c, ast.Constant) and str(c.value).endswith(("d", "f"))
+                        for c in spec.values
+                    ):
+                        continue  # {x:d} fails on a non-number
+                    return n
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) \
+                and n.func.attr == "format" and isinstance(n.func.value, ast.Constant):
+            if any(dynamic(a) for a in n.args + [k.value for k in n.keywords]):
+                return n
+        elif isinstance(n, ast.BinOp) and isinstance(n.op, (ast.Mod, ast.Add)) \
+                and (isinstance(n.left, ast.Constant) and isinstance(n.left.value, str)):
+            if dynamic(n.right):
+                return n
+    return None
+
+
+def _g205_python(rel: str, tree: ast.AST, helpers: set[str]) -> list[ast.AST]:
+    hits: list[ast.AST] = []
+    for fn in _py_functions(tree):
+        safe = {a.arg for a in fn.args.args + fn.args.kwonlyargs
+                if isinstance(a.annotation, ast.Name)
+                and a.annotation.id in _SAFE_CONVERT}
+        # names that hold a built-up command: `parts = [.., f"key -- {t}"]`,
+        # `cmd = "x " + t`, `parts.append(f"..{t}")`
+        tainted: dict[str, list[ast.AST]] = {}
+
+        def bad_in(expr: ast.AST) -> list[ast.AST]:
+            first = _unsafe_parts(expr, safe)
+            via = [h for x in ast.walk(expr) if isinstance(x, ast.Name)
+                   for h in tainted.get(x.id, [])]
+            return ([first] if first is not None else []) + via
+
+        for _ in range(3):  # a few hops: a = f"{t}"; b = [a]; c = " ".join(b)
+            for n in ast.walk(fn):
+                tgt = val = None
+                if isinstance(n, ast.Assign) and len(n.targets) == 1 \
+                        and isinstance(n.targets[0], ast.Name):
+                    tgt, val = n.targets[0].id, n.value
+                elif isinstance(n, ast.Expr) and isinstance(n.value, ast.Call) \
+                        and isinstance(n.value.func, ast.Attribute) \
+                        and n.value.func.attr in ("append", "extend", "insert") \
+                        and isinstance(n.value.func.value, ast.Name) and n.value.args:
+                    tgt, val = n.value.func.value.id, n.value.args[-1]
+                if tgt is None:
+                    continue
+                if isinstance(val, ast.Call) and _callee(val) in _SAFE_CONVERT:
+                    safe.add(tgt)
+                    continue
+                have = tainted.setdefault(tgt, [])
+                have += [h for h in bad_in(val) if all(h is not x for x in have)]
+        for call in (n for n in ast.walk(fn) if isinstance(n, ast.Call)):
+            if _is_shell_call(call, helpers) and call.args:
+                hits += bad_in(call.args[0])
+    # every command built from an unquoted value is a separate chance for
+    # injection, so the evidence lists the first few, not only one
+    return hits
+
+
+_G205_JS = re.compile(
+    r"\b(?:exec|execSync)\s*\(\s*(?:`[^`\n]{0,300}\$\{(?![^}\n]{0,80}(?:quote|escape))"
+    r"|[\"'][^\"'\n]{0,300}[\"']\s*\+\s*[A-Za-z_])", re.I)
+
+
+# --- G206: custom definition of a computer/browser tool ---------------------
+
+_G206_NAME = re.compile(
+    r"""["']?name["']?\s*[:=]\s*["'](computer|browser|computer_use|screen)["']""")
+_G206_VENDOR = re.compile(r"computer_20\d{6}|bash_20\d{6}|text_editor_20\d{6}")
+_G206_SCHEMA = re.compile(r"input_schema|inputSchema")
+
+
+# --- G208: allowlists that let the agent run code it wrote ------------------
+
+_INTERP = {"bash", "sh", "zsh", "dash", "python", "python3", "node", "nodejs",
+           "deno", "bun", "perl", "ruby", "php", "env", "xargs", "sudo",
+           "eval", "exec", "npx", "source"}
+_INLINE = re.compile(r"^\s*(?:bash|sh|zsh|python3?|node|perl|ruby|php)\s+-[ce]\b")
+_G208_NAME = re.compile(r"allow|whitelist|permitted", re.I)
+_G208_JSL = re.compile(
+    r"(?i)\b\w*(?:allow|whitelist|permitted)\w*\s*[:=]\s*(?:new Set\(\s*)?\[([^\]\n]{0,2000})\]")
+_QSTR = re.compile(r"""["']([^"'\n]{1,80})["']""")
+_BASH_PERM = re.compile(r"^Bash(?:\(([^)]*)\))?$")
+
+
+def _g208_bad(entry: str) -> bool:
+    e = entry.strip()
+    if _INLINE.match(e):
+        return True
+    first = e.split(None, 1)[0] if e.split() else ""
+    base = first.rsplit("/", 1)[-1]
+    return base in _INTERP or (base.endswith(".sh") and len(e.split()) == 1)
+
+
+def _g208_python(rel: str, tree: ast.AST) -> Flag | None:
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign):
+            names = [t.id for t in n.targets if isinstance(t, ast.Name)]
+            value = n.value
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+            names, value = [n.target.id], n.value
+        else:
+            continue
+        if not any(_G208_NAME.search(x) for x in names) or value is None:
+            continue
+        if isinstance(value, ast.Call) and value.args:
+            value = value.args[0]  # frozenset({...}) / set([...])
+        elts = (value.keys if isinstance(value, ast.Dict) else
+                value.elts if isinstance(value, (ast.Set, ast.List, ast.Tuple)) else [])
+        for e in elts:
+            if isinstance(e, ast.Constant) and isinstance(e.value, str) and _g208_bad(e.value):
+                return _flag(Severity.MEDIUM, "G208",
+                             "command allowlist includes an interpreter or script the agent "
+                             "can use to run code it wrote",
+                             rel, e.lineno, e.value)
+    return None
+
+
+def _g208_json(rel: str, text: str) -> Flag | None:
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    stack = [data]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for k, v in cur.items():
+                if k in ("allow", "allowedTools", "allowed_tools") and isinstance(v, list):
+                    for s in v:
+                        m = isinstance(s, str) and _BASH_PERM.match(s)
+                        if not m:
+                            continue
+                        arg = (m.group(1) or "*").split(":", 1)[0].strip()
+                        if arg in ("*", "") or _g208_bad(arg):
+                            return Flag(Severity.MEDIUM, "G208",
+                                        "permission rule lets the agent run any interpreter "
+                                        "or command (not a real allowlist)",
+                                        evidence=f"{rel}: {s}"[:120])
+                else:
+                    stack.append(v)
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    return None
+
+
+# --- G209: network policy that only logs, or allows wildcards ---------------
+
+_NET_CONTEXT = re.compile(
+    r"network_polic|egress|allowed_hosts|allowed_domains|endpoints|allow_hosts", re.I)
+_G209_AUDIT = re.compile(
+    r"""^\s*(?:-\s*)?["']?(?:enforcement|enforce_mode|network_mode|mode)["']?\s*[:=]\s*"""
+    r"""["']?(audit|log|log_only|monitor|permissive|report)\b""", re.I)
+_G209_OFF = re.compile(r"""^\s*["']?enforce(?:ment)?["']?\s*[:=]\s*["']?(false|off|no)\b""", re.I)
+_G209_HOST = re.compile(
+    r"""["']?host(?:name)?["']?\s*[:=]\s*["']?([^"'\s,}]{0,200})""", re.I)
+_G209_PATH = re.compile(r"""["']?path["']?\s*[:=]\s*["']?(/?\*{1,2}/?)["']?\s*[,}]?\s*$""")
+_G209_LIST_KEY = re.compile(
+    r"""^\s*["']?(?:allowed_hosts|allowed_domains|allow_hosts|allowed_destinations)["']?\s*[:=]\s*(.*)$""",
+    re.I)
+
+
+def _g209(rel: str, text: str) -> list[Flag]:
+    if not _NET_CONTEXT.search(text):
+        return []
+    out: list[Flag] = []
+    in_list_indent = -1
+    for n, line in _lines(text):
+        indent = len(line) - len(line.lstrip())
+        if in_list_indent >= 0:
+            if line.strip() and indent <= in_list_indent and not line.lstrip().startswith("-"):
+                in_list_indent = -1
+            elif re.match(r"""\s*-\s*["']?[^"'\s]*\*""", line):
+                out.append(_flag(Severity.MEDIUM, "G209",
+                                 "network allowlist contains a wildcard host",
+                                 rel, n, line))
+                continue
+        m = _G209_LIST_KEY.match(line)
+        if m:
+            rest = m.group(1).strip()
+            if rest == "":
+                in_list_indent = indent
+            elif re.search(r"""["']?[\w.-]{0,100}\*""", rest):
+                out.append(_flag(Severity.MEDIUM, "G209",
+                                 "network allowlist contains a wildcard host", rel, n, line))
+            continue
+        if _G209_AUDIT.match(line) or _G209_OFF.match(line):
+            out.append(_flag(Severity.MEDIUM, "G209",
+                             "network policy is in log-only mode: violations are "
+                             "recorded but let through (not enforced)", rel, n, line))
+            continue
+        hm = _G209_HOST.search(line)
+        if hm and "*" in hm.group(1):
+            out.append(_flag(Severity.MEDIUM, "G209",
+                             "network rule uses a wildcard host", rel, n, line))
+            continue
+        if _G209_PATH.search(line):
+            out.append(_flag(Severity.MEDIUM, "G209",
+                             "network rule allows every path on its host", rel, n, line))
+    return out
+
+
+# --- G602 / G210 / G211: shell-ish text -------------------------------------
+
+_SECRET = r"(?:\.env(?![.\w-])|\.aws/credentials|\.ssh/id_\w+|\.npmrc|\.pypirc|\.netrc)"
+_G602 = re.compile(
+    r"\b(?:cat|head|tail|bat|strings|xxd|source)\s+[^\n|;&]{0,60}?" + _SECRET
+    + r"|\bgrep\s+(?!-\w*[qcl]\b)[^\n|;&]{0,60}?" + _SECRET
+    + r"|\b(?:read|open|print|show|display|dump|output)\s+(?:the\s+)?(?:contents?\s+of\s+)?"
+    r"(?:your\s+|the\s+)?" + _SECRET, re.I)
+_G602_NEG = re.compile(
+    r"\b(?:never|do not|don't|dont|must not|without|avoid)\b|\bgrep\s+-\w*[qcl]\b|"
+    r"存在だけ|読まない|読まず|開かない|禁止", re.I)
+_G210 = re.compile(r"NOPASSWD\s*:|\bNOPASSWD\b\s*=|SUDO_NOPASSWD", re.I)
+_G211_NOPW = re.compile(r"(?:^|\s)-{1,2}nopw\b|-SecurityTypes\s+None\b|\bSecurityTypes\s*=\s*None\b",
+                        re.I)
+_G211_AUTH = re.compile(r"(?:^|\s)-{1,2}(?:passwd|rfbauth|usepw|unixpw|passwdfile)\b", re.I)
+
+
+_G211_START = re.compile(r"\bx11vnc\s+(?:[^\n]{0,500}?\s)?-{1,2}[A-Za-z]")
+_APT = re.compile(r"\b(?:apt|apt-get|apk|yum|dnf|brew|pip3?)\b[^\n]{0,40}\binstall\b|\bpackages?\b", re.I)
+
+
+def _logical_lines(text: str):
+    """(first line number, joined text) with backslash continuations folded."""
+    buf, start = [], 0
+    for n, line in _lines(text):
+        if not buf:
+            start = n
+        if line.rstrip().endswith("\\") and len(buf) < 20:
+            buf.append(line.rstrip()[:-1])
+            continue
+        buf.append(line)
+        yield start, " ".join(buf)[: _MAX_LINE * 4]
+        buf = []
+    if buf:
+        yield start, " ".join(buf)[: _MAX_LINE * 4]
+
+
+def _shellish(rel: str, text: str) -> list[Flag]:
+    out: list[Flag] = []
+    for n, line in _lines(text):
+        if _G602.search(line) and not _G602_NEG.search(line):
+            out.append(_flag(Severity.MEDIUM, "G602",
+                             "reads the contents of a secret file (checking that it exists "
+                             "is enough; do not print or load the secret)", rel, n, line))
+        if _G210.search(line):
+            out.append(_flag(Severity.MEDIUM, "G210",
+                             "passwordless sudo (anything running as this user, including "
+                             "an agent, becomes root)", rel, n, line))
+    for n, line in _logical_lines(text):
+        if _G211_NOPW.search(line):
+            out.append(_flag(Severity.MEDIUM, "G211",
+                             "screen sharing without a password", rel, n, line))
+        elif _G211_START.search(line) and not _G211_AUTH.search(line) \
+                and not _APT.search(line) and not line.lstrip().startswith(("#", "//")):
+            out.append(_flag(Severity.MEDIUM, "G211",
+                             "x11vnc started without a password option", rel, n, line))
+    return out
+
+
+# --- G207: tool schema vs handler parameters --------------------------------
+
+_HANDLERS = ("execute", "__call__", "run", "call", "handle", "invoke")
+
+
+def _literal_schema(cls: ast.ClassDef):
+    for st in cls.body:
+        tgt = val = None
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name):
+            tgt, val = st.targets[0].id, st.value
+        elif isinstance(st, ast.AnnAssign) and isinstance(st.target, ast.Name):
+            tgt, val = st.target.id, st.value
+        if tgt in ("input_schema", "inputSchema", "parameters") and isinstance(val, ast.Dict):
+            return st, val
+    return None, None
+
+
+def _g207(rel: str, tree: ast.AST) -> Flag | None:
+    for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+        st, schema = _literal_schema(cls)
+        if schema is None:
+            continue
+        props: set[str] | None = None
+        required: list[str] = []
+        for k, v in zip(schema.keys, schema.values):
+            key = k.value if isinstance(k, ast.Constant) else None
+            if key == "properties" and isinstance(v, ast.Dict):
+                props = {x.value for x in v.keys if isinstance(x, ast.Constant)
+                         and isinstance(x.value, str)}
+            elif key == "required" and isinstance(v, (ast.List, ast.Tuple)):
+                required = [x.value for x in v.elts if isinstance(x, ast.Constant)]
+        if props is None:
+            continue
+        if any(isinstance(s, ast.Assign) and any(isinstance(t, ast.Name)
+               and t.id == "validates_own_input" for t in s.targets) for s in cls.body):
+            continue
+        handler = next((s for name in _HANDLERS for s in cls.body
+                        if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and s.name == name), None)
+        if handler is None or handler.args.kwarg is not None:
+            continue
+        a = handler.args
+        named = [x for x in a.posonlyargs + a.args + a.kwonlyargs if x.arg not in ("self", "cls")]
+        n_def = len(a.defaults)
+        no_default = {x.arg for x in a.posonlyargs + a.args[: len(a.args) - n_def]} | {
+            x.arg for x, d in zip(a.kwonlyargs, a.kw_defaults) if d is None}
+        params = {x.arg for x in named}
+        problems = []
+        if props - params:
+            problems.append(f"schema declares {sorted(props - params)} the handler does not accept")
+        if (no_default - {"self", "cls"}) - props:
+            problems.append(f"handler requires {sorted((no_default - {'self', 'cls'}) - props)} "
+                            "the schema never offers")
+        if set(required) & (params - no_default):
+            problems.append(f"{sorted(set(required) & (params - no_default))} marked required "
+                            "but the handler gives a default")
+        if problems:
+            return _flag(Severity.LOW, "G207",
+                         "tool schema and handler parameters do not match",
+                         rel, st.lineno, f"{cls.name}: " + "; ".join(problems))
+    return None
+
+
+def _is_test(rel: str) -> bool:
+    parts = rel.lower().split("/")
+    return any(x in ("test", "tests", "__tests__") for x in parts[:-1]) \
+        or parts[-1].startswith(("test_", "conftest")) or ".test." in parts[-1]
+
+
+# --- driver ------------------------------------------------------------------
+
+def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
+    """Run every check over the (already enumerated) files of a tree.
+    Unreadable / oversized files are skipped here: the main pass reports them
+    (G910 / G911)."""
+    flags: list[Flag] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(f: Flag | None, rel: str) -> None:
+        if f and (f.code, rel) not in seen:
+            seen.add((f.code, rel))
+            flags.append(f)
+
+    texts: dict[str, str] = {}
+    trees: dict[str, ast.AST] = {}
+    for p in paths:
+        suf = p.suffix.lower()
+        if suf not in _PY | _JS | _SHELLISH and p.name != "Dockerfile" \
+                and not p.name.startswith("Dockerfile"):
+            continue
+        try:
+            if p.stat().st_size > _MAX_BYTES:
+                continue
+            text = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "\0" in text:
+            continue
+        rel = str(p.relative_to(root))
+        texts[rel] = text
+        if suf in _PY:
+            try:
+                trees[rel] = ast.parse(text)
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                pass  # not Python we can read: the regex checks below still run
+
+    helpers = _shell_helpers(trees)
+    for rel, text in texts.items():
+        suf = Path(rel).suffix.lower()
+        if rel in trees:
+            hits = sorted({getattr(h, "lineno", 0): h for h in
+                           _g205_python(rel, trees[rel], helpers)}.items())
+            if hits:
+                add(Flag(Severity.MEDIUM, "G205",
+                         "value interpolated into a shell command without quoting "
+                         "(command injection if it comes from a model)",
+                         evidence=f"{rel}: " + " | ".join(
+                             f"{n}: {' '.join(ast.unparse(h).split())[:70]}"
+                             for n, h in hits[:3])[:200]), rel)
+            add(_g207(rel, trees[rel]), rel)
+            add(_g208_python(rel, trees[rel]), rel)
+        if suf in _JS:
+            if "child_process" in text:
+                for n, line in _lines(text):
+                    if _G205_JS.search(line):
+                        add(_flag(Severity.MEDIUM, "G205",
+                                  "value interpolated into a shell command without quoting "
+                                  "(command injection if it comes from a model)",
+                                  rel, n, line), rel)
+                        break
+            for n, line in _lines(text):
+                m = _G208_JSL.search(line)
+                if m and any(_g208_bad(s) for s in _QSTR.findall(m.group(1))):
+                    add(_flag(Severity.MEDIUM, "G208",
+                              "command allowlist includes an interpreter or script the agent "
+                              "can use to run code it wrote", rel, n, line), rel)
+                    break
+        if suf == ".json":
+            add(_g208_json(rel, text), rel)
+        if suf in _CONFIGISH:
+            for f in _g209(rel, text):
+                add(f, rel)
+        if suf in _PY | _JS | _CONFIGISH and not _is_test(rel):
+            m = _G206_NAME.search(text)
+            if m and _G206_SCHEMA.search(text) and not _G206_VENDOR.search(text):
+                add(Flag(Severity.LOW, "G206",
+                         "computer/browser tool declared with a custom schema: the API's "
+                         "screen-specific safety classifiers (e.g. injected-instruction "
+                         "detection) do not apply to it; use the vendor tool type or add "
+                         "your own mitigations",
+                         evidence=f"{rel}: {m.group(0)}"[:120]), rel)
+        if suf in _SHELLISH or Path(rel).name.startswith("Dockerfile"):
+            for f in _shellish(rel, text):
+                add(f, rel)
+    return flags
