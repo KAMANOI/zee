@@ -50,7 +50,7 @@ _COMMENT = re.compile(r"^\s*(?://|#|\*|/\*|<!--)")
 _PKG_TARGET = re.compile(
     r"(?<![\w-])(?:node_modules|site-packages|dist-packages)(?![\w-])|"
     r"require\.resolve\s*\(|import\.meta\.resolve")
-_PKG_SKIP = re.compile(r"node_modules['\"]?(?:\s*,\s*['\"]|[/\\])\.(?:cache|bin|vite|tmp|prisma)\b")
+_PKG_SKIP = re.compile(r"node_modules['\"]?(?:\s*,\s*['\"]|[/\\])\.(?:cache|bin|vite|tmp|prisma)(?![\w.-])")
 _WRITE = re.compile(
     r"\b(?:writeFile|writeFileSync|appendFile|appendFileSync|copyFile|copyFileSync|"
     r"cpSync|renameSync|rename|symlinkSync|symlink)\s*\(|"
@@ -69,7 +69,7 @@ _REAPPLY = re.compile(
     r"auto[_-]?re[_-]?appl(?:y|ied)\b|apply[_-]?on[_-]?(?:start|launch|boot)\w*",
     re.I)
 # what follows the matched name: `": false`, `= false;` (checked right after the name, not at line end)
-_OFF_VALUE = re.compile(r"[\"']?\s*[:=]\s*[\"']?(?:false|0|off|no)\b", re.I)
+_OFF_VALUE = re.compile(r"[\"']?\s*[:=]\s*[\"']?(?:false|0|off|no)(?![\w.])", re.I)
 
 # --- G214: injected prompt the installer cannot read ----------------------
 _SINK = re.compile(
@@ -130,6 +130,12 @@ def _near(a: list[int], b: list[int], win: int = _WIN) -> tuple[int, int] | None
     return None
 
 
+def _has_near(b: list[int], i: int, win: int = _WIN) -> bool:
+    """Is there an entry of the sorted list `b` within `win` of `i`? O(log n)."""
+    k = bisect.bisect_left(b, i - win)
+    return k < len(b) and b[k] <= i + win
+
+
 def _hits(lines: list[str], pat: re.Pattern[str], skip=None, comments: bool = True) -> list[int]:
     """Line indexes with a match of `pat`. A match that `skip` also matches at the same
     position is ignored (the rest of the line still counts)."""
@@ -162,15 +168,15 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                                rel, nums[p[1]], lines[p[1]]))
         # G215: a plugin folder, a patch-style word and a write all within the window of one line
         d, m_, w2 = _hits(lines, _PLUGIN_DIR, None, False), _hits(lines, _MODIFY, None, False), w
-        hit = next((i for i in d if _near([i], m_) and _near([i], w2)), None)
+        hit = next((i for i in d if _has_near(m_, i) and _has_near(w2, i)), None)
         if hit is not None:
             flags.append(_flag(Severity.MEDIUM, "G215",
                                "names an agent's plugin / extension folder next to a patch-style word and a "
                                "file write", rel, nums[hit], lines[hit]))
     if suf in _CODE | _CONFIG:
         for i in _hits(lines, _REAPPLY, None, False):
-            m = _REAPPLY.search(lines[i])
-            if not _OFF_VALUE.match(lines[i], m.end()):
+            # every match on the line counts: one disabled name must not hide an enabled one
+            if any(not _OFF_VALUE.match(lines[i], m.end()) for m in _REAPPLY.finditer(lines[i])):
                 flags.append(_flag(Severity.MEDIUM, "G213",
                                    "defines or enables an apply-on-every-start setting or function "
                                    "(autoApplyOnStart and equivalents)",
@@ -196,8 +202,8 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                     p = _near(sink, other, win)
                 if p:
                     flags.append(_flag(Severity.HIGH, "G214",
-                                       f"system-prompt / agent-instruction text is set next to {what}: "
-                                       f"its content is not readable in plain text",
+                                       f"system-prompt / agent-instruction text is set next to {what}; "
+                                       f"the files do not show its content in plain text",
                                        rel, nums[p[0]], lines[p[0]]))
                     break
     return flags
@@ -228,7 +234,7 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
         rel = str(p.relative_to(root))
         if _OPAQUE_FILE.search(p.name):
             add([Flag(Severity.HIGH, "G214",
-                      "ships a file named like an encrypted / sealed prompt (prompt*.enc / .sealed / .gpg ...): its content is not readable in plain text",
+                      "ships a file named like an encrypted / sealed prompt (prompt*.enc / .sealed / .gpg ...); its content is not shown in plain text",
                       evidence=rel)], rel)
         suf = p.suffix.lower()
         if suf not in _CODE | _CONFIG | _DOC and not p.name.startswith("README"):
@@ -247,8 +253,11 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
                 lines.append(ln)
                 nums.append(n)
             else:
+                # padding with blanks must not push the write out of range; a long comment stays a comment
+                comment = _COMMENT.match(ln)
+                ln = re.sub(r"\s{2,}", " ", ln)
                 for st in range(0, len(ln), _STEP):
-                    lines.append(ln[st:st + _CHUNK])
+                    lines.append(("//" if comment and st else "") + ln[st:st + _CHUNK])
                     nums.append(n)
         if suf == "" and text.startswith("#!"):  # extensionless script: judge it by its interpreter
             suf = ".js" if "node" in lines[0] else ".py" if "python" in lines[0] else ".sh"

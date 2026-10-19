@@ -218,3 +218,36 @@ def test_many_sinks_and_fetches_stay_fast(tmp_path):
     t0 = time.time()
     _scan(tmp_path, {"p.py": body})
     assert time.time() - t0 < 10
+
+
+# ---- regressions from the independent check (ASTRA round 2) ----------------
+
+def test_cache_prefix_directories_are_not_excluded(tmp_path):
+    by, _ = _scan(tmp_path, {"a.js": "const t = 'node_modules/.cache-tools/core.js';\nfs.writeFileSync(t, d);\n"})
+    assert "G212" in by
+    by, _ = _scan(tmp_path / "ok", {"b.js": "const t = 'node_modules/.cache/core.js';\nfs.writeFileSync(t, d);\n"})
+    assert "G212" not in by
+
+
+def test_g213_mixed_disabled_and_enabled_on_one_line(tmp_path):
+    by, _ = _scan(tmp_path, {"a.json": '{"autoApplyOnStart":false,"reapply_on_launch":true}\n'})
+    assert "G213" in by
+    by, _ = _scan(tmp_path / "n", {"b.json": '{"autoApplyOnStart":0.5}\n'})
+    assert "G213" in by
+
+
+def test_padding_with_blanks_and_long_comments(tmp_path):
+    padded = "p=require.resolve('x');" + " " * 5000 + "\nfs.writeFileSync(p,d);\n"
+    by, _ = _scan(tmp_path, {"a.js": padded})
+    assert "G212" in by
+    comment = "// " + "see the docs " * 400 + " fs.writeFileSync(require.resolve('x'), d);\n"
+    by, _ = _scan(tmp_path / "c", {"b.js": comment})
+    assert "G212" not in by
+
+
+def test_g215_many_hits_stay_fast(tmp_path):
+    import time
+    body = "wrapAll(x)\n" * 30000 + "\n" * 100 + "path.join(h, '.claude', 'plugins')\n" * 30000
+    t0 = time.time()
+    _scan(tmp_path, {"p.js": body})
+    assert time.time() - t0 < 10
