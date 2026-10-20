@@ -136,7 +136,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: KAMANOI/zee@v0.15.0       # or pin to a commit SHA
+      - uses: KAMANOI/zee@v0.16.0       # or pin to a commit SHA
         with:
           source: .
           fail-on: high                  # high (default) | medium — medium also fails G501 paraphrases

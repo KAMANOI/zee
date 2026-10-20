@@ -10,13 +10,13 @@
 
 ```
 Project Status:
-Early Public / Research Project — v0.15.0
+Early Public / Research Project — v0.16.0
 
 Zee is not a production-ready security product.
 
 Zee does not guarantee protection, containment, prevention of data theft, or detection effectiveness.
 
-Implemented (v0.15.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
+Implemented (v0.16.0): entry gate (zee gate), decoy tripwires with opt-in containment (observe-only by default), containment-evidence export and incident-report bundle.
 What has been verified, under which conditions, and what has not: docs/verification/
 ```
 
@@ -105,6 +105,16 @@ zee gate audit
 
 静的検査であり、すべての悪意を検出できるわけではありません（正直に）。Semgrep / Snyk / Socket を置き換えるものではなく、それらと**併用する一層**です。GitHub Action として CI / pre-install に組み込めます。詳細は [docs/gate.md](./docs/gate.md) ／ 脅威リストの形式は [docs/threat-list.md](./docs/threat-list.md) を参照してください。
 
+v0.16.0 で、次の3群の検査を足しました（どれも読むだけで実行しません。人が読むべき箇所に `ファイル:行` 付きで印を付けるもので、安全の証明ではありません）：
+
+| 群 | 項目 | 何に印を付けるか |
+|---|---|---|
+| エージェントの道具・封じ込め設定 | G205〜G211・G602 | 引用せずにシェルへ渡す値・独自定義の画面操作ツール・スキーマと受け口の食い違い・インタプリタを含む許可リスト・記録だけのネットワーク方針・パスワード無しの sudo / VNC・秘密ファイルの中身を読む手順 |
+| 改ざんプラグイン | G212〜G216 | 他のパッケージへの書き込み（HIGH）・起動のたびの再適用・平文で読めない注入プロンプト（HIGH）・他のプラグイン置き場への上書き・AI 宛ての命令文 |
+| AI の設定を書き換える手順書 | G217〜G220 | 外部 MCP サーバーの登録指示・AI／開発ツールの設定ファイルへの書き込み指示・プラグイン定義の外部接続先・サンドボックスを切ったブラウザ起動 |
+
+HIGH 以外はすべて MEDIUM（G206・G207 は LOW）です。MEDIUM が1つでもあると `--promote-to` は通らず、MEDIUM が3つ重なると HIGH になります。行の並びや名前で見るため、意図的に書き換えればすり抜けられます。各群の限界は [docs/gate.md](./docs/gate.md) にあります。**v0.15.0 で通っていたものが、更新後に MEDIUM / HIGH になることがあります**（例：`node_modules` に書き込む patch-package 型の道具は設計上 G212 になります）。
+
 ---
 
 ## MVP — 動く囮トリップワイヤ
@@ -113,13 +123,13 @@ zee gate audit
 
 > **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも v0.13.0 の規則で確認）。**v0.13.0 以降に更新してください。**
 
-> **外向き遮断と IPv6（v0.13.1・2026-10-16）** — v0.13.0 までは、iptables の経路（nft の無い Linux）と Windows の経路が IPv4 の規則だけを入れ、**IPv6 の外向き通信を止めていませんでした**（遮断の結果に `IPv6 NOT blocked` と出ていました）。v0.13.1 で、iptables の経路は同じバックエンドの ip6tables にも規則を入れ（入れられなければ遮断は「失敗」）、Windows は同じ規則に IPv6 の範囲を足しました。どちらの経路も、ループバック・リンクローカル（`fe80::/10`）・ULA（`fc00::/7`）・リンク内マルチキャスト（`ff02::/16`）以外の IPv6 を止めます。Linux（名前空間内の nft・iptables nf_tables 版・legacy 版）では IPv6 の通信が止まって復旧で戻ることを実測しました。**Windows は規則が入り読み直しで一致することまでを確認し、IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が無いため）。**v0.13.1 以降（最新は v0.15.0）に更新してください。** **VPN・オーバーレイの注意**：Tailscale（`fd7a:115c:a1e0::/48`）・ZeroTier などのオーバーレイや VPN が、私用アドレス（IPv4 の RFC 1918）や ULA（`fc00::/7`）で遠くの相手につながっている場合、egress 遮断はそこへの通信を止めません（その宛先は「ローカル」として通すため）。そうした端末で確実に止めたい場合は `cut_method: full` を使ってください。なお IPv6 のリンクローカル・ULA は、iptables・Windows の経路では通し、nft・pf の経路では止めます（経路で扱いが違います）。
+> **外向き遮断と IPv6（v0.13.1・2026-10-16）** — v0.13.0 までは、iptables の経路（nft の無い Linux）と Windows の経路が IPv4 の規則だけを入れ、**IPv6 の外向き通信を止めていませんでした**（遮断の結果に `IPv6 NOT blocked` と出ていました）。v0.13.1 で、iptables の経路は同じバックエンドの ip6tables にも規則を入れ（入れられなければ遮断は「失敗」）、Windows は同じ規則に IPv6 の範囲を足しました。どちらの経路も、ループバック・リンクローカル（`fe80::/10`）・ULA（`fc00::/7`）・リンク内マルチキャスト（`ff02::/16`）以外の IPv6 を止めます。Linux（名前空間内の nft・iptables nf_tables 版・legacy 版）では IPv6 の通信が止まって復旧で戻ることを実測しました。**Windows は規則が入り読み直しで一致することまでを確認し、IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が無いため）。**v0.13.1 以降（最新は v0.16.0）に更新してください。** **VPN・オーバーレイの注意**：Tailscale（`fd7a:115c:a1e0::/48`）・ZeroTier などのオーバーレイや VPN が、私用アドレス（IPv4 の RFC 1918）や ULA（`fc00::/7`）で遠くの相手につながっている場合、egress 遮断はそこへの通信を止めません（その宛先は「ローカル」として通すため）。そうした端末で確実に止めたい場合は `cut_method: full` を使ってください。なお IPv6 のリンクローカル・ULA は、iptables・Windows の経路では通し、nft・pf の経路では止めます（経路で扱いが違います）。
 
 ### インストール
 
 ```bash
 # タグを固定して1行で入れる（推奨・外部レジストリを経由しない）
-uv tool install "git+https://github.com/KAMANOI/zee@v0.15.0"
+uv tool install "git+https://github.com/KAMANOI/zee@v0.16.0"
 
 # または、手元で開発する場合
 git clone https://github.com/KAMANOI/zee.git

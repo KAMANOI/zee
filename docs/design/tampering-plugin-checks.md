@@ -20,7 +20,7 @@ Everything the tests use is a synthetic dummy written for this suite from that d
 
 ## Verdict mapping
 
-合格 = LOW, 要人手確認 = MEDIUM, 不合格 = HIGH (the existing scorer; any HIGH flag is HIGH, several MEDIUM add up to HIGH at weight 12).
+合格 = LOW, 要人手確認 = MEDIUM, 不合格 = HIGH (the existing scorer; any HIGH flag is HIGH, MEDIUM weighs 4 and a total of 10 or more is HIGH, so three MEDIUM flags make HIGH).
 G212 / G214 = HIGH. G213 / G215 / G216 = MEDIUM.
 
 **Instruction conflict, resolved by the narrower sentence:** the order said item 2 (apply on start) goes to "要人手確認", but the

@@ -5,7 +5,7 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
-## [Unreleased]
+## [0.16.0]
 
 ### Added
 
@@ -22,6 +22,33 @@ releases.
   screen sharing (x11vnc / VNC) without a password, `G602` a procedure that
   reads the contents of a secret file where checking it exists is enough.
   Design, limits and what was left out: `docs/design/agent-config-checks.md`.
+- **Tampering-plugin checks in `zee gate`** (static): `G212` (HIGH) code that
+  writes over, renames or links a file next to a line naming another package
+  (`node_modules`, `site-packages`), `G213` (MEDIUM) an "apply on every start"
+  setting or function, `G214` (HIGH) agent-instruction text set next to a
+  decrypt call, a long encoded string, an encrypted prompt file or a network
+  fetch, `G215` (MEDIUM) code that names an agent's plugin / extension
+  folder together with patch-style words and a write, `G216` (MEDIUM)
+  documentation addressed to an AI assistant. Design and verification record:
+  `docs/design/tampering-plugin-checks.md`.
+- **Procedure-document and plugin-definition checks in `zee gate`** (static,
+  all MEDIUM): `G217` a skill / procedure document telling the assistant to
+  register a remote MCP server, `G218` the same kind of document telling it to
+  write to an AI-tool or developer-tool config file, `G219` a plugin / MCP
+  definition that declares a remote MCP server, `G220` a browser started with
+  its sandbox or web protections turned off. Design and verification record:
+  `docs/design/instruction-doc-checks.md`.
+
+### Notes
+
+- These checks are line and syntax heuristics. They point a person at places
+  to read; they are easy to evade on purpose, and a clean result does not mean
+  the artifact is safe. Limits per group are in `docs/gate.md`.
+- **Upgrading can change existing gate results.** G212 / G214 are HIGH, so an
+  artifact that passed `fail-on: high` on v0.15.0 can now fail (for example a
+  patch-package style tool that writes into `node_modules` is flagged G212 by
+  design). Any new MEDIUM flag blocks `--promote-to`, and MEDIUM flags add up
+  (three of them reach HIGH).
 
 ## [0.15.0] — 2026-10-17
 
