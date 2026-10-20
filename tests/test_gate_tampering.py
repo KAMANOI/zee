@@ -364,3 +364,14 @@ def test_call_inside_a_string_that_spans_lines_is_not_hidden(tmp_path):
     assert by["G214"].severity.value == "high"
     by, _ = _scan(tmp_path / "js2", {"a.js": "const system_prompt = `\nSay 'x' ${decrypt(blob, key)}\n`;\n"})
     assert by["G214"].severity.value == "high"
+
+
+# ---- Codex round 7: a fetch word left in a string must not hide a real fetch below it --
+def test_fetch_candidate_in_text_does_not_hide_the_real_fetch(tmp_path):
+    by, _ = _scan(tmp_path, {"a.py": '"""module docs"""\nnote = "requests.get(url)"\nsystem_prompt = requests.get(url)\n'})
+    assert by["G214"].severity.value == "high"
+    by, _ = _scan(tmp_path / "js", {"a.js": 'const n = `a\nb`;\nconst note = "fetch(u)";\nconst systemPrompt = fetch(u);\n'})
+    assert by["G214"].severity.value == "high"
+    # above the prompt line, a second candidate is found when the first does not qualify
+    by, _ = _scan(tmp_path / "two", {"b.js": "fetch('/health');\nconst r = await fetch(u);\nconst systemPrompt = await r.text();\n"})
+    assert "G214" in by

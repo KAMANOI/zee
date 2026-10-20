@@ -284,11 +284,12 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                 other = _hits([_unquote(x) for x in lines] if quoted else lines, pat, None, False)
                 p = None
                 if pat is _FETCH:
-                    # same line, or just above and the prompt line takes a value (await / .text / .json ...)
+                    # same line, or any fetch just above when the prompt line takes a value (await / .text
+                    # / .json ...). Every candidate counts: one that does not qualify never hides another.
+                    same = set(other)
                     for s_ in sink:
                         k = bisect.bisect_left(other, s_ - win)  # first fetch line >= s_-win
-                        if k < len(other) and other[k] <= s_ and (
-                                other[k] == s_ or _TAKES_VALUE.search(lines[s_])):
+                        if s_ in same or (k < len(other) and other[k] < s_ and _TAKES_VALUE.search(lines[s_])):
                             p = (s_,)
                             break
                 else:
