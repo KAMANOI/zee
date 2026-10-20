@@ -87,6 +87,8 @@ _ALLOWED = {
 
 
 def _allowed(mod: str, name: str) -> bool:
+    if "." in name:  # STACK_GLOBAL resolves dotted names by getattr: torch + "os.system" must not pass
+        return False
     if mod == "torch._utils":
         return name.startswith("_rebuild_")
     if mod == "torch":  # Storage types / dtypes / Size only
@@ -164,7 +166,7 @@ class _Capped:
 
 
 _STR_OPS = {"SHORT_BINUNICODE", "BINUNICODE", "BINUNICODE8", "UNICODE", "STRING", "BINSTRING", "SHORT_BINSTRING"}
-_NEUTRAL = {"PROTO", "FRAME", "MARK", "POP", "POP_MARK"}
+_NEUTRAL = {"PROTO", "FRAME"}  # everything else, MARK / POP included, breaks the "two strings in a row" chain
 
 
 def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
@@ -240,9 +242,9 @@ def _pickle_flags(rel: str, f, *, sure: bool) -> tuple[list[Flag], bool]:
         if (mod, nm) in seen:
             continue
         seen.add((mod, nm))
-        if _dangerous(mod, nm):
+        if "." in nm or _dangerous(mod, nm):
             flags.append(Flag(Severity.HIGH, "G222",
-                              "pickle imports something that runs code or reaches the system",
+                              "pickle imports something that runs code or reaches the system (or walks a dotted attribute path)",
                               evidence=f"{rel}: {mod}.{nm}"))
         elif not _allowed(mod, nm):
             flags.append(Flag(Severity.MEDIUM, "G223", "pickle imports outside the allow-list",
@@ -329,7 +331,7 @@ def _keras_config(zf: zipfile.ZipFile, info: zipfile.ZipInfo, rel: str) -> list[
         txt = zf.read(info).decode("utf-8", "replace")
     except (OSError, RuntimeError):
         return [Flag(Severity.LOW, "G225", "keras config could not be read", evidence=rel)]
-    if re.search(r'"class_name"\s*:\s*"Lambda"|enable_unsafe_deserialization|__lambda__|"module"\s*:\s*"(?!keras|keras_hub|keras_nlp|builtins)', txt):
+    if re.search(r'"class_name"\s*:\s*"Lambda"|enable_unsafe_deserialization|__lambda__|"module"\s*:\s*"(?!(?:keras|keras_hub|keras_nlp|builtins)[."])', txt):
         return [Flag(Severity.MEDIUM, "G229", "Keras model holds a Lambda layer or custom code reference",
                      evidence=f"{rel}: config.json")]
     return []
@@ -474,6 +476,16 @@ class _ImportTime(ast.NodeVisitor):
     def __init__(self):
         self.hard: list[tuple[int, str]] = []
         self.soft: list[tuple[int, str]] = []
+        self.mod_alias: dict[str, str] = {}  # `import os as o` -> o: os
+        self.name_alias: dict[str, tuple[str, str]] = {}  # `from os import system as s` -> s: (os, system)
+
+    def visit_Import(self, node):
+        for a in node.names:
+            self.mod_alias[a.asname or a.name.split(".")[0]] = a.name.split(".")[0]
+
+    def visit_ImportFrom(self, node):
+        for a in node.names:
+            self.name_alias[a.asname or a.name] = ((node.module or "").split(".")[0], a.name)
 
     def _fn(self, node):  # body runs later; decorators and defaults run now
         for d in node.decorator_list:
@@ -490,7 +502,10 @@ class _ImportTime(ast.NodeVisitor):
     def visit_Call(self, node):
         f = node.func
         nm = f.id if isinstance(f, ast.Name) else f.attr if isinstance(f, ast.Attribute) else ""
-        if nm in {"eval", "exec", "compile", "__import__"} or (nm in _RUN and _root_name(f) in _RUN_MODS):
+        root = self.mod_alias.get(_root_name(f), _root_name(f))
+        if isinstance(f, ast.Name) and f.id in self.name_alias:
+            root, nm = self.name_alias[f.id]
+        if nm in {"eval", "exec", "compile", "__import__"} or (nm in _RUN and root in _RUN_MODS):
             self.hard.append((node.lineno, nm))
         self.generic_visit(node)
 
@@ -551,6 +566,13 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
             jsons.append((p, rel))
         if suf in (".py", ".json", ".md", ".txt", ".yaml", ".yml"):
             texts.append((p, rel))
+        if fmt == "safetensors" and suf in _PICKLE_SUFFIXES:
+            has_model = True  # a pickle-named file (torch.load reads it as a pickle) that starts like safetensors
+            flags.append(Flag(Severity.HIGH, "G226", "named as a pickle model but starts like safetensors (name and content differ)", evidence=rel))
+            with p.open("rb") as f:
+                fl, _ = _pickle_flags(rel, f, sure=False)
+            flags += fl
+            continue
         if suf == ".safetensors" or fmt == "safetensors":
             has_model = True
             if suf != ".safetensors" or fmt != "safetensors":
@@ -613,6 +635,7 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
                           evidence=ev))
     # companion code and config
     auto_map: list[str] = []
+    targets: set[str] = set()
     for p, rel in jsons:
         try:
             if p.stat().st_size > _JSON_CAP:
@@ -622,11 +645,20 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
             continue
         if isinstance(doc, dict) and "auto_map" in doc:
             auto_map.append(rel)
+            stack = [doc["auto_map"]]
+            while stack:  # {"AutoModel": "modeling_x.X"} / lists / "repo--modeling_x.X"
+                v = stack.pop()
+                if isinstance(v, str):
+                    targets.add(v.rsplit("--", 1)[-1].split(".")[0])
+                elif isinstance(v, dict):
+                    stack += list(v.values())
+                elif isinstance(v, list):
+                    stack += v
             flags.append(Flag(Severity.MEDIUM, "G227", "config names code to import when the model loads (auto_map)",
                               evidence=rel))
     if has_model or auto_map:
         for p, rel in candidates_py:
-            if _COMPANION.match(p.name):
+            if _COMPANION.match(p.name) or p.stem in targets:
                 flags.append(Flag(Severity.MEDIUM, "G227", "companion code loaded with the model (trust_remote_code)", evidence=rel))
                 flags += _py_flags(p, rel)
         for p, rel in texts:

@@ -321,3 +321,50 @@ def test_oversize_manifest_is_unreadable_not_slurped(tmp_path):
     with (d / "package.json").open("wb") as f:
         f.truncate(9 * 1024 * 1024)
     assert [f.code for f in manifest_flags(d)] == ["G912"]
+
+
+def _p4(*parts: bytes) -> bytes:
+    return b"\x80\x04" + b"".join(parts) + b"."
+
+
+def _s(x: str) -> bytes:
+    return b"\x8c" + bytes([len(x)]) + x.encode()
+
+
+def test_dotted_attribute_path_is_high(tmp_path):
+    body = _p4(_s("torch"), _s("os.system"), b"\x93", _s("echo"), b"\x85R")
+    assert "G222" in _codes(_scan(tmp_path, {"w.pkl": body}))
+
+
+def test_pop_between_strings_is_unresolved_not_misread(tmp_path):
+    # real stack: posix, echo -> posix.echo; a push log would read system.echo and miss posix
+    body = _p4(_s("posix"), _s("system"), b"0", _s("echo"), b"\x93")
+    c = _codes(_scan(tmp_path, {"w.pkl": body}))
+    assert "G225" in c and "G221" in c
+
+
+def test_auto_map_target_with_any_name_is_checked(tmp_path):
+    cfg = json.dumps({"auto_map": {"AutoModel": "myrepo--impl.Net"}})
+    c = _codes(_scan(tmp_path, {"config.json": cfg, "impl.py": "import os\nos.system('id')\n"}))
+    assert c["G228"][0].severity.value == "high" and len(c["G227"]) == 2
+
+
+def test_aliased_imports_are_resolved(tmp_path):
+    for i, body in enumerate(("import os as o\no.system('id')\n", "from os import system as s\ns('id')\n",
+                              "from subprocess import run\nrun(['id'])\n")):
+        c = _codes(_scan(tmp_path / str(i), {"model.safetensors": _st({"a": ("U8", [1], 1)}), "modeling_x.py": body}))
+        assert c.get("G228"), body
+
+
+def test_safetensors_head_under_a_pickle_name_is_high(tmp_path):
+    c = _codes(_scan(tmp_path, {"pytorch_model.bin": _st({"a": ("U8", [1], 1)}), "m.pt": _st({"a": ("U8", [1], 1)})}))
+    assert len(c["G226"]) == 2
+
+
+def test_keras_custom_module_prefix_is_not_allowlisted(tmp_path):
+    p = tmp_path / "b"
+    p.mkdir()
+    with zipfile.ZipFile(p / "m.keras", "w") as z:
+        z.writestr("metadata.json", "{}")
+        z.writestr("config.json", '{"module": "keras_evil.x"}')
+    assert "G229" in _codes(static_checks.scan_tree(p))
