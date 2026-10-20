@@ -61,9 +61,16 @@ _WRITE = re.compile(
 _WRITE_SH = re.compile(r"\b(?:cp|mv|ln)\s+-?\w*\s")  # shell verbs: too common as words in JS / Python
 _COPY = re.compile(r"copy|cpSync|(?:^|\.)cp\b|^cp\s")  # a write match that is a copy (source, destination)
 _ASSIGNED = re.compile(r"^\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=(?!=)")
-_STR = re.compile(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"")  # quoted text on one line
+_STR = re.compile(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`")  # quoted text on one line
+_INTERP = re.compile(r"\$\{([^}]*)\}")
 _BACKUP = re.compile(r"\.(?:[A-Za-z0-9_-]+\.)?(?:bak|orig|backup|original)\b|[_-](?:bak|orig|backup)\b",
                      re.I)
+
+
+def _unquote(line: str) -> str:
+    """The line with quoted text emptied; a template literal keeps only its ${...} parts."""
+    return _STR.sub(lambda m: " ".join(_INTERP.findall(m.group(0))) if m.group(0)[0] == "`" else '""', line)
+
 
 # --- G213: re-apply on every start ----------------------------------------
 _REAPPLY = re.compile(
@@ -156,14 +163,35 @@ def _writes(lines: list[str], suf: str) -> list[int]:
     return sorted(set(w) | set(_hits(lines, _WRITE_SH, None, False))) if suf in _SHELL else w
 
 
-def _copy_args(line: str, end: int, shell: bool) -> tuple[str, str]:
-    """(first argument, the rest) after a copy call that ends at `end`."""
-    rest = line[end:]
+def _copy_args(line: str, end: int, shell: bool) -> tuple[str, str] | None:
+    """(source, destination) of a copy at `end` (shell: where the arguments start; code: where
+    the call name starts), or None when they cannot be
+    told from this line. Arguments are split at top-level commas (quotes and brackets
+    respected), so text after the call on the same line is not read as an argument."""
     if shell:
-        toks = [x for x in rest.split() if not x.startswith("-")]
-        return (toks[0], " ".join(toks[1:])) if toks else ("", "")
-    a, _, b = rest.lstrip("( ").partition(",")
-    return a, b
+        toks = [x for x in re.split(r"[;&|]", line[end:], maxsplit=1)[0].split() if not x.startswith("-")]
+        return (toks[0], toks[-1]) if len(toks) >= 2 else None
+    m = re.compile(r"[\w$.]*\s*\(").match(line, end)  # `end` = where the call name starts
+    if not m:
+        return None
+    rest = line[m.end() - 1:]
+    args, start, depth, quote, esc = [], 1, 0, "", False
+    for i, ch in enumerate(rest[1:], 1):
+        if quote:
+            esc, quote = (False, quote) if esc else (ch == "\\", "" if ch == quote else quote)
+        elif ch in "'\"`":
+            quote = ch
+        elif ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            if depth == 0:
+                args.append(rest[start:i])
+                return (args[0], args[1]) if len(args) >= 2 else None
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(rest[start:i])
+            start = i + 1
+    return None  # the call continues on another line
 
 
 def _g212(lines: list[str], t: list[int], w: list[int], win: int, shell: bool) -> tuple[Severity, int] | None:
@@ -172,7 +200,7 @@ def _g212(lines: list[str], t: list[int], w: list[int], win: int, shell: bool) -
     a copy whose direction cannot be told is MEDIUM."""
     medium = None
     for wi in w:
-        near = [ti for ti in t if abs(ti - wi) <= win]
+        near = t[bisect.bisect_left(t, wi - win): bisect.bisect_right(t, wi + win)]
         if not near:
             continue
         ln = lines[wi]
@@ -180,18 +208,21 @@ def _g212(lines: list[str], t: list[int], w: list[int], win: int, shell: bool) -
         copies = [m for m in ms if _COPY.search(m.group(0).strip())]
         if not ms or len(copies) < len(ms):
             return Severity.HIGH, wi  # writes, renames, links, sed -i ...: not a copy
-        src, dst = _copy_args(ln, copies[0].end(), shell)
-        if _PKG_TARGET.search(dst):
-            return Severity.HIGH, wi
-        if _PKG_TARGET.search(src):
-            continue  # copies out of the package
         names = {m.group(1) for ti in near if (m := _ASSIGNED.match(lines[ti]))}
         word = re.compile(r"(?<![\w$])(?:" + "|".join(map(re.escape, names)) + r")(?![\w$])") if names else None
-        if word and word.search(dst):
-            return Severity.HIGH, wi
-        if word and word.search(src):
-            continue
-        medium = medium if medium is not None else wi
+        unknown = False
+        for c in copies:
+            args = _copy_args(ln, c.end() if shell else c.start(), shell)
+            if args is None:
+                unknown = True
+                continue
+            src, dst = args
+            if _PKG_TARGET.search(dst) or (word and word.search(dst)):
+                return Severity.HIGH, wi
+            if not (_PKG_TARGET.search(src) or (word and word.search(src))):
+                unknown = True  # neither side names the package: direction unknown
+        if unknown and medium is None:
+            medium = wi
     return (Severity.MEDIUM, medium) if medium is not None else None
 
 
@@ -235,7 +266,7 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                                    (_OPAQUE_REF, "a reference to an encrypted / sealed prompt file", 6),
                                    (_FETCH, "a network fetch", 2)):
                 # a call word inside quoted text ("explain how decrypt(x) works") is not a call
-                other = _hits([_STR.sub('""', x) for x in lines] if pat in (_DECRYPT, _FETCH) else lines,
+                other = _hits([_unquote(x) for x in lines] if pat in (_DECRYPT, _FETCH) else lines,
                               pat, None, False)
                 p = None
                 if pat is _FETCH:

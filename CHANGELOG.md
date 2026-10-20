@@ -49,7 +49,8 @@ releases.
   artifact that passed `fail-on: high` on v0.15.0 can now fail (for example a
   patch-package style tool that writes into `node_modules` is flagged G212, and
   an agent that loads its system prompt over the network at run time is flagged
-  G214, both by design). Any new MEDIUM flag blocks `--promote-to`, and MEDIUM flags add up
+  G214, both by design; a line in your own `CLAUDE.md` / `AGENTS.md` that tells
+  the assistant to write to a tool's config file is G218, MEDIUM). Any new MEDIUM flag blocks `--promote-to`, and MEDIUM flags add up
   (three of them reach HIGH).
 
 ## [0.15.0] — 2026-10-17

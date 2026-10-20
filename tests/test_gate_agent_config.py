@@ -362,3 +362,12 @@ def test_g205_helper_name_does_not_capture_stdlib_calls(tmp_path):
 def test_python_too_deep_to_parse_is_a_gap_not_clean(tmp_path):
     got = _scan(tmp_path, {"deep.py": "x = " + "+".join(["0"] * 20000) + "\n"})
     assert "G911" in got
+
+
+def test_g205_stdlib_call_does_not_spread_a_helper_name(tmp_path):
+    got = _scan(tmp_path, {"t.py": (
+        "import subprocess\n"
+        "def run(cmd):\n    return subprocess.run(cmd, shell=True)\n"
+        "def clone(path):\n    subprocess.run(['git', 'clone', path])\n"
+        "def g(x):\n    clone(f'/tmp/{x}')\n")})
+    assert "G205" not in got

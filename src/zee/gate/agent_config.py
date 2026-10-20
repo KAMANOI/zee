@@ -81,13 +81,16 @@ def _is_safe_call(node: ast.Call) -> bool:
         and isinstance(f.value, ast.Name) and f.value.id in ("shlex", "pipes")
 
 
+def _on_stdlib(node: ast.Call) -> bool:
+    f = node.func
+    return isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in _STDLIB
+
+
 def _is_shell_call(node: ast.Call, helpers: set[str]) -> bool:
     name = _callee(node)
-    f = node.func
     # a helper is matched by name, but never on a stdlib module: `subprocess.run([...])` or
     # `asyncio.run(main())` is not the tree's own `def run(cmd)`
-    stdlib = isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in _STDLIB
-    if name in _SHELL_SINKS or (name in helpers and not stdlib):
+    if name in _SHELL_SINKS or (name in helpers and not _on_stdlib(node)):
         return True
     if name in _SUBPROC:  # only with shell=True
         return any(k.arg == "shell" and isinstance(k.value, ast.Constant)
@@ -111,9 +114,10 @@ def _collect_helpers(tree: ast.AST, helpers: set[str], callers: dict[str, set[st
         for call in (n for n in ast.walk(f) if isinstance(n, ast.Call)):
             if any(isinstance(n, ast.Name) and n.id in params
                    for a in call.args for n in ast.walk(a)):
-                callers.setdefault(_callee(call), set()).add(f.name)
                 if _is_shell_call(call, set()):
                     helpers.add(f.name)
+                elif not _on_stdlib(call):  # `subprocess.run([...])` does not make f a caller of a `run` helper
+                    callers.setdefault(_callee(call), set()).add(f.name)
 
 
 def _close_helpers(helpers: set[str], callers: dict[str, set[str]]) -> set[str]:

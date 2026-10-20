@@ -1,4 +1,4 @@
-"""G212-G216: tampering-plugin checks (dsh-purge shape).
+"""G212-G216: tampering-plugin checks.
 
 The "bad" tree is a synthetic dummy written for this suite from the public
 README description (backup-then-replace of a vendor package, auto re-apply on
@@ -41,7 +41,7 @@ _README_AI = (
 )
 
 
-def test_dsh_purge_shaped_tree_hits_every_check(tmp_path):
+def test_tampering_shaped_tree_hits_every_check(tmp_path):
     by, flags = _scan(tmp_path, {
         "lib/host.js": _PATCHER,
         "cordis.patch.yml": _AUTO,
@@ -271,3 +271,26 @@ def test_g212_copy_out_of_a_package_is_not_a_write_into_it(tmp_path):
 def test_g214_call_word_inside_plain_text_is_not_a_call(tmp_path):
     by, _ = _scan(tmp_path, {"a.py": 'system_prompt = "Explain how decrypt(data) works."\n'})
     assert "G214" not in by
+
+
+def test_g212_destination_is_the_second_argument_only(tmp_path):
+    by, _ = _scan(tmp_path, {"a.js": (
+        "fs.copyFileSync('node_modules/pkg/logo.svg', 'dist/logo.svg'); console.log('node_modules/pkg');\n")})
+    assert "G212" not in by
+    by, _ = _scan(tmp_path / "b", {"a.js": "fs.copyFileSync(join('a', 'b'), 'node_modules/pkg/x.js');\n"})
+    assert by["G212"].severity.value == "high"
+
+
+def test_g214_template_literal_text_is_not_a_call(tmp_path):
+    by, _ = _scan(tmp_path, {"a.js": "const system_prompt = `Explain how decrypt(data) works.`;\n"})
+    assert "G214" not in by
+    by, _ = _scan(tmp_path / "b", {"a.js": "const system_prompt = `${decrypt(blob, key)}`;\n"})
+    assert "G214" in by
+
+
+def test_g212_many_copy_lines_stay_linear(tmp_path):
+    import time
+    body = "const d = 'node_modules/pkg';\nfs.copyFileSync('node_modules/pkg/a.svg', 'dist/a.svg');\n" * 8000
+    t0 = time.monotonic()
+    _scan(tmp_path, {"a.js": body})
+    assert time.monotonic() - t0 < 5
