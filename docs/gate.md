@@ -140,6 +140,24 @@ example a sign-in or upload path inside an editor): the flags say where the
 files declare it, not what the program sends. A clean result does not mean the
 plugin is local-only.
 
+## AI model files (G221–G229)
+
+Model files are judged by their **first bytes**, not their suffix, for every file in the tree, whatever kind the artifact was given. Nothing is loaded (no `pickle.load` / `torch.load`) and nothing is unpacked to disk; a zip member is read in memory with a size cap.
+
+| Code | Severity | What it flags |
+|---|---|---|
+| G221 | MEDIUM | The tree holds a pickle-based model (`.bin` `.pt` `.pth` `.ckpt` `.pkl` `.joblib`, or a zip with a pickle inside). One flag per tree. A pickle is always a person's call; a lone MEDIUM passes `fail-on: high` but blocks `--promote-to`. |
+| G222 | HIGH | The pickle imports something that runs commands or reaches the system (`os` / `posix` / `nt`, `subprocess`, `socket`, `builtins.eval/exec/open/...`, `importlib`, `ctypes`, `pickle`, `marshal` ...). Names pushed through the memo table are followed. |
+| G223 | MEDIUM | The pickle imports something outside a small allow-list (tensor and storage rebuilders, `OrderedDict`, numpy array rebuilders). |
+| G224 | HIGH | The pickle breaks off before STOP after it already imported something. G225 is added too, so the inspection is partial (exit 3). |
+| G225 | gap | Not read to the end: unparsable pickle, over the size cap, an import that cannot be resolved without running it, encrypted or nested zip, over 20,000 zip members, a model-named file in an unknown format, a companion `.py` that does not parse. Partial inspection, exit 3. |
+| G226 | HIGH | A `.safetensors` file that breaks the format (header length, JSON, duplicate keys, holes / overlaps, dtype × shape ≠ length, non-string `__metadata__`), or a pickle / zip under that name, or a `.gguf` that is not GGUF. A valid safetensors file raises nothing. |
+| G227 | MEDIUM | `auto_map` in a JSON config, `modeling_*` / `configuration_*` / `tokenization_*` ... `.py` next to model weights, or `trust_remote_code=True`. Seeing `False` does not lower it. |
+| G228 | HIGH / MEDIUM | A companion `.py` that, at import time (module level, class body, decorator, default argument), calls eval / exec / `os.system` / `subprocess` / sockets / `requests` (HIGH) or reads the environment, key files, base64 or marshal (MEDIUM). Calls inside function bodies are not seen. |
+| G229 | LOW / MEDIUM / HIGH | GGUF chat template: shown (LOW), HIGH if it reaches Jinja internals (`__class__`, `__subclasses__` ...). Keras `.h5`: MEDIUM. `.keras` with a Lambda layer or a custom module: MEDIUM. |
+
+Limits, stated plainly: this says nothing about what the model *does* (bias, hidden instructions, training data). A pickle with no import of a dangerous name is "nothing found", not "safe" (Hugging Face says its own pickle scan is not complete). Old text-protocol pickles without a model-like name, ONNX, TensorFlow SavedModel and TorchScript constants are not read. `pickletools` lists opcodes but does not check that the stack is valid. Reading stops at 64 MiB per pickle stream and 16 MiB per single read; there is no total budget over the tree. Only a copy that is already on disk is checked; a model that changes upstream under the same name is caught only by pinning the commit.
+
 ## Use it as a pre-install / CI check
 
 ### GitHub Action

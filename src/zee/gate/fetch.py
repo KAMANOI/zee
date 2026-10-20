@@ -21,6 +21,13 @@ def quarantine_base() -> Path:
     return default_log_dir() / "gate" / "quarantine"
 
 
+def _feed(h, p: Path) -> None:
+    """Hash a file in chunks: a model file is several GB and must not be read whole."""
+    with open(p, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+
+
 def sha256_tree(root: Path, *, strict: bool = False) -> str:
     """Stable content hash over a file or directory tree.
 
@@ -30,7 +37,7 @@ def sha256_tree(root: Path, *, strict: bool = False) -> str:
     root = Path(root)
     h = hashlib.sha256()
     if root.is_file():
-        h.update(root.read_bytes())
+        _feed(h, root)
         return h.hexdigest()
     for p in sorted(root.rglob("*")):
         rel = str(p.relative_to(root)).encode("utf-8")
@@ -51,7 +58,7 @@ def sha256_tree(root: Path, *, strict: bool = False) -> str:
             h.update(rel)
             h.update(b"\0")
             try:
-                h.update(p.read_bytes())
+                _feed(h, p)
             except OSError:
                 if strict:
                     raise

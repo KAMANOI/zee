@@ -34,6 +34,18 @@ _HOOK_FILENAMES = {
 }
 
 
+_MANIFEST_CAP = 8 * 1024 * 1024
+
+
+def _text(p: Path) -> str:
+    """A manifest, capped: a multi-GB file named package.json must not be slurped (OSError = unreadable)."""
+    with p.open("rb") as f:
+        raw = f.read(_MANIFEST_CAP + 1)
+    if len(raw) > _MANIFEST_CAP:
+        raise OSError(f"manifest over {_MANIFEST_CAP} bytes")
+    return raw.decode("utf-8", errors="ignore")
+
+
 def manifest_flags(root: Path) -> list[Flag]:
     """G912: a manifest that cannot be parsed or has an unexpected shape
     means the hook / capability facts below it are unknown, not absent."""
@@ -42,7 +54,7 @@ def manifest_flags(root: Path) -> list[Flag]:
         for p in sorted(root.rglob(pattern)):
             rel = str(p.relative_to(root))
             try:
-                data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+                data = json.loads(_text(p))
             except (OSError, json.JSONDecodeError) as e:
                 flags.append(_bad_manifest(rel, str(e)))
                 continue
@@ -58,7 +70,7 @@ def manifest_flags(root: Path) -> list[Flag]:
         if tomllib is None:  # pragma: no cover
             continue
         try:
-            tomllib.loads(p.read_text(encoding="utf-8", errors="ignore"))
+            tomllib.loads(_text(p))
         except (OSError, tomllib.TOMLDecodeError) as e:
             flags.append(_bad_manifest(rel, str(e)))
     return flags
@@ -76,7 +88,7 @@ def _detect_install_hooks(root: Path) -> list[str]:
     hooks: list[str] = []
     for pj in root.rglob("package.json"):
         try:
-            data = json.loads(pj.read_text(encoding="utf-8", errors="ignore"))
+            data = json.loads(_text(pj))
         except (OSError, json.JSONDecodeError):
             continue  # unreadable manifest is reported by manifest_flags()
         scripts = data.get("scripts", {}) if isinstance(data, dict) else {}
@@ -96,7 +108,7 @@ def _read_capabilities(root: Path) -> list[str]:
     caps: list[str] = []
     for mani in list(root.rglob("manifest.json")) + list(root.rglob("mcp.json")):
         try:
-            data = json.loads(mani.read_text(encoding="utf-8", errors="ignore"))
+            data = json.loads(_text(mani))
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):
@@ -113,7 +125,7 @@ def _read_capabilities(root: Path) -> list[str]:
 def _first_json(root: Path, filename: str) -> Optional[dict]:
     for p in root.rglob(filename):
         try:
-            data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+            data = json.loads(_text(p))
         except (OSError, json.JSONDecodeError):
             continue
         if isinstance(data, dict):
@@ -126,7 +138,7 @@ def _first_toml(root: Path, filename: str) -> Optional[dict]:
         return None
     for p in root.rglob(filename):
         try:
-            return tomllib.loads(p.read_text(encoding="utf-8", errors="ignore"))
+            return tomllib.loads(_text(p))
         except (OSError, tomllib.TOMLDecodeError):
             continue
     return None
@@ -174,7 +186,7 @@ class McpAdapter(Adapter):
         # an MCP server often declares an "mcpServers" block or a server entry
         for pj in root.rglob("package.json"):
             try:
-                txt = pj.read_text(encoding="utf-8", errors="ignore")
+                txt = _text(pj)
             except OSError:
                 continue
             if "mcpServers" in txt or "modelcontextprotocol" in txt:

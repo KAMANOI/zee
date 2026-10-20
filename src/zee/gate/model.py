@@ -51,7 +51,7 @@ EXIT_ERROR = 4
 
 # Flags that say what was NOT inspected or could not be read. They set the
 # inspection status but are kept out of the risk score.
-GAP_CODES = frozenset({"G909", "G910", "G911", "G912", "G809"})
+GAP_CODES = frozenset({"G909", "G910", "G911", "G912", "G809", "G225"})
 
 
 class Severity(str, Enum):

@@ -19,6 +19,8 @@ Flag codes:
     G212-G216  tampering plugin: rewrites another package, re-applies on
           every start, injects an unreadable prompt, patches other plugins,
           README addressed to an AI assistant (tampering.py)
+    G221-G229  AI model files: pickle / safetensors / GGUF / Keras / companion
+          code, judged by the first bytes (modelfiles.py)
     G217-G220  procedure documents / plugin definitions that change the
           host's AI setup: register an outside MCP server, write into an
           AI-tool config file, declare an outside connection, start a
@@ -42,7 +44,7 @@ import sys
 import unicodedata
 from pathlib import Path
 
-from . import agent_config, tampering, textfile
+from . import agent_config, modelfiles, tampering, textfile
 from .model import Flag, Severity
 
 # Suffixes that must NOT contain a binary executable signature.
@@ -542,4 +544,5 @@ def scan_tree(root: Path) -> list[Flag]:
     files = list(_iter_files(root))
     flags += agent_config.scan_tree(root, files)
     flags += tampering.scan_tree(root, files)
+    flags += modelfiles.scan_tree(root, files)
     return flags

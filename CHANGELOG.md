@@ -5,6 +5,17 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
+## [Unreleased]
+
+### Added
+
+- **AI model file checks in `zee gate` (G221–G229, branch only, not released)**: model files are
+  judged by their first bytes and never loaded. Pickle-based models are always MEDIUM (a person
+  decides; a lone MEDIUM blocks `--promote-to`), dangerous pickle imports are HIGH, a pickle that is
+  cut off after importing is HIGH + partial, safetensors / GGUF format breaks are HIGH, `auto_map`
+  and companion code are MEDIUM / HIGH, and `G225` joins the gap codes (exit 3). Manifests and the
+  tree hash are now read with a size cap / in chunks. See `docs/gate.md`, `docs/design/model-file-checks.md`.
+
 ## [0.16.0] — 2026-10-20
 
 ### Added
