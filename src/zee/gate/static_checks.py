@@ -19,6 +19,10 @@ Flag codes:
     G212-G216  tampering plugin: rewrites another package, re-applies on
           every start, injects an unreadable prompt, patches other plugins,
           README addressed to an AI assistant (tampering.py)
+    G217-G220  procedure documents / plugin definitions that change the
+          host's AI setup: register an outside MCP server, write into an
+          AI-tool config file, declare an outside connection, start a
+          browser with its sandbox off (instructions.py)
     (G6xx denylist lives in denylist.py)
     G7xx  symlinks (G701 escapes the tree = HIGH, G702 in-tree = LOW)
     G91x  gaps: not inspected / unreadable (G910 too large, G911 unreadable;

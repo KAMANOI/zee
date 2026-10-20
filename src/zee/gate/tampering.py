@@ -221,6 +221,8 @@ def _doc_flags(rel: str, lines: list[str], nums: list[int]) -> list[Flag]:
 def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
     """Run the tampering checks over the (already enumerated) files. Oversized
     or unreadable files are skipped here: the main pass reports them (G910 / G911)."""
+    from . import instructions  # G217-G220 share this pass; imported here because it imports this module
+
     flags: list[Flag] = []
     seen: set[tuple[str, str]] = set()
 
@@ -265,4 +267,5 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
             add(_code_flags(rel, lines, nums, suf), rel)
         if p.suffix.lower() in _DOC or p.name.startswith("README"):
             add(_doc_flags(rel, lines, nums), rel)
+        add(instructions.file_flags(rel, p.name, text, lines, nums, suf), rel)
     return flags

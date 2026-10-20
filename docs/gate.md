@@ -96,6 +96,30 @@ means within about 1,200 characters there; padding with other filler is not hand
 A clean result
 does not mean the plugin is safe.
 
+## Procedures that change the AI's own setup (G217–G220)
+
+Some risk sits in the wording of a skill, not in its code: a reference file
+that tells the assistant "register this server" or "merge this key into
+`~/.cursor/mcp.json`". These checks make that visible before install. All four
+are MEDIUM: a person reads them; none of them blocks on its own. They read
+files; they never run them, and they do not say anyone acted in bad faith.
+
+| Code | Severity | What it flags |
+|---|---|---|
+| G217 | MEDIUM | A procedure document (`SKILL.md`, anything under `skills/`, `references/`, `commands/`, `agents/`, `prompts/`, or `AGENTS.md` / `CLAUDE.md` / `GEMINI.md`) with an MCP word, a registering verb (register, add, connect, configure, `mcp add` ...) and a non-local http(s) URL within 12 lines. A verb inside a same-line negation ("never add ...") is not counted. |
+| G218 | MEDIUM | The same kind of document naming an AI-tool or developer-tool config file (`mcp.json`, `.claude/settings.json`, `.codex/config.toml`, `.cursor/rules`, `CLAUDE.md`, `AGENTS.md`, shell profiles ...) with a writing verb (merge, append, add, write, edit, create ...) on that line or the next two. README and `docs/` are not read by G217 / G218: they are written for people. |
+| G219 | MEDIUM | A plugin / MCP definition (a JSON or TOML file whose name contains mcp, plugin, marketplace, settings or config) with an MCP server entry whose URL is a non-local http(s) address; the message names the server and the host. A plugin that only points at another file (`"mcpServers": "./.mcp.json"`) is not flagged itself; the file it points at is. |
+| G220 | MEDIUM | Code or config that starts a browser with `--no-sandbox`, `--disable-setuid-sandbox`, `--disable-web-security`, `--disable-site-isolation-trials`, `chromiumSandbox: false` / `chromium_sandbox=False`. Comment lines are not read. |
+
+Limits, stated plainly: line patterns, one flag per code per file. A
+registration described in other words or another language, a config path built
+from pieces, a connection declared in a format Zee does not parse, or a
+command-based (stdio) server is not seen. A negation on another line is not
+understood. Zee does not follow a connection into the application code (for
+example a sign-in or upload path inside an editor): the flags say where the
+files declare it, not what the program sends. A clean result does not mean the
+plugin is local-only.
+
 ## Use it as a pre-install / CI check
 
 ### GitHub Action
