@@ -5,7 +5,7 @@ All notable changes to Zee are documented here. This project follows
 Early Public / Research Project, expect breaking changes between 0.x
 releases.
 
-## [0.16.0]
+## [0.16.0] — 2026-10-20
 
 ### Added
 

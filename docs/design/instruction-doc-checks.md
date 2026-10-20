@@ -12,7 +12,7 @@ the checks describe a shape, not a judgement of one project.
 | Claim in the order | What the files show |
 |---|---|
 | 1. A reference tells the AI to register an outside MCP server and edit its config | True. A reference file under `skills/…/references/` (lines 86–100): register the vendor's browser MCP server at its host; for Cursor, merge the key into `~/.cursor/mcp.json` (backup first, keep other settings, the user does the sign-in) |
-| 2. `.codex-plugin/plugin.json` declares an outside server | **Partly different.** `plugin.json` contains `"mcpServers": "./.mcp.json"`; the URL (`mcp-3d` host) is in `.mcp.json` line 5. Same effect, different file. |
+| 2. `.codex-plugin/plugin.json` declares an outside server | **Partly different.** `plugin.json` contains `"mcpServers": "./.mcp.json"`; the URL (the vendor's MCP host) is in `.mcp.json` line 5. Same effect, different file. |
 | 3. Chromium started with sandbox and web security off | True. A render script in the editor package (lines 97–99): `--disable-web-security`, `chromiumSandbox: false` (the literal string `--no-sandbox` does not appear). Outside requests are blocked by the page's own routing. |
 | 4. The editor keeps a vendor sign-in and upload path | True. The editor's canvas module (sign-in and render-upload functions). **Not covered by a static check** (it is application behaviour); reported for a person. |
 | 5. Good side: gitleaks in CI, lint of credential wording / signed URLs, OIDC release | True. `.github/workflows/ci.yml` (gitleaks 8.30.1), `scripts/lint_skills.py` (credential wording, signed-URL parameters), `release.yml` (`id-token: write`, no stored upload credential). |
