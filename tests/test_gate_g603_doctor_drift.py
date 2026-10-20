@@ -22,6 +22,9 @@ def _codes(tmp_path, files):
     ("run.sh", "docker run -it \\\n  --env AWS_SECRET_ACCESS_KEY img\n"),
     ("compose.yaml", "services:\n  a:\n    environment:\n      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}\n"),
     ("compose.yml", "services:\n  a:\n    environment:\n      - ANTHROPIC_API_KEY\n"),
+    ("compose.yml", "services:\n  a:\n    environment:\n      OPENAI_API_KEY:\n"),
+    ("Dockerfile", "FROM x\nENV APP_MODE=prod OPENAI_API_KEY=$OPENAI_API_KEY\n"),
+    ("run.sh", "docker run --pull=never -e OPENAI_API_KEY demo\n"),
 ])
 def test_g603_bad(tmp_path, rel, body):
     assert "G603" in _codes(tmp_path, {rel: body})
@@ -35,6 +38,8 @@ def test_g603_bad(tmp_path, rel, body):
     ("tests/run.sh", "docker run -e ANTHROPIC_API_KEY img\n"),
     ("ci.yaml", "env:\n  ANTHROPIC_API_KEY: ${{ secrets.K }}\n"),  # not a compose file
     ("compose.yaml", "services:\n  a:\n    environment:\n      LOG: 1\n"),
+    ("compose.yaml", "services:\n  a:\n    labels:\n      OPENAI_API_KEY: doc\n"),
+    ("compose.yaml", "services:\n  a:\n    environment:\n      LOG: 1\n    labels:\n      OPENAI_API_KEY: x\n"),
 ])
 def test_g603_clean(tmp_path, rel, body):
     assert "G603" not in _codes(tmp_path, {rel: body})
@@ -42,7 +47,7 @@ def test_g603_clean(tmp_path, rel, body):
 
 # ---- doctor: egress drift -------------------------------------------------
 
-def _doctor(tmp_path, monkeypatch, states, *, record=False):
+def _doctor(tmp_path, monkeypatch, states, *, record=False, damaged=False):
     h = tmp_path / "h"
     h.mkdir()
     for k in ("HOME", "USERPROFILE"):
@@ -51,6 +56,10 @@ def _doctor(tmp_path, monkeypatch, states, *, record=False):
     cfg = tmp_path / "assets.toml"
     cfg.write_text('dry_run = true\n[[assets]]\nid = "a"\ndecoy_paths = ["%s"]\n' % (h / "d.txt"))
     cfg.chmod(0o600)
+    if damaged:
+        from zee.telemetry.cut_state import default_cut_state_path
+        default_cut_state_path().parent.mkdir(parents=True, exist_ok=True)
+        default_cut_state_path().write_text("not json\n")
     if record:
         from zee.telemetry.cut_state import CutStateLog
         CutStateLog().record_cut(asset_id="a", method="egress", platform="linux",
@@ -90,3 +99,20 @@ def test_doctor_rules_with_record_is_ok(tmp_path, monkeypatch):
 
 def test_doctor_record_without_rules_warns(tmp_path, monkeypatch):
     assert "[WARN] egress rules" in _line(_doctor(tmp_path, monkeypatch, {"nft": "absent"}, record=True))
+
+
+def test_doctor_damaged_record_is_not_compared(tmp_path, monkeypatch):
+    out = _doctor(tmp_path, monkeypatch, {"nft": "absent"}, damaged=True)
+    assert "[INFO] egress rules" in _line(out)
+
+
+@pytest.mark.parametrize("plat,tool,table,expect", [
+    ("linux", "nft", "table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n accept\n }\n}", "unexpected"),
+    ("linux", "nft", "table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n }\n}", "present"),
+])
+def test_egress_state_reads_with_shape(monkeypatch, plat, tool, table, expect):
+    monkeypatch.setattr(doctor.sys, "platform", plat)
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
+    st = doctor._egress_state()
+    assert st["nft"] == expect and st["iptables"] == "unreadable"  # missing tool is reported, not dropped

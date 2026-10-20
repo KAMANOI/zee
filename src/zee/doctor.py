@@ -83,12 +83,17 @@ def _egress_state() -> dict[str, str]:
     for name, cmd, shape in checks:
         exe = sbin_which(cmd[0])
         if exe is None:
+            res[name] = "unreadable"
             continue
         ok, out = _run([exe, *cmd[1:]])
         if ok and not _lines(out):
             res[name] = "absent"
         elif ok:
-            res[name] = "present" if shape(out, set()) == "confirmed" else "unexpected"
+            plain = [ln.replace("counter ", "") for ln in _lines(out)]
+            # an unconditional accept in the chain is not the cut Zee loads (the shape check
+            # looks only for the hooked drop policy)
+            res[name] = "present" if shape(out, set()) == "confirmed" and "accept" not in plain \
+                else "unexpected"
         elif any(a in out for a in _ABSENT):
             res[name] = "absent"
         else:
@@ -313,13 +318,14 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     if states:
         bad = sorted(k for k, v in states.items() if v == "unexpected")
         on = sorted(k for k, v in states.items() if v == "present")
-        recorded = None
+        recorded = None  # None = could not be compared (no usable config, or the record is damaged)
         if cfg is not None:
             try:
-                recorded = any((r := CutStateLog().unresolved_for(a.id)[0]) is not None
-                               and r.method == "egress" for a in cfg.assets)
+                res = [CutStateLog().unresolved_for(a.id) for a in cfg.assets]
+                if not any(damaged for _r, damaged in res):
+                    recorded = any(r is not None and r.method == "egress" for r, _d in res)
             except (OSError, ValueError):
-                recorded = None
+                pass
         if bad:
             say("WARN", "egress rules", f"{', '.join(bad)}: Zee's cut rules are there but not in the "
                 "shape Zee loads (changed by hand or by other software?)",
@@ -333,6 +339,9 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         elif "unreadable" in states.values():
             say("INFO", "egress rules", "not checked: reading firewall rules needs admin rights "
                 "or the tool is not usable (run `sudo zee doctor` to include it)")
+        elif recorded is None:
+            say("INFO", "egress rules", "not compared with the cut record (config not usable or "
+                f"record damaged); loaded rules: {', '.join(f'{k}={v}' for k, v in sorted(states.items()))}")
         else:
             say("OK", "egress rules", "no drift found between loaded cut rules and the cut record "
                 "(shape check only; not a proof of what traffic is allowed)")
