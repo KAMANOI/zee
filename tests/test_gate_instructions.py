@@ -68,3 +68,37 @@ def test_g217_needs_all_three_signals(tmp_path):
     assert "G217" not in only_url
     no_url = _scan(tmp_path / "b", {"skills/a/SKILL.md": "Register the MCP server the user already has.\n"})
     assert "G217" not in no_url
+
+
+# --- fixes after independent review round 1 -------------------------------
+
+def test_ipv6_and_malformed_urls_do_not_stop_the_scan(tmp_path):
+    by = _scan(tmp_path, {
+        "skills/a/SKILL.md": "Register the MCP server at https://[::1]/mcp and also http://[bad/x\n",
+        "x/mcp.json": '{"mcpServers": {"a": {"url": "https://[::1]:3000/mcp"}, "b": {"url": "http://[bad"}}}',
+        ".codex/config.toml": '[mcp_servers.a]\nurl = "https://[::1]/mcp"\n',
+        "tail.md": "# still scanned\n",
+    })
+    assert not {"G217", "G219"} & set(by)  # loopback is local; nothing crashed
+    by = _scan(tmp_path / "o", {"skills/a/SKILL.md": "Register the MCP server at https://[2001:db8::1]/mcp\n"})
+    assert "G217" in by
+
+
+def test_many_lines_stay_linear(tmp_path):
+    import time
+    n = 20000
+    t = time.perf_counter()
+    by = _scan(tmp_path, {"skills/a/SKILL.md": "mcp.json\n" * n + "write\n" * n})
+    assert time.perf_counter() - t < 5
+    assert "G218" in by
+
+
+def test_readme_and_docs_are_not_procedures_even_under_skills(tmp_path):
+    body = "Register the MCP server https://mcp.vendor.example\nMerge it into ~/.cursor/mcp.json\n"
+    by = _scan(tmp_path, {"skills/a/README.md": body, "docs/SKILL.md": body})
+    assert not {"G217", "G218"} & set(by)
+
+
+def test_automation_flag_alone_is_not_a_sandbox_switch(tmp_path):
+    by = _scan(tmp_path, {"a.py": "chromium.launch(ignore_default_args=['--enable-automation'], chromium_sandbox=True)\n"})
+    assert "G220" not in by

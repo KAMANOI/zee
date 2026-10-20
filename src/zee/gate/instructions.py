@@ -31,17 +31,22 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .model import Flag, Severity
-from .tampering import _CODE, _CONFIG, _DOC, _WIN, _flag, _hits, _near
+import bisect
+
+from .tampering import _CODE, _CONFIG, _DOC, _WIN, _flag, _has_near, _hits
 
 # --- which documents are "procedures for an AI" ----------------------------
 # README / docs are written for people ("add this to your mcp.json"); a skill,
 # a command, an agent or a reference file is what the assistant itself follows.
 _PROC_DIRS = {"skills", "skill", "references", "commands", "agents", "prompts", "playbooks"}
 _PROC_NAMES = {"skill.md", "agents.md", "claude.md", "gemini.md", "instructions.md"}
+_HUMAN_DIRS = {"docs", "doc", "documentation"}
 
 
 def _is_procedure(rel: str) -> bool:
     parts = Path(rel.lower()).parts
+    if parts[-1].startswith("readme") or any(p in _HUMAN_DIRS for p in parts[:-1]):
+        return False  # written for people, even when it sits under skills/
     return parts[-1] in _PROC_NAMES or any(p in _PROC_DIRS for p in parts[:-1])
 
 
@@ -68,13 +73,16 @@ _REG = re.compile(
     r"connects|connecting|install|installing|set\s+up|setting\s+up|enable|enabling|merge|append)\b|"
     r"\b(?:claude|codex|gemini|cursor|opencode|amp)\s+mcp\s+add\b|\badd-mcp\b|\bmcp\s+add\b|"
     r"登録|追加|接続|設定して|組み込", re.I)
-_URL = re.compile(r"https?://[^\s\"'<>)\]`,]+", re.I)
+_URL = re.compile(r"https?://(?:\[[0-9a-f:.]+\]|[^\s\"'<>)\]`,/]+)[^\s\"'<>)\]`,]*", re.I)
 _LOCAL_HOST = re.compile(r"^(?:localhost|127\.\d+\.\d+\.\d+|\[?::1\]?|0\.0\.0\.0)$", re.I)
 
 
 def _outside_url(line: str) -> str | None:
     for m in _URL.finditer(line):
-        host = (urlparse(m.group(0)).hostname or "")
+        try:
+            host = urlparse(m.group(0)).hostname or ""
+        except ValueError:  # a malformed address must not stop the scan
+            continue
         if host and not _LOCAL_HOST.match(host):
             return host
     return None
@@ -144,7 +152,7 @@ _NO_SANDBOX = re.compile(
     r"--no-sandbox|--disable-setuid-sandbox|--disable-web-security|--disable-site-isolation-trials|"
     r"--disable-features=[^\s\"',]*(?:IsolateOrigins|SitePerProcess)|"
     r"\bchromiumSandbox\b[\"']?\s*[:=]\s*(?:false|False)|\bchromium_sandbox\s*=\s*False|"
-    r"\bignore_default_args\b[^\n]{0,60}--enable-automation|\bwebSecurity\s*:\s*false", re.I)
+    r"\bwebSecurity\s*:\s*false", re.I)
 
 
 def file_flags(rel: str, name: str, text: str, lines: list[str], nums: list[int], suf: str) -> list[Flag]:
@@ -155,14 +163,15 @@ def file_flags(rel: str, name: str, text: str, lines: list[str], nums: list[int]
         urls = [i for i, ln in enumerate(lines) if _outside_url(ln)]
         mcp, reg = _verb_hits(lines, _MCP), _verb_hits(lines, _REG)
         for i in urls:
-            if any(abs(j - i) <= _WIN for j in mcp) and any(abs(j - i) <= _WIN for j in reg):
+            if _has_near(mcp, i) and _has_near(reg, i):
                 flags.append(_flag(Severity.MEDIUM, "G217",
                                    f"procedure tells the AI to register an MCP server at an outside host "
                                    f"({_outside_url(lines[i])})", rel, nums[i], lines[i]))
                 break
         # G218: a config path and a writing verb on the same line or the next two
         writes = _verb_hits(lines, _WRITE_VERB)
-        hit = next((i for i in _hits(lines, _CFG_PATH) if any(i <= j <= i + 2 for j in writes)), None)
+        hit = next((i for i in _hits(lines, _CFG_PATH)
+                    if (k := bisect.bisect_left(writes, i)) < len(writes) and writes[k] <= i + 2), None)
         if hit is not None:
             flags.append(_flag(Severity.MEDIUM, "G218",
                                "procedure tells the AI to write into an AI-tool / developer-tool config "

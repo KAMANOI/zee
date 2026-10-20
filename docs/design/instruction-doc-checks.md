@@ -25,11 +25,11 @@ into `~/quarantine/topview-3d-builder-20261020/repo` (929 files). Nothing was in
 | G219 | MEDIUM | JSON / TOML files named like mcp / plugin / marketplace / settings / config | MCP server entry with a non-local http(s) URL (JSON parsed; TOML by table) |
 | G220 | MEDIUM | code and config, comment lines skipped | `--no-sandbox`, `--disable-web-security`, `chromiumSandbox: false` and kin |
 
-README and docs are deliberately **not** read by G217/G218: they are written for people, so "add this to your mcp.json" there is normal. The target is text an assistant follows.
+README files and anything under `docs/` are deliberately **not** read by G217/G218 (also when nested under `skills/`): they are written for people, so "add this to your mcp.json" there is normal. The target is text an assistant follows.
 
 ## Verdict mapping
 
-合格 = LOW, 要人手確認 = MEDIUM, 不合格 = HIGH (existing scorer, unchanged). All four codes are MEDIUM: each says "a person reads this". Zee's design is kept: nothing is blocked, run, rewritten or neutralised; the output is a notice with file:line evidence.
+合格 = LOW, 要人手確認 = MEDIUM, 不合格 = HIGH (existing scorer, unchanged). All four codes are MEDIUM: each says "a person reads this". As with every MEDIUM flag, one alone passes `fail-on: high` but blocks `--promote-to`, and MEDIUM weights add up: G217 + G218 + G219 alone score 12 = HIGH. The scorer was not changed (review round 1, finding 3: this was first written as "nothing is blocked", which was wrong). Zee's design is kept: nothing is run, rewritten or neutralised; the output is a notice with file:line evidence.
 
 ## Results on the pinned tree
 
