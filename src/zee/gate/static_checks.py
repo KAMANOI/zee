@@ -42,17 +42,11 @@ import sys
 import unicodedata
 from pathlib import Path
 
-from . import agent_config, tampering
+from . import agent_config, tampering, textfile
 from .model import Flag, Severity
 
-# Files we will read as text for pattern scanning.
-_TEXT_SUFFIXES = {
-    ".py", ".js", ".ts", ".mjs", ".cjs", ".sh", ".bash", ".zsh",
-    ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".cfg", ".ini",
-    ".rb", ".pl", ".ps1",
-}
 # Suffixes that must NOT contain a binary executable signature.
-_EXPECT_TEXT = _TEXT_SUFFIXES
+_EXPECT_TEXT = textfile.TEXT_SUFFIXES
 
 _MAX_READ_BYTES = 2 * 1024 * 1024  # don't slurp giant blobs
 
@@ -491,9 +485,19 @@ def scan_tree(root: Path) -> list[Flag]:
             flags.append(mf)
         # Text is judged by content as well as suffix: a .html, Makefile or
         # extensionless script with eval() must not pass as "nothing found".
-        # NUL bytes mean binary (image, archive), which is outside the text scan.
-        if path.suffix.lower() not in _TEXT_SUFFIXES and b"\0" in sample:
+        # One rule for every check (textfile.classify): a binary file is
+        # outside the text scan; a text-typed file that looks binary is still
+        # scanned (NUL removed) and reported here, once, as a gap.
+        kind = textfile.classify(path, sample)
+        if kind == textfile.BINARY:
             continue
+        if kind == textfile.GAP:
+            flags.append(Flag(
+                Severity.LOW, "G911",
+                "text-typed file contains NUL bytes (looks binary); it was read with "
+                "them removed and the result may be incomplete",
+                evidence=rel,
+            ))
         try:
             if path.stat().st_size > _MAX_READ_BYTES:
                 # Too large to scan as text (DoS guard). Not a clean pass:
@@ -504,8 +508,11 @@ def scan_tree(root: Path) -> list[Flag]:
                     evidence=f"{rel} (over {_MAX_READ_BYTES} bytes)",
                 ))
                 continue
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
+            text, _ = textfile.read(path)
+        except (OSError, MemoryError):
+            flags.append(_unread(rel))
+            continue
+        if text is None:  # changed to binary between the two reads
             flags.append(_unread(rel))
             continue
         for code, sev, pat, msg in _PATTERNS:

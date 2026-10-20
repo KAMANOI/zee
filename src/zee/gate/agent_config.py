@@ -33,6 +33,7 @@ import json
 import re
 from pathlib import Path
 
+from . import textfile
 from .model import Flag, Severity
 
 _MAX_BYTES = 2 * 1024 * 1024  # = static_checks._MAX_READ_BYTES: bigger files get G910 there
@@ -587,16 +588,14 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
                                   "this file was not inspected",
                                   evidence=p.relative_to(root).as_posix()))
                 continue
-            text = p.read_text(encoding="utf-8", errors="ignore")
+            text, had_nul = textfile.read(p)  # NUL removed; Python indentation stays valid
             held += size
         except (OSError, MemoryError):
             continue
-        if "\0" in text:
-            from .tampering import is_binary
-            if is_binary(p, text):
-                continue  # binary: outside the text scan, as in the main pass
+        if text is None:
+            continue  # binary: outside the text scan, as in the main pass
+        if had_nul:
             nul.add(str(p))
-            text = text.replace("\0", "")  # deleted, not spaced: Python indentation stays valid
         rel = p.relative_to(root).as_posix()
         texts[rel] = text
         if suf in _PY:

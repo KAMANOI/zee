@@ -117,8 +117,12 @@ def test_imported_evidence_strips_control_chars(tmp_path):
         {"check_id": "r\x1b[31m", "path": "a.py", "start": {"line": 1},
          "extra": {"severity": "ERROR", "message": "boom\x1b[2Jwiped\x07"}}]}))
     flags = import_scan_file(f)
-    rendered = flags[0].message + " " + flags[0].evidence
+    from zee.gate.model import Artifact, ArtifactKind, RiskLevel, Verdict
+    v = Verdict(Artifact(ArtifactKind.PACKAGE, "s", "n", "0" * 64), RiskLevel.HIGH, 10, flags=flags)
+    rendered = v.to_text() + json.dumps(v.to_dict(), ensure_ascii=False)
     assert "\x1b" not in rendered and "\x07" not in rendered
+    assert "boom\\x1b[2Jwiped\\x07" in v.to_text()  # visible, not dropped
+    assert json.loads(json.dumps(v.to_dict()))["flags"][0]["evidence"].endswith("boom\x1b[2Jwiped\x07")
 
 
 def test_action_yml_passes_inputs_via_env_not_interpolation():

@@ -16,17 +16,28 @@ Two more codes mean the gate could not vouch for the artifact:
 
 | Exit | Meaning |
 |---|---|
-| `3` | A verdict exists, but part of the artifact was **not inspected**: a text file over 2 MiB, a malformed manifest, a `--import-scan` file that could not be read, or `--behavioral` was requested but no isolation backend ran it. Never passes, even at LOW. |
+| `3` | A verdict exists, but part of the artifact was **not inspected**: a text file over 2 MiB, a text-typed file containing NUL bytes, a malformed manifest, a `--import-scan` file that could not be read, or `--behavioral` was requested but no isolation backend ran it. Never passes, even at LOW. |
 | `4` | **No verdict**: the inspection failed (missing source, unreadable file, internal error, promotion failed). |
 
-Binary files (images, archives: anything containing NUL bytes) are outside the
-text scan and are not counted as gaps. The same rule decides binary for every check: a NUL in the first 8 KiB of a file
-without a text suffix, unless the file is chosen by its name (Dockerfile*, Makefile, README*, dotfiles such as
-`.bashrc` / `.env`) or starts with `#!`. In any other file NUL bytes are dropped and the file is read, so they do
-not switch a check off; a Python file that still does not parse after that is reported as G911 (not inspected).
-Control and other non-printable characters quoted from the artifact (file and server names, manifest name,
-version, capabilities, install hooks, notes) are shown as visible escapes (`\x1b`) in the terminal and in `--json`. Text files are scanned whatever their
-extension.
+One rule decides "text or binary" for every check (main pass and G205-G220, `src/zee/gate/textfile.py`),
+on the raw bytes of the first 8 KiB. No NUL byte there: text. A file chosen by its name (Dockerfile*,
+Makefile, README*, dotfiles such as `.bashrc` / `.env`) or starting with `#!`: text, whatever it holds. A NUL in
+a file whose suffix any check reads as text (`.py` `.js` `.jsx` `.ts` `.tsx` `.sh` `.json` `.yaml` `.md` `.html`
+...): the file is still scanned, and it is also reported as G911 (not inspected), because it looks binary and
+the result may be incomplete. Anything else with a NUL (images, archives, and macOS Finder files `.DS_Store` /
+`._*` recognised by their magic bytes) is binary: outside the text scan and not counted as a gap. Every text
+file is read with its NUL bytes removed (anywhere in the file), so a NUL does not switch a check off; a Python
+file that still does not parse after that is reported as G911. A UTF-16 text file (NUL in every other byte)
+is therefore G911 with a text suffix and binary without one: Zee reads UTF-8 only. Text files are scanned
+whatever their extension.
+
+Text quoted from the artifact (file and server names, manifest name, version, capabilities, install hooks,
+flag evidence, imported scanner results, notes) is stored and written to `--json` as it is (JSON escapes
+U+0000-U+001F itself; DEL, C1 and other invisible characters are written as they are, as JSON allows), so a
+consumer gets the real path back. In the terminal output (the verdict, `zee
+gate audit`, promotion and error messages) control and other invisible characters are shown as visible
+escapes (`\x1b`, `\u200b`), and a backslash that would read as such an escape is doubled (`\\x0a` is the four
+characters, `\x0a` a line feed), so two different names never look the same.
 
 `--json` reports the two axes separately: `inspection.status`
 (`complete` / `partial` / `error`, with `inspection.gaps` listing what was

@@ -64,15 +64,29 @@ class Severity(str, Enum):
         return {"low": 1, "medium": 4, "high": 10}[self.value]
 
 
+def _visible(c: str) -> bool:
+    return c == " " or c.isprintable()
+
+
 def printable(s: str | None) -> str | None:
-    """Show control and other non-printable characters as visible escapes (`\x1b`, `\u200b`)
-    instead of passing them to a terminal. Escaping (not deleting) keeps `a<LF>b` and `ab`
-    apart. Spaces and printable characters are kept as they are."""
+    """Text for a terminal: control and other invisible characters become visible escapes
+    (`\\x1b`, `\\u200b`; astral ones as a `\\u` surrogate pair). A backslash that would read as
+    the start of such an escape is doubled, so the output is unambiguous: a real line feed shows
+    as `\\x0a`, the four characters `\\x0a` as `\\\\x0a`. Applied once, at the text output (to_text,
+    audit, promote / error messages); stored values and JSON keep the raw text."""
     if s is None:
         return None
-    return "".join(c if c == " " or c.isprintable() else
-                   (f"\\x{ord(c):02x}" if ord(c) < 0x100 else f"\\u{ord(c):04x}" if ord(c) < 0x10000
-                    else f"\\U{ord(c):08x}") for c in s)
+    out = []
+    for i, c in enumerate(s):
+        if _visible(c):
+            nxt = s[i + 1] if i + 1 < len(s) else ""
+            out.append("\\\\" if c == "\\" and (nxt in ("x", "u", "\\") or (nxt and not _visible(nxt))) else c)
+        elif ord(c) < 0x100:
+            out.append(f"\\x{ord(c):02x}")
+        else:
+            b = c.encode("utf-16-be")
+            out.append("".join(f"\\u{int.from_bytes(b[k:k + 2], 'big'):04x}" for k in range(0, len(b), 2)))
+    return "".join(out)
 
 
 @dataclass(frozen=True)
@@ -86,13 +100,6 @@ class Flag:
     code: str
     message: str
     evidence: str = ""
-
-    def __post_init__(self) -> None:
-        # message / evidence quote the inspected artifact (file names, server names, lines):
-        # attacker-chosen text. Control characters (ANSI escapes, CR, BEL) are removed here, for
-        # every flag, so no output path (terminal or --json) can be spoofed by them.
-        object.__setattr__(self, "message", printable(self.message))
-        object.__setattr__(self, "evidence", printable(self.evidence))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -115,17 +122,16 @@ class Artifact:
     version: Optional[str] = None  # declared version (npm/pypi/vscode), if any
 
     def to_dict(self) -> dict[str, Any]:
-        # every field but the hash can come from the inspected artifact (manifest name, version,
-        # capabilities, hook commands, the path or URL given): escaped at this exit
+        # raw values: JSON escapes control characters itself, and a consumer gets the real path back
         return {
             "kind": self.kind.value,
-            "source": printable(self.source),
-            "name": printable(self.name),
-            "version": printable(self.version),
+            "source": self.source,
+            "name": self.name,
+            "version": self.version,
             "content_hash": self.content_hash,
-            "declared_capabilities": [printable(x) for x in self.declared_capabilities],
-            "install_hooks": [printable(x) for x in self.install_hooks],
-            "root": printable(self.root),
+            "declared_capabilities": list(self.declared_capabilities),
+            "install_hooks": list(self.install_hooks),
+            "root": self.root,
         }
 
 
@@ -163,7 +169,7 @@ class Verdict:
             "risk_level": self.risk_level.value,
             "risk_score": self.risk_score,
             "flags": [f.to_dict() for f in self.flags],
-            "notes": [printable(n) for n in self.notes],
+            "notes": list(self.notes),
         }
 
     def to_text(self) -> str:
@@ -177,8 +183,10 @@ class Verdict:
             f"  verdict: {self.risk_level.value}  (score {self.risk_score})",
             f"  inspect: {self.inspection.value}",
         ]
+        # every value below but the hash and level can come from the inspected artifact
+        # (attacker-chosen text): escaped here, at the terminal output, and only here
         for gap in self.gaps:
-            lines.append(f"    not inspected: {gap}")
+            lines.append(f"    not inspected: {printable(gap)}")
         if not self.flags:
             lines.append("  flags  : none")
         else:
@@ -187,13 +195,13 @@ class Verdict:
                 self.flags, key=lambda x: -x.severity.weight
             ):
                 lines.append(
-                    f"    [{f.severity.value:^6}] {f.code} {f.message}"
+                    f"    [{f.severity.value:^6}] {f.code} {printable(f.message)}"
                 )
                 if f.evidence:
                     ev = f.evidence if len(f.evidence) <= 120 else (
                         f.evidence[:117] + "…"
                     )
-                    lines.append(f"            ↳ {ev}")
+                    lines.append(f"            ↳ {printable(ev)}")
         for note in self.notes:
             lines.append(f"  note   : {printable(note)}")
         return "\n".join(lines)

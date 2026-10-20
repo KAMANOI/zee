@@ -318,36 +318,74 @@ _ADVERSARIAL = [
     "allowed_hosts: " + "a*" * 50000,
     "- " * 100000,
     "allowedCommands = [" + "a" * 100000,
+    "curl x " * 20000,
+    "copyFileSync('node_modules/x/a.svg', 'dist/a.svg'); " * 2000,
 ]
+# Two shapes, each doubled on one axis only: line length (few long lines) and line count (many
+# short lines). A cost quadratic in either axis shows as a ratio near 4 on that axis; a linear
+# one stays near 2 (measured on a 2021 MacBook Pro: 1.89-2.06 on every body and axis).
+_LONG_LINES, _MANY_LINES = (12500, 8), (60, 4000)
+_GROWTH = 2.6  # calibrated by test_speed_check_fails_known_slow_implementations (3.4-3.7 there)
+
+
+def _scan_time(d: Path, line: str, n: int, runs: int = 2) -> float:
+    d.mkdir(parents=True)
+    (d / "p.yaml").write_text("network_policies:\n" + (line + "\n") * n, encoding="utf-8")
+    (d / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + line + "\n") * n,
+                            encoding="utf-8")
+    (d / "s.sh").write_text((line + " \\\n") * n, encoding="utf-8")
+    best = float("inf")
+    for _ in range(runs):
+        t = time.perf_counter()
+        flags = static_checks.scan_tree(d)
+        best = min(best, time.perf_counter() - t)
+    assert not any(f.code == "G910" for f in flags)  # every file under the read limit: real work
+    return best
+
+
+def _longer(d: Path, body: str, runs: int = 2, n: int = _LONG_LINES[1]) -> tuple[float, float]:
+    """(time ratio when the lines get twice as long, the slower time)."""
+    L = _LONG_LINES[0]
+    a, b = _scan_time(d / "a", body[:L], n, runs), _scan_time(d / "b", body[:2 * L], n, runs)
+    return (b - 0.05) / a, b
+
+
+def _more(d: Path, body: str, runs: int = 2) -> tuple[float, float]:
+    """(time ratio when there are twice as many lines, the slower time)."""
+    L, n = _MANY_LINES
+    a, b = _scan_time(d / "c", body[:L], n, runs), _scan_time(d / "e", body[:L], 2 * n, runs)
+    return (b - 0.05) / a, b
 
 
 # short ids: the full body as a test id goes into PYTEST_CURRENT_TEST, which Windows caps at 32,767 characters
 @pytest.mark.parametrize("body", _ADVERSARIAL, ids=[f"adv{i}" for i in range(len(_ADVERSARIAL))])
 def test_adversarial_lines_stay_fast(tmp_path, body):
-    # What this guards is the growth, not the machine: a quadratic regression (as found and fixed
-    # in review: 16,000 lines took 14 s) shows as a ratio, while runner speed varies. GitHub runners
-    # took 3.0-5.0 s for the old largest case (2026-10-20, all OSes) where a 2021 MacBook Pro took
-    # 2.4 s, so the absolute cap is about twice the slowest runner. Both sizes stay under the 2 MiB
-    # read limit, so the larger one really does twice the work (no file is skipped as G910).
-    def run(b: str, reps: int, d: Path) -> float:
-        d.mkdir()
-        (d / "p.yaml").write_text("network_policies:\n" + b + "\n", encoding="utf-8")
-        (d / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + b[:1500] + "\n") * 30 * reps,
-                                encoding="utf-8")
-        (d / "s.sh").write_text((b + " \\\n") * reps, encoding="utf-8")
-        best = float("inf")
-        for _ in range(3):
-            t = time.perf_counter()
-            flags = static_checks.scan_tree(d)
-            best = min(best, time.perf_counter() - t)
-        assert not any(f.code == "G910" for f in flags)
-        return best
+    # What this guards is the growth, not the machine: runner speed varies, a ratio does not.
+    # The absolute cap is a backstop at about 4x the local slowest tree (1.5 s); GitHub runners
+    # took 1.25-2.1x the local time on the previous version of this test (2026-10-20).
+    _scan_time(tmp_path / "warm", body[:1000], 1, 1)
+    (longer, t1), (more, t2) = _longer(tmp_path, body), _more(tmp_path, body)
+    assert longer < _GROWTH and more < _GROWTH, (longer, more)
+    assert max(t1, t2) < 6.0
 
-    unit = body[:50000]
-    run(unit[:1000], 1, tmp_path / "warm")
-    one, two = run(unit, 6, tmp_path / "one"), run(unit, 12, tmp_path / "two")
-    assert two < 10.0
-    assert two < 2.6 * one + 0.05  # twice the input, at most a little over twice the time
+
+def test_speed_check_fails_known_slow_implementations(tmp_path, monkeypatch):
+    # Calibration: the two quadratic versions found in review must fail the growth check above.
+    import types
+    from zee.gate import tampering
+    # line length: G203 as the plain regex it was before _LinearSearch (rescans to the end of the
+    # line from every `curl`); n is small, the ratio does not depend on it
+    pats = [(c, sv, static_checks._G203.full if c == "G203" else pt, m) for c, sv, pt, m in static_checks._PATTERNS]
+    monkeypatch.setattr(static_checks, "_PATTERNS", pats)
+    longer, _ = _longer(tmp_path / "L", _ADVERSARIAL[7], runs=1, n=2)
+    assert longer > _GROWTH, longer
+    monkeypatch.undo()
+    # line count: G212's nearby-line lookup as it was before bisection (scans every target line)
+    monkeypatch.setattr(tampering, "bisect", types.SimpleNamespace(
+        bisect_left=lambda a, x: sum(1 for v in a if v < x),
+        bisect_right=lambda a, x: sum(1 for v in a if v <= x)))
+    more, _ = _more(tmp_path / "N", _ADVERSARIAL[8], runs=1)
+    assert more > _GROWTH, more
 
 
 def test_review_round2_cases(tmp_path):

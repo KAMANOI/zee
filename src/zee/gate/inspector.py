@@ -111,7 +111,7 @@ def promote_if_low(verdict: Verdict, dest_dir: str | Path) -> tuple[bool, str]:
     # name (".." / absolute / nested) cannot escape the install dir.
     name = verdict.artifact.name
     if name in ("", ".", "..") or Path(name).name != name:
-        return False, f"refused to promote: unsafe artifact name {name!r}"
+        return False, f"refused to promote: unsafe artifact name '{name}'"
 
     root = Path(verdict.artifact.root)
     # Defence in depth (HIGH symlinks already block LOW, but never trust a

@@ -42,11 +42,20 @@ releases.
 
 ### Changed
 
-- Control and other non-printable characters quoted from an inspected artifact
-  are shown as visible escapes (`\x1b`) in every flag, the artifact fields
-  (name, version, source, capabilities, install hooks) and notes, in the
-  terminal and in `--json` (before: only imported scanner results were cleaned),
-  so a file or server name cannot rewrite the terminal output.
+- Control and other invisible characters quoted from an inspected artifact
+  are shown as visible escapes (`\x1b`) in the terminal output: the verdict
+  (flags, artifact fields, notes), `zee gate audit`, promotion and error
+  messages, so a file or server name cannot rewrite the terminal. A backslash
+  that would read as an escape is doubled, so different names never look the
+  same. `--json` keeps the raw values (JSON escapes U+0000-U+001F
+  itself). Imported scanner results were cleaned by dropping these characters
+  before; they are now kept and escaped the same way.
+- One rule decides "text or binary" for every gate check, on the raw first
+  8 KiB: a NUL byte no longer switches the main pass off for Dockerfile,
+  Makefile, README or `#!` scripts (they are text by name), and a text-typed
+  file (`.py`, `.jsx`, `.md` ...) with NUL bytes is scanned with them removed
+  and reported as G911 (not inspected) instead of being skipped. macOS Finder
+  files (`.DS_Store`, `._*`) stay binary. A UTF-16 text file is now G911.
 
 ### Notes
 

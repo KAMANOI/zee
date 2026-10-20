@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import denylist
+from .model import printable
 from .fetch import sha256_tree
 from .model import RiskLevel, Verdict
 from .pins import Pin, PinRegistry
@@ -98,8 +99,8 @@ class AuditReport:
         lines = [f"zee gate audit — {len(self.results)} pinned artifact(s)"]
         for r in self.results:
             mark = {CLEAN: "ok ", DRIFTED: "!! ", MISSING: "?? "}[r.status]
-            lines.append(f"  [{mark}] {r.status:7} {r.pin.name}")
-            lines.append(f"           {r.pin.install_dir}")
+            lines.append(f"  [{mark}] {r.status:7} {printable(r.pin.name)}")
+            lines.append(f"           {printable(r.pin.install_dir)}")
             if r.status == DRIFTED:
                 lines.append(
                     f"           pinned {r.pin.content_hash[:16]}… "
@@ -114,7 +115,7 @@ class AuditReport:
                         f"           rescan verdict: {r.rescan.risk_level.value}"
                     )
                 elif r.rescan_error is not None:
-                    lines.append(f"           rescan failed: {r.rescan_error}")
+                    lines.append(f"           rescan failed: {printable(r.rescan_error)}")
             elif r.status == MISSING:
                 lines.append(
                     "           moved or uninstalled — re-run "

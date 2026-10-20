@@ -629,7 +629,7 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
     import json as _json
 
     from .gate.inspector import inspect_source, promote_if_low
-    from .gate.model import EXIT_ERROR, error_payload
+    from .gate.model import EXIT_ERROR, error_payload, printable
 
     try:
         verdict = inspect_source(
@@ -641,7 +641,7 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
         )
     except Exception as e:  # noqa: BLE001 - every failure here is fail-closed
         detail = f"{type(e).__name__}: {e}"
-        print(f"error: inspection did not complete ({detail})", file=sys.stderr)
+        print(f"error: inspection did not complete ({printable(detail)})", file=sys.stderr)
         if args.json:
             print(_json.dumps(
                 error_payload(str(args.source), detail),
@@ -656,9 +656,9 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
         try:
             ok, msg = promote_if_low(verdict, args.promote_to)
         except OSError as e:  # e.g. read-only install dir
-            print(f"error: promotion failed ({e})", file=sys.stderr)
+            print(f"error: promotion failed ({printable(str(e))})", file=sys.stderr)
             return EXIT_ERROR
-        print(msg, file=sys.stderr)
+        print(printable(msg), file=sys.stderr)
         if ok:
             # Pin the promoted bytes so `zee gate audit` can later detect a
             # Rug Pull (self-update / silent rewrite) of this install.
@@ -672,7 +672,7 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
                 content_hash=verdict.artifact.content_hash,
                 install_dir=dest,
             )
-            print(f"pinned for Rug Pull monitoring: {dest}", file=sys.stderr)
+            print(f"pinned for Rug Pull monitoring: {printable(dest)}", file=sys.stderr)
     return verdict.exit_code
 
 
