@@ -102,3 +102,17 @@ def test_readme_and_docs_are_not_procedures_even_under_skills(tmp_path):
 def test_automation_flag_alone_is_not_a_sandbox_switch(tmp_path):
     by = _scan(tmp_path, {"a.py": "chromium.launch(ignore_default_args=['--enable-automation'], chromium_sandbox=True)\n"})
     assert "G220" not in by
+
+
+# --- fixes after independent review round 2 -------------------------------
+
+def test_removing_a_switch_is_not_setting_it(tmp_path):
+    by = _scan(tmp_path, {"a.py": "chromium.launch(ignore_default_args=['--no-sandbox'], chromium_sandbox=True)\n"})
+    assert "G220" not in by
+    by = _scan(tmp_path / "b", {"a.py": "chromium.launch(ignore_default_args=['--x'], args=['--no-sandbox'])\n"})
+    assert "G220" in by
+
+
+def test_toml_text_that_only_mentions_a_server_is_not_a_server(tmp_path):
+    doc = 'description = """\n[mcp_servers.demo]\nurl = "https://a.example/mcp"\n"""\n'
+    assert "G219" not in _scan(tmp_path, {"plugin.toml": doc})

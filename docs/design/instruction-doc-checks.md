@@ -43,3 +43,9 @@ README files and anything under `docs/` are deliberately **not** read by G217/G2
 
 ## Known limits
 Registration in other words or languages, a path built in pieces, stdio (command) servers, formats other than JSON / TOML, negation on another line, and what the application code sends (item 4) are not seen. One flag per code per file.
+
+## Independent check (ASTRA, `gpt-6-astra`, read-only), 2 rounds
+
+- Round 1: 62 点 / 直す. IPv6 URL crash (`https://[::1]/…` → ValueError), quadratic neighbour scan (16,000 lines took 14 s), "nothing is blocked" contradicted the scorer (MEDIUM blocks promote and adds up: G217+G218+G219 = 12 = HIGH), README/`docs/SKILL.md` under `skills/` were read, `--enable-automation` removal was read as a sandbox switch. All fixed (commit 2749475) with regression tests.
+- Round 2: 84 点 / 直す. Remaining: removing a switch via `ignore_default_args=['--no-sandbox']` was flagged; a TOML multi-line string that merely mentions `[mcp_servers.x]` was flagged G219; the module docstring still said "nothing is blocked". All three fixed in the final commit (TOML now parsed with `tomllib`; ignore lists stripped before G220). **No third round was run** (two rounds is the fixed limit); the fixes are not re-scored. Final suite 1061 passed / 8 skipped.
+- Known open points: heuristics only; evasion by rewording is not prevented; G220 can still be fooled by a switch assembled from pieces.

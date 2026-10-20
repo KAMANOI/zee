@@ -3,7 +3,7 @@ its own environment, and for plugin definitions that declare an outside
 connection. Nothing is executed; files are read as text, line by line, with
 bounded patterns ("near" = within `_WIN` lines).
 
-Flag codes (all MEDIUM: a person reads them, nothing is blocked by itself):
+Flag codes (all MEDIUM: a person reads them):
     G217  a procedure (SKILL.md, references/, commands/ ...) tells the AI to
           register an outside MCP server / endpoint on the host
     G218  a procedure tells the AI to write into an AI-tool or developer-tool
@@ -12,7 +12,9 @@ Flag codes (all MEDIUM: a person reads them, nothing is blocked by itself):
           declares an outside connection (a non-local http(s) MCP server)
     G220  a browser is started with its sandbox or web security switched off
 
-A flag states what the files say, not who wrote them or why. Safe wording
+A flag states what the files say, not who wrote them or why. A single MEDIUM flag
+passes the default `fail-on: high` but blocks `--promote-to`, and MEDIUM flags add
+up in the scorer. Safe wording
 ("back it up first", "the user signs in") does not clear a flag: the point is
 that a person sees, before install, that the procedure edits the host.
 
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -103,8 +106,6 @@ _WRITE_VERB = re.compile(
 _DEF_NAME = re.compile(r"mcp|plugin|marketplace|settings|config", re.I)
 _SERVER_KEYS = {"mcpservers", "mcp_servers", "mcp"}
 _URL_KEYS = {"url", "serverurl", "httpurl", "endpoint", "baseurl", "server_url"}
-_TOML_TABLE = re.compile(r"^\s*\[\s*(?:mcp_servers|mcpServers|mcp)\b[^\]]*\]")
-_TOML_URL = re.compile(r"^\s*(?:url|server_url|endpoint|http_url)\s*=\s*[\"'](https?://[^\"']+)", re.I)
 
 
 def _servers(node, out: list[tuple[str, str]], in_servers: bool = False) -> None:
@@ -129,12 +130,10 @@ def _g219(rel: str, name: str, text: str, lines: list[str], nums: list[int], suf
         except (ValueError, RecursionError):
             pass
     elif suf == ".toml" and _DEF_NAME.search(name):
-        in_tbl = False
-        for ln in lines:
-            if ln.lstrip().startswith("["):
-                in_tbl = bool(_TOML_TABLE.match(ln))
-            elif in_tbl and (m := _TOML_URL.match(ln)) and (h := _outside_url(m.group(1))):
-                found.append(("(toml)", h))
+        try:
+            _servers(tomllib.loads(text), found)
+        except (ValueError, RecursionError):
+            pass
     if not found:
         return []
     srv, host = found[0]
@@ -148,6 +147,8 @@ def _g219(rel: str, name: str, text: str, lines: list[str], nums: list[int], suf
 
 
 # --- G220: browser sandbox / web security off ------------------------------
+# `ignore_default_args=['--no-sandbox']` REMOVES a switch; its list is not a start-up argument
+_IGNORE_LIST = re.compile(r"ignore_?default_?args\s*[=:]\s*\[[^\]]*\]", re.I)
 _NO_SANDBOX = re.compile(
     r"--no-sandbox|--disable-setuid-sandbox|--disable-web-security|--disable-site-isolation-trials|"
     r"--disable-features=[^\s\"',]*(?:IsolateOrigins|SitePerProcess)|"
@@ -180,7 +181,7 @@ def file_flags(rel: str, name: str, text: str, lines: list[str], nums: list[int]
     if suf in _CONFIG:
         flags += _g219(rel, name, text, lines, nums, suf)
     if suf in _CODE | _CONFIG:
-        if hits := _hits(lines, _NO_SANDBOX, None, False):
+        if hits := _hits([_IGNORE_LIST.sub("", ln) for ln in lines], _NO_SANDBOX, None, False):
             i = hits[0]
             flags.append(_flag(Severity.MEDIUM, "G220",
                                "starts a browser with its sandbox or web security switched off "
