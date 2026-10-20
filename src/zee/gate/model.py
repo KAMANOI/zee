@@ -70,7 +70,7 @@ def _visible(c: str) -> bool:
 
 def printable(s: str | None) -> str | None:
     """Text for a terminal: control and other invisible characters become visible escapes
-    (`\\x1b`, `\\u200b`; astral ones as a `\\u` surrogate pair). A backslash that would read as
+    (`\\x1b`, `\\u200b`, `\\x{e0001}`; a lone surrogate as `\\udc80`). A backslash that would read as
     the start of such an escape is doubled, so the output is unambiguous: a real line feed shows
     as `\\x0a`, the four characters `\\x0a` as `\\\\x0a`. Applied once, at the text output (to_text,
     audit, promote / error messages); stored values and JSON keep the raw text."""
@@ -83,9 +83,10 @@ def printable(s: str | None) -> str | None:
             out.append("\\\\" if c == "\\" and (nxt in ("x", "u", "\\") or (nxt and not _visible(nxt))) else c)
         elif ord(c) < 0x100:
             out.append(f"\\x{ord(c):02x}")
+        elif ord(c) < 0x10000:  # includes a lone surrogate (a file name that is not valid UTF-8)
+            out.append(f"\\u{ord(c):04x}")
         else:
-            b = c.encode("utf-16-be")
-            out.append("".join(f"\\u{int.from_bytes(b[k:k + 2], 'big'):04x}" for k in range(0, len(b), 2)))
+            out.append(f"\\x{{{ord(c):x}}}")  # `\\x{e0001}`: never the same as two `\\u` surrogates
     return "".join(out)
 
 

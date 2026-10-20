@@ -37,7 +37,7 @@ flag evidence, imported scanner results, notes) is stored as it is. `--json` is 
 non-ASCII character (C1 controls, U+202E, U+200B, and also Japanese text) and every control character is a
 `\uXXXX` escape, so the JSON cannot rewrite a terminal and a JSON parser gives the real path back. In the terminal output (the verdict, `zee
 gate audit`, promotion and error messages) control and other invisible characters are shown as visible
-escapes (`\x1b`, `\u200b`), and a backslash that would read as such an escape is doubled (`\\x0a` is the four
+escapes (`\x1b`, `\u200b`, `\x{e0001}`, a lone surrogate from a non-UTF-8 file name as `\udc80`; log warnings too), and a backslash that would read as such an escape is doubled (`\\x0a` is the four
 characters, `\x0a` a line feed), so two different names never look the same.
 
 `--json` reports the two axes separately: `inspection.status`

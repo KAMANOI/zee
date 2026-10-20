@@ -443,7 +443,8 @@ def test_artifact_and_notes_are_escaped_at_the_output(tmp_path):
 def test_visible_form_is_unambiguous():
     from zee.gate.model import printable
     cases = ["a\nb", "a\\x0ab", "ab", "a\\\nb", "a\\\\x0ab", "C:\\Users\\x", "a\\", "\\u200b", "\u200b",
-             "\U000e0001", "\\U000e0001", "\x1b[2J", "\\x1b[2J"]
+             "\U000e0001", "\\U000e0001", "\x1b[2J", "\\x1b[2J",
+             "\udb40\udc01", "\\x{e0001}", "\ud800", "\\ud800", "\udc80x"]  # lone surrogates: undecodable file names
     shown = [printable(c) for c in cases]
     assert len(set(shown)) == len(cases), shown
     assert printable("a\nb") == "a\\x0ab" and printable("a\\x0ab") == "a\\\\x0ab"
@@ -549,3 +550,38 @@ def test_json_output_has_no_raw_invisible_characters(tmp_path, capsys):
     assert not any(c in out for c in "\u009b\u202e\u200b\x7f\x1b"), out
     ev = [f["evidence"] for f in json.loads(out)["flags"] if f["code"] == "G203"]
     assert ev and "\u009b31m\u202egpj.sh" in ev[0] and "\u200b\x7f" in ev[0]  # raw values come back
+
+
+def test_lone_surrogate_name_does_not_crash_the_text_output(tmp_path, capsys):
+    from zee.gate.model import Artifact, ArtifactKind, RiskLevel, Verdict
+    from zee.cli import main
+    v = Verdict(Artifact(ArtifactKind.PACKAGE, "s\udc80", "n\ud800", "0" * 64), RiskLevel.LOW, 0,
+                flags=[], notes=["x\udcff"])
+    text = v.to_text()
+    text.encode("utf-8")  # printable: no surrogate reaches stdout
+    assert "n\\ud800" in text and "s\\udc80" in text
+    # the CLI end to end (a name read from a manifest, like a non-UTF-8 file name on Linux)
+    src = tmp_path / "src"; src.mkdir()
+    (src / "package.json").write_text('{"name": "p\\ud800", "version": "1.0.0"}', encoding="utf-8")
+    main(["gate", "add", str(src)])
+    out = capsys.readouterr().out
+    assert "zee gate" in out and "\\ud800" in out
+
+
+def test_audit_rescan_failure_log_is_escaped(tmp_path, monkeypatch, caplog):
+    from zee.gate import audit, inspector
+    from zee.gate.pins import PinRegistry
+    d = tmp_path / "inst\x1b[2J"; d.mkdir()
+    (d / "a.txt").write_text("x", encoding="utf-8")
+    reg = PinRegistry(tmp_path / "pins.jsonl")
+    reg.pin(name="p", kind="package", source="s", content_hash="0" * 64, install_dir=str(d))
+    monkeypatch.setattr(audit.denylist, "add_local", lambda **k: None)  # never touch the real denylist
+
+    def boom(*a, **k):
+        raise RuntimeError("bad \x1b]0;t\x07")
+    monkeypatch.setattr(inspector, "inspect_source", boom)
+    with caplog.at_level("WARNING"):
+        rep = audit.audit_pins(reg, rescan=True)
+    assert rep.results[0].rescan_error.endswith("\x1b]0;t\x07")  # stored raw
+    logged = "".join(r.getMessage() for r in caplog.records)
+    assert "rescan failed" in logged and "\x1b" not in logged and "\x07" not in logged

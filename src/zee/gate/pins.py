@@ -24,6 +24,8 @@ from typing import Optional
 
 from ..telemetry.events_log import default_log_dir
 
+from .model import printable
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +111,7 @@ class PinRegistry:
         try:
             content = self.path.read_text(encoding="utf-8")
         except OSError as e:
-            logger.warning("pin registry read failed (%s); starting empty", e)
+            logger.warning("pin registry read failed (%s); starting empty", printable(str(e)))
             return []
         for line_no, raw in enumerate(content.splitlines(), start=1):
             line = raw.strip()
@@ -119,7 +121,7 @@ class PinRegistry:
                 out.append(Pin.from_dict(json.loads(line)))
             except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
                 logger.warning("pin registry %s:%d malformed, skipping (%s)",
-                               self.path, line_no, e)
+                               printable(str(self.path)), line_no, printable(str(e)))
         return out
 
     def _append(self, record: Pin) -> None:

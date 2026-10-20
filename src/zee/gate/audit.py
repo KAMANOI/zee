@@ -165,7 +165,7 @@ def audit_pins(
                 rescan_error = f"{type(e).__name__}: {e}"
                 logger.warning(
                     "gate audit rescan failed for %s (%s)",
-                    pin.install_dir, rescan_error,
+                    printable(pin.install_dir), printable(rescan_error),
                 )
         report.results.append(
             PinAudit(
