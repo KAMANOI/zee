@@ -343,3 +343,22 @@ def test_review_round2_cases(tmp_path):
     two = ('A = {"type": "computer_20251124", "name": "computer"}\n' + "# pad\n" * 200
            + 'B = {"name": "computer", "input_schema": {}}\n')
     assert "G206" in _scan(tmp_path / "two", {"t.py": two})
+
+
+# ---- regressions from the v0.16.0 release review --------------------------
+
+def test_g205_helper_name_does_not_capture_stdlib_calls(tmp_path):
+    got = _scan(tmp_path, {"t.py": (
+        "import os, subprocess, asyncio\n"
+        "def run(cmd):\n    return os.system(cmd)\n"
+        "def g(path, x):\n"
+        "    subprocess.run(['git', '-C', f'{path}', 'status'])\n"
+        "    asyncio.run(main(f'{x}'))\n")})
+    assert "G205" not in got
+    assert "G205" in _scan(tmp_path / "b", {"t.py": (
+        "import os\ndef run(cmd):\n    return os.system(cmd)\ndef g(x):\n    run(f'ls {x}')\n")})
+
+
+def test_python_too_deep_to_parse_is_a_gap_not_clean(tmp_path):
+    got = _scan(tmp_path, {"deep.py": "x = " + "+".join(["0"] * 20000) + "\n"})
+    assert "G911" in got

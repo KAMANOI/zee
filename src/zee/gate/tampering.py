@@ -59,6 +59,9 @@ _WRITE = re.compile(
     r"\.write_(?:text|bytes)\s*\(|\bopen\([^)\n]*['\"][wa][b+]*['\"]|"
     r"\bsed\s+-i|(?<=\s)>>?\s*\S*(?:node_modules|site-packages)|\bpatch\s+-p")
 _WRITE_SH = re.compile(r"\b(?:cp|mv|ln)\s+-?\w*\s")  # shell verbs: too common as words in JS / Python
+_COPY = re.compile(r"copy|cpSync|(?:^|\.)cp\b|^cp\s")  # a write match that is a copy (source, destination)
+_ASSIGNED = re.compile(r"^\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=(?!=)")
+_STR = re.compile(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"")  # quoted text on one line
 _BACKUP = re.compile(r"\.(?:[A-Za-z0-9_-]+\.)?(?:bak|orig|backup|original)\b|[_-](?:bak|orig|backup)\b",
                      re.I)
 
@@ -153,19 +156,62 @@ def _writes(lines: list[str], suf: str) -> list[int]:
     return sorted(set(w) | set(_hits(lines, _WRITE_SH, None, False))) if suf in _SHELL else w
 
 
+def _copy_args(line: str, end: int, shell: bool) -> tuple[str, str]:
+    """(first argument, the rest) after a copy call that ends at `end`."""
+    rest = line[end:]
+    if shell:
+        toks = [x for x in rest.split() if not x.startswith("-")]
+        return (toks[0], " ".join(toks[1:])) if toks else ("", "")
+    a, _, b = rest.lstrip("( ").partition(",")
+    return a, b
+
+
+def _g212(lines: list[str], t: list[int], w: list[int], win: int, shell: bool) -> tuple[Severity, int] | None:
+    """A write next to a line naming another package. A copy whose destination is not that
+    package (`copyFileSync('node_modules/x/logo.svg', 'dist/logo.svg')`) is not a write into it;
+    a copy whose direction cannot be told is MEDIUM."""
+    medium = None
+    for wi in w:
+        near = [ti for ti in t if abs(ti - wi) <= win]
+        if not near:
+            continue
+        ln = lines[wi]
+        ms = list(_WRITE.finditer(ln)) + (list(_WRITE_SH.finditer(ln)) if shell else [])
+        copies = [m for m in ms if _COPY.search(m.group(0).strip())]
+        if not ms or len(copies) < len(ms):
+            return Severity.HIGH, wi  # writes, renames, links, sed -i ...: not a copy
+        src, dst = _copy_args(ln, copies[0].end(), shell)
+        if _PKG_TARGET.search(dst):
+            return Severity.HIGH, wi
+        if _PKG_TARGET.search(src):
+            continue  # copies out of the package
+        names = {m.group(1) for ti in near if (m := _ASSIGNED.match(lines[ti]))}
+        word = re.compile(r"(?<![\w$])(?:" + "|".join(map(re.escape, names)) + r")(?![\w$])") if names else None
+        if word and word.search(dst):
+            return Severity.HIGH, wi
+        if word and word.search(src):
+            continue
+        medium = medium if medium is not None else wi
+    return (Severity.MEDIUM, medium) if medium is not None else None
+
+
 def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[Flag]:
     flags: list[Flag] = []
     if suf in _CODE:
         t, w = _hits(lines, _PKG_TARGET, _PKG_SKIP, False), _writes(lines, suf)
         # the target and the write sit together (a variable holding the path, then the write);
         # a shell script must name the target on the write line itself
-        if (p := _near(t, w, 0 if suf in _SHELL else 4)):
-            bak = _near([p[1]], _hits(lines, _BACKUP, None, False), 4)
-            flags.append(_flag(Severity.HIGH, "G212",
-                               "writes, copies over or renames a file in the same lines that name another "
-                               "package (node_modules / site-packages / a resolved module path)"
+        if (g := _g212(lines, t, w, 0 if suf in _SHELL else 4, suf in _SHELL)):
+            sev, wi = g
+            bak = _near([wi], _hits(lines, _BACKUP, None, False), 4)
+            flags.append(_flag(sev, "G212",
+                               ("writes, copies over or renames a file in the same lines that name another "
+                                "package (node_modules / site-packages / a resolved module path)"
+                                if sev is Severity.HIGH else
+                                "copies a file in the same lines that name another package; which side is "
+                                "the destination could not be told from the text")
                                + ("; a backup-style name (.bak / .orig) appears next to the write" if bak else ""),
-                               rel, nums[p[1]], lines[p[1]]))
+                               rel, nums[wi], lines[wi]))
         # G215: a plugin folder, a patch-style word and a write all within the window of one line
         d, m_, w2 = _hits(lines, _PLUGIN_DIR, None, False), _hits(lines, _MODIFY, None, False), w
         hit = next((i for i in d if _has_near(m_, i) and _has_near(w2, i)), None)
@@ -188,7 +234,9 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
             for pat, what, win in ((_DECRYPT, "a decrypt call", 4), (_BLOB, "a 200+ character encoded string", 4),
                                    (_OPAQUE_REF, "a reference to an encrypted / sealed prompt file", 6),
                                    (_FETCH, "a network fetch", 2)):
-                other = _hits(lines, pat, None, False)
+                # a call word inside quoted text ("explain how decrypt(x) works") is not a call
+                other = _hits([_STR.sub('""', x) for x in lines] if pat in (_DECRYPT, _FETCH) else lines,
+                              pat, None, False)
                 p = None
                 if pat is _FETCH:
                     # same line, or just above and the prompt line takes a value (await / .text / .json ...)
@@ -203,7 +251,7 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                 if p:
                     flags.append(_flag(Severity.HIGH, "G214",
                                        f"system-prompt / agent-instruction text is set next to {what}; "
-                                       f"the files do not show its content in plain text",
+                                       f"Zee does not follow the value: read the source to see what text is set",
                                        rel, nums[p[0]], lines[p[0]]))
                     break
     return flags

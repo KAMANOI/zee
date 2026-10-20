@@ -63,7 +63,7 @@ the configuration; they never run it.
 | G602 | MEDIUM | `cat` / `head` / `grep` (without `-q` / `-c` / `-l`) or "read/print the …" on `.env`, `.aws/credentials`, `.ssh/id_*`, `.npmrc`, `.pypirc`, `.netrc`. Lines that say *never / do not / without*, public keys (`id_*.pub`) and `.env.example` / `.sample` / `.template` are not flagged. |
 
 Limits, stated plainly: these are heuristics, one flag per code per file. Files over 2 MiB get G910 from the main pass; a Python file too deeply nested to walk gets G911. The line patterns are easy to evade on purpose (renamed variables, split expressions, unusual layout); they find the common honest mistakes, not a determined author.
-Data flow across files is followed by function name only; a value validated
+Python files are parsed one at a time (only a summary of each file's functions is kept); a file too deep or too large to parse, or text beyond 256 MiB for the whole tree, gets G911 (the inspection becomes `partial`, never a silent pass). Data flow across files is followed by function name only (calls on `subprocess` / `asyncio` / `os` and similar standard modules are not matched to a same-named helper); a value validated
 in a place Zee cannot follow is still reported; JS/TS handler signatures are
 not compared (G207), and schemas that are not literals are skipped. A clean
 result does not mean the configuration is safe.
@@ -77,13 +77,13 @@ that shape. They read files; they never run them.
 
 | Code | Severity | What it flags |
 |---|---|---|
-| G212 | HIGH | Code that writes, copies over, renames or links a file within 4 lines of a line that names another package (`node_modules`, `site-packages`, a `require.resolve` path); in shell scripts, on the same line. The message adds "backup-style name" when a `.bak` / `.orig` / `.backup` name sits next to the write. A `node_modules/.cache`-style path is skipped (only that path, not the rest of the line). |
+| G212 | HIGH | Code that writes, copies over, renames or links a file within 4 lines of a line that names another package (`node_modules`, `site-packages`, a `require.resolve` path); in shell scripts, on the same line. The message adds "backup-style name" when a `.bak` / `.orig` / `.backup` name sits next to the write. A `node_modules/.cache`-style path is skipped (only that path, not the rest of the line). A copy is judged by direction: copying *out of* a package (`copyFileSync('node_modules/x/logo.svg', 'dist/logo.svg')`) is not flagged, copying into one is HIGH, and a copy whose destination cannot be told from the text (both sides are variables not set on the nearby lines) is MEDIUM. |
 | G213 | MEDIUM | A setting or function named like "apply on every start" (`autoApplyOnStart`, `reapply_on_launch`, `autoReapply` …) that is not set to false right after the name. A function with that name is flagged whether or not it is called: Zee does not follow calls. |
-| G214 | HIGH | System-prompt / agent-instruction text set within a few lines of a decrypt call, a 200+ character encoded string, a reference to an `*.enc` / `*.sealed` / `*.gpg` prompt file, or a network fetch (same line, or up to 2 lines above while the prompt line takes a value such as `await` / `.text`). A shipped file named like `prompt*.enc` also counts. Zee reports what sits next to what; it does not decrypt or follow the data, so these files do not show the prompt in plain text and a person must open the source. A plain prompt next to an unrelated fetch can be flagged. |
+| G214 | HIGH | System-prompt / agent-instruction text set within a few lines of a decrypt call, a 200+ character encoded string, a reference to an `*.enc` / `*.sealed` / `*.gpg` prompt file, or a network fetch (same line, or up to 2 lines above while the prompt line takes a value such as `await` / `.text`). A shipped file named like `prompt*.enc` also counts. Zee reports what sits next to what; it does not decrypt or follow the data, so a person must open the source to see what text is set. Words inside quoted text ("explain how decrypt(x) works") are not counted as calls. A plain prompt next to an unrelated fetch can be flagged, and an agent that loads its system prompt over the network at run time is flagged HIGH by design. |
 | G215 | MEDIUM | Code that names an agent's plugin / extension / skills folder (`.claude/plugins`, `.vscode/extensions`, …) within the window of a patch-style word (`patch`, `wrap`, `inject`, `shim`, `overwrite` …) and a file write. A plain installer copying its own files is not flagged; an updater of the plugin's own files that uses those words can be. |
 | G216 | MEDIUM | Documentation addressed to an AI assistant ("paste this to your assistant", `<!-- AI-AGENT-START -->`, "このまま貼れば", "给 AI 助手"). Zee only warns; whether the assistant may act on it is decided by the operator's own rules. |
 
-G212 and G214 are HIGH (blocked at the default `fail-on: high`). G213, G215 and
+G212 and G214 are HIGH (blocked at the default `fail-on: high`; a G212 copy of unknown direction is MEDIUM). G213, G215 and
 G216 are MEDIUM (a person reads them). Tools that patch `node_modules` on
 purpose (patch-package style) are flagged G212 by design.
 

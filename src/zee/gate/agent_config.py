@@ -61,6 +61,7 @@ def _lines(text: str):
 _SHELL_SINKS = {"system", "popen", "create_subprocess_shell", "getoutput",
                 "getstatusoutput"}
 _SUBPROC = {"run", "call", "check_call", "check_output", "Popen"}
+_STDLIB = {"subprocess", "asyncio", "os", "shutil", "sys", "threading", "multiprocessing", "concurrent"}
 _QUOTERS = {"quote", "shlex_quote", "shell_escape", "shellquote"}
 _SAFE_CONVERT = {"int", "float", "bool", "len", "abs", "round"}
 
@@ -82,7 +83,11 @@ def _is_safe_call(node: ast.Call) -> bool:
 
 def _is_shell_call(node: ast.Call, helpers: set[str]) -> bool:
     name = _callee(node)
-    if name in _SHELL_SINKS or name in helpers:
+    f = node.func
+    # a helper is matched by name, but never on a stdlib module: `subprocess.run([...])` or
+    # `asyncio.run(main())` is not the tree's own `def run(cmd)`
+    stdlib = isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in _STDLIB
+    if name in _SHELL_SINKS or (name in helpers and not stdlib):
         return True
     if name in _SUBPROC:  # only with shell=True
         return any(k.arg == "shell" and isinstance(k.value, ast.Constant)
@@ -95,14 +100,13 @@ def _py_functions(tree: ast.AST):
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
 
-def _shell_helpers(trees: dict[str, ast.AST]) -> set[str]:
-    """Names of functions that pass one of their own parameters to a shell
-    sink (directly or through another such function). Matched by name across
-    the whole tree: `self.shell(cmd)` -> `run(cmd)` -> create_subprocess_shell.
-    Built once as a reverse call graph and walked from the sinks: linear."""
-    helpers: set[str] = set()
-    callers: dict[str, set[str]] = {}  # callee name -> functions passing a parameter to it
-    for f in (f for t in trees.values() for f in _py_functions(t)):
+def _collect_helpers(tree: ast.AST, helpers: set[str], callers: dict[str, set[str]]) -> None:
+    """Shell helpers = functions that pass one of their own parameters to a shell
+    sink (directly or through another such function), matched by name across the
+    whole tree: `self.shell(cmd)` -> `run(cmd)` -> create_subprocess_shell.
+    This adds one file to the reverse call graph (callee name -> functions passing a
+    parameter to it); `_close_helpers` walks it from the sinks once: linear."""
+    for f in _py_functions(tree):
         params = {a.arg for a in f.args.args + f.args.kwonlyargs} - {"self", "cls"}
         for call in (n for n in ast.walk(f) if isinstance(n, ast.Call)):
             if any(isinstance(n, ast.Name) and n.id in params
@@ -110,6 +114,9 @@ def _shell_helpers(trees: dict[str, ast.AST]) -> set[str]:
                 callers.setdefault(_callee(call), set()).add(f.name)
                 if _is_shell_call(call, set()):
                     helpers.add(f.name)
+
+
+def _close_helpers(helpers: set[str], callers: dict[str, set[str]]) -> set[str]:
     todo = list(helpers)
     while todo:
         for caller in callers.get(todo.pop(), ()):
@@ -551,7 +558,15 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
 
     texts: dict[str, str] = {}
     held = 0
-    trees: dict[str, ast.AST] = {}
+    parsed: set[str] = set()
+    helpers: set[str] = set()
+    callers: dict[str, set[str]] = {}
+
+    def gap(rel: str, why: str) -> None:
+        add(Flag(Severity.LOW, "G911",
+                 "file could not be analysed for agent-config checks; "
+                 "its contents were not inspected",
+                 evidence=f"{rel} ({why})"), rel)
     for p in paths:
         suf = p.suffix.lower()
         if suf not in _PY | _JS | _SHELLISH and p.name != "Dockerfile" \
@@ -576,24 +591,26 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
         rel = str(p.relative_to(root))
         texts[rel] = text
         if suf in _PY:
+            # one tree at a time: only the call-graph summary is kept, so memory does not grow
+            # with every syntax tree in the artifact (each file is parsed again below)
             try:
-                trees[rel] = ast.parse(text)
-            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                _collect_helpers(ast.parse(text), helpers, callers)
+                parsed.add(rel)
+            except (SyntaxError, ValueError):
                 pass  # not Python we can read: the regex checks below still run
+            except (RecursionError, MemoryError):
+                gap(rel, "too deep or too large to parse")  # never silently "clean"
 
-    helpers = _shell_helpers(trees)
+    helpers = _close_helpers(helpers, callers)
     for rel, text in texts.items():
         suf = Path(rel).suffix.lower()
-        if rel in trees:
+        if rel in parsed:
             try:
-                for f in _python_flags(rel, trees[rel], helpers):
+                for f in _python_flags(rel, ast.parse(text), helpers):
                     add(f, rel)
-            except (RecursionError, MemoryError, ValueError):
+            except (RecursionError, MemoryError, ValueError, SyntaxError):
                 # a tree this deep can be parsed but not walked: say so, never "clean"
-                add(Flag(Severity.LOW, "G911",
-                         "file could not be analysed for agent-config checks; "
-                         "its contents were not inspected",
-                         evidence=f"{rel} (nesting too deep)"), rel)
+                gap(rel, "nesting too deep")
         if suf in _JS:
             if "child_process" in text:
                 for n, line in _lines(text):

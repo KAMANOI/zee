@@ -1,6 +1,6 @@
 # Procedure-document and plugin-definition checks (G217–G220) — design and verification record
 
-Date: 2026-10-20. Branch `feat/instruction-doc-checks-20261020` (on top of `feat/tamper-plugin-checks-20261020`; not pushed, not merged).
+Date: 2026-10-20. Branch `feat/instruction-doc-checks-20261020` (on top of `feat/tamper-plugin-checks-20261020`); included in v0.16.0.
 Code: `src/zee/gate/instructions.py` (called from `tampering.scan_tree`, so files are read once). Tests: `tests/test_gate_instructions.py`. User-facing table: `docs/gate.md`.
 
 ## What was looked at

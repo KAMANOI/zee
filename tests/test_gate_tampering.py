@@ -251,3 +251,23 @@ def test_g215_many_hits_stay_fast(tmp_path):
     t0 = time.time()
     _scan(tmp_path, {"p.js": body})
     assert time.time() - t0 < 10
+
+
+# ---- regressions from the v0.16.0 release review (Codex round 1) ----------
+
+def test_g212_copy_out_of_a_package_is_not_a_write_into_it(tmp_path):
+    by, _ = _scan(tmp_path, {
+        "a.js": "fs.copyFileSync('node_modules/pkg/logo.svg', 'dist/logo.svg');\n",
+        "b.js": "const src = path.join('node_modules', 'pkg', 'logo.svg');\nfs.copyFileSync(src, 'dist/logo.svg');\n",
+        "c.sh": "cp -r node_modules/pkg/assets dist/\n",
+    })
+    assert "G212" not in by
+    by, _ = _scan(tmp_path / "into", {"a.js": "fs.copyFileSync('patched.js', 'node_modules/pkg/index.js');\n"})
+    assert by["G212"].severity.value == "high"
+    by, _ = _scan(tmp_path / "unknown", {"a.js": "const d = path.join('node_modules', 'pkg');\nfs.cpSync(a, b);\n"})
+    assert by["G212"].severity.value == "medium"
+
+
+def test_g214_call_word_inside_plain_text_is_not_a_call(tmp_path):
+    by, _ = _scan(tmp_path, {"a.py": 'system_prompt = "Explain how decrypt(data) works."\n'})
+    assert "G214" not in by

@@ -109,10 +109,10 @@ v0.16.0 adds three groups of checks (all read-only, nothing is run; each flag ma
 | Group | Codes | What gets flagged |
 |---|---|---|
 | Agent tool and sandbox configuration | G205–G211, G602 | values passed to a shell without quoting, a custom-defined screen tool, schema / handler mismatch, interpreters in a command allowlist, log-only network policy, passwordless sudo / VNC, procedures that read a secret file's contents |
-| Tampering plugins | G212–G216 | writing into another package (HIGH), re-applying on every start, an injected prompt that is not readable as plain text (HIGH), patching another plugin's folder, documentation addressed to an AI assistant |
+| Tampering plugins | G212–G216 | writing into another package (HIGH), re-applying on every start, a prompt set next to a decrypt call, a long encoded string, an encrypted file or a network fetch (HIGH; a plain prompt can be flagged too), patching another plugin's folder, documentation addressed to an AI assistant |
 | Procedures that change the AI's own setup | G217–G220 | instructions to register a remote MCP server, instructions to write to an AI / developer tool config file, a plugin definition declaring a remote server, a browser started with its sandbox off |
 
-Everything that is not HIGH is MEDIUM (G206 and G207 are LOW). One MEDIUM flag blocks `--promote-to`, and three MEDIUM flags add up to HIGH. The checks read line layout and names, so a deliberate rewrite gets past them; the limits of each group are in [docs/gate.md](./docs/gate.md). **Something that passed on v0.15.0 can be MEDIUM or HIGH after upgrading** (for example, a patch-package style tool that writes into `node_modules` is flagged G212 by design).
+Everything that is not HIGH is MEDIUM (G206 and G207 are LOW). One MEDIUM flag blocks `--promote-to`, and three MEDIUM flags add up to HIGH. The checks read line layout and names, so a deliberate rewrite gets past them; the limits of each group are in [docs/gate.md](./docs/gate.md). **Something that passed on v0.15.0 can be MEDIUM or HIGH after upgrading** (for example, a patch-package style tool that writes into `node_modules` is flagged G212, and an agent that loads its system prompt over the network at run time is flagged G214; both are HIGH by design).
 
 ---
 

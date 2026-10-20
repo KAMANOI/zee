@@ -24,7 +24,8 @@ releases.
   Design, limits and what was left out: `docs/design/agent-config-checks.md`.
 - **Tampering-plugin checks in `zee gate`** (static): `G212` (HIGH) code that
   writes over, renames or links a file next to a line naming another package
-  (`node_modules`, `site-packages`), `G213` (MEDIUM) an "apply on every start"
+  (`node_modules`, `site-packages`; a copy whose direction cannot be told is
+  MEDIUM, a copy out of a package is not flagged), `G213` (MEDIUM) an "apply on every start"
   setting or function, `G214` (HIGH) agent-instruction text set next to a
   decrypt call, a long encoded string, an encrypted prompt file or a network
   fetch, `G215` (MEDIUM) code that names an agent's plugin / extension
@@ -46,8 +47,9 @@ releases.
   the artifact is safe. Limits per group are in `docs/gate.md`.
 - **Upgrading can change existing gate results.** G212 / G214 are HIGH, so an
   artifact that passed `fail-on: high` on v0.15.0 can now fail (for example a
-  patch-package style tool that writes into `node_modules` is flagged G212 by
-  design). Any new MEDIUM flag blocks `--promote-to`, and MEDIUM flags add up
+  patch-package style tool that writes into `node_modules` is flagged G212, and
+  an agent that loads its system prompt over the network at run time is flagged
+  G214, both by design). Any new MEDIUM flag blocks `--promote-to`, and MEDIUM flags add up
   (three of them reach HIGH).
 
 ## [0.15.0] — 2026-10-17
