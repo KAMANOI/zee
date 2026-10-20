@@ -62,7 +62,7 @@ findings can add up to a HIGH verdict. **Use `fail-on: medium` if any
 paraphrased injection should fail CI.** Quoting a
 payload or adding words such as "payload" does not lower either tier.
 
-## Agent tool and sandbox configuration (G205–G211, G602)
+## Agent tool and sandbox configuration (G205–G211, G602, G603)
 
 Some artifacts are not malicious but show an unsafe way to wire an agent's
 tools or containment, and copying them copies the weakness. These checks read
@@ -78,6 +78,7 @@ the configuration; they never run it.
 | G210 | MEDIUM | `NOPASSWD` sudo rules. |
 | G211 | MEDIUM | `x11vnc` started without a password option, or `-nopw` / `-SecurityTypes None`. Package-install lines are not flagged. |
 | G602 | MEDIUM | `cat` / `head` / `grep` (without `-q` / `-c` / `-l`) or "read/print the …" on `.env`, `.aws/credentials`, `.ssh/id_*`, `.npmrc`, `.pypirc`, `.netrc`. Lines that say *never / do not / without*, public keys (`id_*.pub`) and `.env.example` / `.sample` / `.template` are not flagged. |
+| G603 | MEDIUM | A provider API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) or `AWS_SECRET_ACCESS_KEY` handed as it is to a container: Dockerfile `ENV` / `ARG`, `docker|podman run -e NAME`, or a compose `environment:` entry. Judged by variable name and line shape only — where the value comes from is not followed, and `.md` / `.txt` / test files are skipped. Suggestion: give the sandbox only a short-lived, session-scoped credential. (Swapping in real keys at the edge is deliberately not part of Zee: it would make Zee hold real keys.) |
 
 Limits, stated plainly: these are heuristics, one flag per code per file. Files over 2 MiB get G910 from the main pass; a Python file too deeply nested to walk gets G911. The line patterns are easy to evade on purpose (renamed variables, split expressions, unusual layout); they find the common honest mistakes, not a determined author.
 Python files are parsed one at a time (only a summary of each file's functions is kept); a file too deep or too large to parse, or text beyond 256 MiB for the whole tree, gets G911 (the inspection becomes `partial`, never a silent pass). Data flow across files is followed by function name only (calls on `subprocess` / `asyncio` / `os` and similar standard modules are not matched to a same-named helper); only the first positional argument of a shell call is read, so a command passed as a keyword (`subprocess.run(args=..., shell=True)`) is not seen; a value validated

@@ -15,6 +15,12 @@ releases.
   cut off after importing is HIGH + partial, safetensors / GGUF format breaks are HIGH, `auto_map`
   and companion code are MEDIUM / HIGH, and `G225` joins the gap codes (exit 3). Manifests and the
   tree hash are now read with a size cap / in chunks. See `docs/gate.md`, `docs/design/model-file-checks.md`.
+- `zee gate` `G603` (MEDIUM): a provider / cloud root API key passed whole into a
+  container (Dockerfile `ENV`/`ARG`, `docker run -e`, compose `environment:`).
+- `zee doctor` reads (never writes) the egress-cut rules (pf anchor on macOS, nft
+  table / iptables chain on Linux) and reports drift from the cut record or from the
+  shape Zee loads. A shape check only: no approved-destination list exists yet, other
+  software's rules are not inspected, Windows is not checked.
 
 ## [0.16.0] — 2026-10-20
 

@@ -22,6 +22,10 @@ from .config.schema import Config, duplicate_decoys
 from .decoy.canary_token import normalize_base_url
 from .errors import ZeeError
 from .recovery.auth import default_token_path
+from .responder.cut_egress import (PF_ANCHOR, _ABSENT, _iptables_chain_structure, _lines,
+                                   _nft_structure, _pf_block_rule)
+from .responder.cut_full import _run, sbin_which
+from .telemetry.cut_state import CutStateLog
 from .telemetry.events_log import default_log_dir
 
 _LOOSE = stat.S_IWGRP | stat.S_IWOTH
@@ -64,8 +68,36 @@ def _synced(p: Path) -> Optional[str]:
     return next((n for n in _SYNCED if n in rel.parts), None)
 
 
+def _egress_state() -> dict[str, str]:
+    """Read (never write) the egress-cut rules Zee loads, per backend:
+    "present" (the shape Zee loads), "absent", "unexpected" (there, but not that shape) or
+    "unreadable" (tool missing or needs admin rights). macOS / Linux only."""
+    if sys.platform == "darwin":
+        checks = [("pf", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule)]
+    elif sys.platform.startswith("linux"):
+        checks = [("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure),
+                  ("iptables", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure)]
+    else:
+        return {}
+    res: dict[str, str] = {}
+    for name, cmd, shape in checks:
+        exe = sbin_which(cmd[0])
+        if exe is None:
+            continue
+        ok, out = _run([exe, *cmd[1:]])
+        if ok and not _lines(out):
+            res[name] = "absent"
+        elif ok:
+            res[name] = "present" if shape(out, set()) == "confirmed" else "unexpected"
+        elif any(a in out for a in _ABSENT):
+            res[name] = "absent"
+        else:
+            res[name] = "unreadable"
+    return res
+
+
 def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
-        out=None) -> int:
+        egress: Callable[[], dict[str, str]] = _egress_state, out=None) -> int:
     out = out or sys.stdout
     counts = {"OK": 0, "WARN": 0, "FAIL": 0, "INFO": 0}
     posix = sys.platform != "win32"
@@ -272,6 +304,38 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
                 "run watch as root, or use [privsep] (docs/design/privsep.md)")
         else:
             say("OK", "cut privileges", "running as root")
+
+    # --- egress rules vs the cut record (read-only; light drift check) ------
+    # ponytail: compares what is loaded with the shape Zee itself loads and with the cut record;
+    # there is no stored list of approved destinations yet (egress approval is not wired),
+    # and rules from other software are not inspected. Windows is not checked.
+    states = egress()
+    if states:
+        bad = sorted(k for k, v in states.items() if v == "unexpected")
+        on = sorted(k for k, v in states.items() if v == "present")
+        recorded = None
+        if cfg is not None:
+            try:
+                recorded = any((r := CutStateLog().unresolved_for(a.id)[0]) is not None
+                               and r.method == "egress" for a in cfg.assets)
+            except (OSError, ValueError):
+                recorded = None
+        if bad:
+            say("WARN", "egress rules", f"{', '.join(bad)}: Zee's cut rules are there but not in the "
+                "shape Zee loads (changed by hand or by other software?)",
+                "inspect them, then `zee restore` to remove Zee's rules")
+        elif on and recorded is False:
+            say("WARN", "egress rules", f"Zee cut rules are in force ({', '.join(on)}) but the cut "
+                "record has no open egress cut", "zee restore   (if you did not cut on purpose)")
+        elif not on and recorded and "unreadable" not in states.values():
+            say("WARN", "egress rules", "the cut record says an egress cut is open but no Zee rules "
+                "are loaded", "zee restore   (closes the record)")
+        elif "unreadable" in states.values():
+            say("INFO", "egress rules", "not checked: reading firewall rules needs admin rights "
+                "or the tool is not usable (run `sudo zee doctor` to include it)")
+        else:
+            say("OK", "egress rules", "no drift found between loaded cut rules and the cut record "
+                "(shape check only; not a proof of what traffic is allowed)")
 
     emit(f"summary: {counts['FAIL']} fail, {counts['WARN']} warn, {counts['OK']} ok, "
           f"{counts['INFO']} info")

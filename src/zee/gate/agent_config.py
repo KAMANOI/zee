@@ -16,6 +16,7 @@ Flag codes:
     G209  network policy only logs (audit) or allows wildcard hosts/paths
     G210  passwordless sudo
     G211  screen sharing (VNC) without a password
+    G603  a provider / cloud root API key handed whole to a container
     G602  a procedure reads the *contents* of a secret file
 
 Best-effort heuristics (invariant I5): a flag means "look here", a clean
@@ -461,6 +462,40 @@ def _shellish(rel: str, text: str) -> list[Flag]:
     return out
 
 
+# --- G603: a provider / cloud root key handed whole to a container --------------
+
+_KEYNAME = (r"(?:ANTHROPIC|OPENAI|GEMINI|GOOGLE|XAI|MISTRAL|DEEPSEEK|COHERE)_(?:ADMIN_)?API_KEY|"
+            r"ANTHROPIC_ADMIN_KEY|AWS_SECRET_ACCESS_KEY")
+_G603_DOCKERFILE = re.compile(r"^\s*(?:ENV|ARG)\s+(?:" + _KEYNAME + r")(?![\w])", re.I)
+_G603_RUN = re.compile(r"\b(?:docker|podman|nerdctl)\b[^\n]{0,200}?\brun\b[^\n]*?"
+                       r"(?:-e|--env)[ =]+[\"']?(?:" + _KEYNAME + r")(?![\w])")
+_G603_COMPOSE = re.compile(r"^\s*(?:-\s*)?[\"']?(?:" + _KEYNAME + r")[\"']?\s*(?:[:=]\s*\S|$)")
+_G603_NEG = re.compile(r"\b(?:never|do not|don't|dont|must not|avoid)\b|^\s*#|\.example\b", re.I)
+_G603_SUFFIX = {".sh", ".bash", ".zsh", ".yaml", ".yml", ""}
+
+
+def _g603(rel: str, text: str) -> Flag | None:
+    """Flag the first place an organisation-level key goes into a container as it is. A short-lived,
+    session-only credential (given on stdin or as a mounted secret) limits what a hijacked agent
+    can take. Judged by variable name and shape only: it does not see where the value comes from."""
+    name = Path(rel).name
+    dockerfile = name.startswith("Dockerfile")
+    suf = Path(rel).suffix.lower()
+    if _is_test(rel) or not (dockerfile or suf in _G603_SUFFIX):
+        return None
+    compose = suf in {".yaml", ".yml"} and re.search(r"^services\s*:", text, re.M) is not None
+    for n, line in _logical_lines(text):
+        if _G603_NEG.search(line):
+            continue
+        if (dockerfile and _G603_DOCKERFILE.search(line)) or _G603_RUN.search(line) \
+                or (compose and _G603_COMPOSE.search(line)):
+            return _flag(Severity.MEDIUM, "G603",
+                         "an organisation-level API key is passed whole into a container "
+                         "(a hijacked agent can take it; give the sandbox only a short-lived, "
+                         "session-scoped credential)", rel, n, line)
+    return None
+
+
 # --- G207: tool schema vs handler parameters --------------------------------
 
 _HANDLERS = ("execute", "__call__", "run", "call", "handle", "invoke")
@@ -657,4 +692,5 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
         if suf in _SHELLISH or Path(rel).name.startswith("Dockerfile"):
             for f in _shellish(rel, text):
                 add(f, rel)
+            add(_g603(rel, text), rel)
     return flags
