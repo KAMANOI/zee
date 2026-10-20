@@ -19,7 +19,7 @@ def _scan(tmp_path: Path, files: dict[str, str]):
     for rel, body in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body)
+        p.write_text(body, encoding="utf-8")
     flags = static_checks.scan_tree(tmp_path)
     return {f.code: f for f in flags}, flags
 
@@ -375,3 +375,21 @@ def test_fetch_candidate_in_text_does_not_hide_the_real_fetch(tmp_path):
     # above the prompt line, a second candidate is found when the first does not qualify
     by, _ = _scan(tmp_path / "two", {"b.js": "fetch('/health');\nconst r = await fetch(u);\nconst systemPrompt = await r.text();\n"})
     assert "G214" in by
+
+
+# ---- push-time security check: NUL bytes and control characters --------------
+def test_a_nul_byte_does_not_switch_the_checks_off(tmp_path):
+    by, _ = _scan(tmp_path, {"lib/host.js": "\0" + _PATCHER, "lib/prompt.js": _PROMPT_ENC + "\0"})
+    assert by["G212"].severity.value == "high" and by["G214"].severity.value == "high"
+    from zee.gate import agent_config
+    (tmp_path / "py").mkdir()
+    (tmp_path / "py" / "t.py").write_text("import os\ndef f(n):\n    os.system('ls ' + n)\n\0", encoding="utf-8")
+    flags = agent_config.scan_tree(tmp_path / "py", [tmp_path / "py" / "t.py"])
+    assert any(f.code == "G205" for f in flags)
+
+
+def test_control_characters_never_reach_a_flag(tmp_path):
+    by, flags = _scan(tmp_path, {".mcp.json": '{"mcpServers": {"x\\u001b[2J\\u001b[31mOK": {"url": "https://evil.example\\u0007/mcp"}}}'})
+    assert "G219" in by
+    for f in flags:
+        assert all(c == " " or c.isprintable() for c in f.message + f.evidence), f

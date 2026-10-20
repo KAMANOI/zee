@@ -20,7 +20,9 @@ Two more codes mean the gate could not vouch for the artifact:
 | `4` | **No verdict**: the inspection failed (missing source, unreadable file, internal error, promotion failed). |
 
 Binary files (images, archives: anything containing NUL bytes) are outside the
-text scan and are not counted as gaps. Text files are scanned whatever their
+text scan and are not counted as gaps. Inside a file with a text suffix (or a script starting with `#!`), a NUL byte
+is read as a space, so it does not switch any check off. Control characters (ANSI escapes, CR, BEL)
+quoted from the artifact are removed from every flag's message and evidence, in the terminal and in `--json`. Text files are scanned whatever their
 extension.
 
 `--json` reports the two axes separately: `inspection.status`

@@ -327,7 +327,7 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
                 flags.append(f)
 
     for p in paths:
-        rel = str(p.relative_to(root))
+        rel = p.relative_to(root).as_posix()
         if _OPAQUE_FILE.search(p.name):
             add([Flag(Severity.HIGH, "G214",
                       "ships a file named like an encrypted / sealed prompt (prompt*.enc / .sealed / .gpg ...); its content is not shown in plain text",
@@ -342,7 +342,11 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
         except (OSError, MemoryError):
             continue
         if "\0" in text:
-            continue
+            # a NUL in a text file must not switch the checks off (one byte would hide the file);
+            # only an extensionless file that is not a script is treated as binary, as in the main pass
+            if p.suffix == "" and not text.startswith("#!"):
+                continue
+            text = text.replace("\0", " ")
         lines, nums = [], []
         for n, ln in enumerate(text.splitlines(), 1):
             if len(ln) <= _LONG:

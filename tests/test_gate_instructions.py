@@ -18,7 +18,7 @@ def _scan(tmp_path: Path, files: dict[str, str]):
     for rel, body in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body)
+        p.write_text(body, encoding="utf-8")
     return {f.code: f for f in static_checks.scan_tree(tmp_path)}
 
 

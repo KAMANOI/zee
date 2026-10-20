@@ -64,6 +64,11 @@ class Severity(str, Enum):
         return {"low": 1, "medium": 4, "high": 10}[self.value]
 
 
+def printable(s: str) -> str:
+    """Keep spaces and printable characters; drop control and other non-printable ones."""
+    return "".join(c for c in s if c == " " or c.isprintable())
+
+
 @dataclass(frozen=True)
 class Flag:
     """A single finding. `code` (G1xx..G9xx) makes user reports precise
@@ -75,6 +80,13 @@ class Flag:
     code: str
     message: str
     evidence: str = ""
+
+    def __post_init__(self) -> None:
+        # message / evidence quote the inspected artifact (file names, server names, lines):
+        # attacker-chosen text. Control characters (ANSI escapes, CR, BEL) are removed here, for
+        # every flag, so no output path (terminal or --json) can be spoofed by them.
+        object.__setattr__(self, "message", printable(self.message))
+        object.__setattr__(self, "evidence", printable(self.evidence))
 
     def to_dict(self) -> dict[str, Any]:
         return {

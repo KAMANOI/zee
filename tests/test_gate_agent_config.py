@@ -19,7 +19,7 @@ def _scan(tmp_path: Path, files: dict[str, str]) -> dict[str, list[str]]:
     for rel, body in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body)
+        p.write_text(body, encoding="utf-8")
     out: dict[str, list[str]] = {}
     for f in static_checks.scan_tree(tmp_path):
         out.setdefault(f.code, []).append(f.evidence)
@@ -110,7 +110,7 @@ def test_python_adversarial_shapes_stay_fast_and_do_not_crash(tmp_path):
     selfref = "import os\ndef g(t, c):\n" + "    c = f'{c} {t}'\n" * n + "    os.system(c)\n"
     deep = "def h(x):\n    return f'{" + "+".join(["x"] * 1500) + "}'\n"
     for name, body in (("chain", chain), ("selfref", selfref), ("deep", deep)):
-        (tmp_path / f"{name}.py").write_text(body)
+        (tmp_path / f"{name}.py").write_text(body, encoding="utf-8")
     t = time.perf_counter()
     got = _scan(tmp_path, {})
     assert time.perf_counter() - t < 5.0
@@ -302,7 +302,7 @@ def test_g210_g211(tmp_path):
 def test_flags_reach_the_verdict(tmp_path):
     from zee.gate.inspector import inspect_source
     (tmp_path / "src").mkdir()
-    (tmp_path / "src" / "SKILL.md").write_text("# s\n")
+    (tmp_path / "src" / "SKILL.md").write_text("# s\n", encoding="utf-8")
     (tmp_path / "src" / "t.py").write_text(
         "import os\ndef f(n):\n    os.system('ls ' + n)\n")
     v = inspect_source(tmp_path / "src", kind="skill", quarantine_base=tmp_path / "q")
@@ -310,7 +310,7 @@ def test_flags_reach_the_verdict(tmp_path):
     assert v.risk_level.value == "MEDIUM"
 
 
-@pytest.mark.parametrize("body", [
+_ADVERSARIAL = [
     "cat " * 20000,
     "x11vnc " * 20000,
     "host: " + "*" * 100000,
@@ -318,14 +318,28 @@ def test_flags_reach_the_verdict(tmp_path):
     "allowed_hosts: " + "a*" * 50000,
     "- " * 100000,
     "allowedCommands = [" + "a" * 100000,
-])
+]
+
+
+# short ids: the full body as a test id goes into PYTEST_CURRENT_TEST, which Windows caps at 32,767 characters
+@pytest.mark.parametrize("body", _ADVERSARIAL, ids=[f"adv{i}" for i in range(len(_ADVERSARIAL))])
 def test_adversarial_lines_stay_fast(tmp_path, body):
-    (tmp_path / "p.yaml").write_text("network_policies:\n" + body + "\n")
-    (tmp_path / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + body[:1500] + "\n") * 300)
-    (tmp_path / "s.sh").write_text(body + "\n" + (body + " \\\n") * 25)
-    t = time.perf_counter()
-    static_checks.scan_tree(tmp_path)
-    assert time.perf_counter() - t < 3.0
+    # What this guards is the growth, not the machine: a quadratic regression (as found and fixed
+    # in review: 16,000 lines took 14 s) shows as a ratio, while runner speed varies. GitHub runners
+    # took 3.0-5.0 s for the largest case (2026-10-20, all OSes) where a 2021 MacBook Pro takes 2.4 s,
+    # so the absolute cap is about twice the slowest runner.
+    def run(b: str, d: Path) -> float:
+        d.mkdir()
+        (d / "p.yaml").write_text("network_policies:\n" + b + "\n", encoding="utf-8")
+        (d / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + b[:1500] + "\n") * 300,
+                                encoding="utf-8")
+        (d / "s.sh").write_text(b + "\n" + (b + " \\\n") * 25, encoding="utf-8")
+        t = time.perf_counter()
+        static_checks.scan_tree(d)
+        return time.perf_counter() - t
+    one, two = run(body[:len(body) // 2], tmp_path / "half"), run(body, tmp_path / "full")
+    assert two < 10.0
+    assert two < 3 * one + 0.5  # doubling the input must not much more than double the time
 
 
 def test_review_round2_cases(tmp_path):
@@ -371,3 +385,10 @@ def test_g205_stdlib_call_does_not_spread_a_helper_name(tmp_path):
         "def clone(path):\n    subprocess.run(['git', 'clone', path])\n"
         "def g(x):\n    clone(f'/tmp/{x}')\n")})
     assert "G205" not in got
+
+
+def test_windows_separators_are_test_paths_and_evidence_is_posix(tmp_path):
+    from zee.gate.agent_config import _is_test
+    assert _is_test("tests\\test_x.py") and _is_test("pkg\\__tests__\\a.js")
+    got = _scan(tmp_path, {"tools/run.py": _RUN, "tools/tool.py": _UNSAFE_TOOL})
+    assert all("\\" not in e for e in got["G205"])

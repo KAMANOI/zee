@@ -541,7 +541,7 @@ def _python_flags(rel: str, tree: ast.AST, helpers: set[str]) -> list[Flag]:
 
 
 def _is_test(rel: str) -> bool:
-    parts = rel.lower().split("/")
+    parts = rel.lower().replace("\\", "/").split("/")
     return any(x in ("test", "tests", "__tests__") for x in parts[:-1]) \
         or parts[-1].startswith(("test_", "conftest")) or ".test." in parts[-1]
 
@@ -584,15 +584,19 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
                 flags.append(Flag(Severity.LOW, "G911",
                                   "tree too large to hold for agent-config checks; "
                                   "this file was not inspected",
-                                  evidence=str(p.relative_to(root))))
+                                  evidence=p.relative_to(root).as_posix()))
                 continue
             text = p.read_text(encoding="utf-8", errors="ignore")
             held += size
         except (OSError, MemoryError):
             continue
         if "\0" in text:
-            continue
-        rel = str(p.relative_to(root))
+            # a NUL in a text file must not switch the checks off (one byte would hide the file);
+            # only an extensionless file that is not a script is treated as binary, as in the main pass
+            if p.suffix == "" and not text.startswith("#!"):
+                continue
+            text = text.replace("\0", " ")
+        rel = p.relative_to(root).as_posix()
         texts[rel] = text
         if suf in _PY:
             # one tree at a time: only the call-graph summary is kept, so memory does not grow

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .model import Flag, Severity
+from .model import Flag, Severity, printable
 
 # Map external severities (lowercased) onto Zee's three levels.
 _SEVERITY = {
@@ -39,7 +39,7 @@ def _sanitize(s: str) -> str:
     # An imported report is attacker-influenced text; strip control chars
     # (ANSI escapes / CR / BEL) so it can't spoof or corrupt the terminal
     # when the verdict is rendered. Keep spaces, drop the rest non-printable.
-    return "".join(c for c in s if c == " " or c.isprintable())
+    return printable(s)
 
 
 def _flag(tool: str, rule: str, sev: Severity, message: str, loc: str) -> Flag:

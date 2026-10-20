@@ -40,6 +40,12 @@ releases.
   its sandbox or web protections turned off. Design and verification record:
   `docs/design/instruction-doc-checks.md`.
 
+### Changed
+
+- Control characters quoted from an inspected artifact are removed from every
+  flag's message and evidence (before: only imported scanner results), so a
+  file or server name cannot rewrite the terminal output.
+
 ### Notes
 
 - These checks are line and syntax heuristics. They point a person at places
