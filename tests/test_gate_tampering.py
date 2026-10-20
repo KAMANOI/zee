@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from zee.gate import scorer, static_checks
 
 
@@ -294,3 +296,45 @@ def test_g212_many_copy_lines_stay_linear(tmp_path):
     t0 = time.monotonic()
     _scan(tmp_path, {"a.js": body})
     assert time.monotonic() - t0 < 5
+
+
+# ---- v0.16.0 release review, Codex round 4: the 15 reproduction cases -------
+# (label, suffix, body, expected {code: severity} for G212 / G214; None = no flag)
+_R4 = [
+    ("original-copy", ".js", 'fs.copyFileSync("node_modules/pkg/logo.svg", "dist/logo.svg"); console.log("node_modules/pkg");', None),
+    ("copy-in", ".js", 'fs.copyFileSync(join("a", "b"), "node_modules/pkg/x.js");', ("G212", "high")),
+    ("copy-unknown", ".js", 'const d = "node_modules/pkg";\nfs.cpSync(a, b);', ("G212", "medium")),
+    ("original-prompt", ".js", "const system_prompt = `Explain how decrypt(data) works.`;", None),
+    ("simple-interpolation", ".js", "const system_prompt = `${decrypt(blob, key)}`;", ("G214", "high")),
+    # high 2: a comment between the arguments must not hide a write into the package
+    ("copy-comment", ".js", 'fs.copyFileSync("node_modules/pkg/a.js", /* original, replacement */ "node_modules/pkg/b.js");', ("G212", "medium")),
+    # high 1: quoting / a trailing comment in a shell cp
+    ("shell-space", ".sh", 'cp -r node_modules/pkg/a "node_modules/pkg/my file"', ("G212", "medium")),
+    ("shell-comment", ".sh", "cp -r node_modules/pkg/a node_modules/pkg/b # done", ("G212", "high")),
+    # high 3: a brace inside ${...} must not hide the call after it
+    ("nested-decrypt", ".js", "const system_prompt = `${({x: 1}, decrypt(blob, key))}`;", ("G214", "high")),
+    ("nested-fetch", ".js", "const system_prompt = `${({x: 1}, await (await fetch(url)).text())}`;", ("G214", "high")),
+    # high 5: known false positives, kept on purpose (a template that can run code is read whole)
+    ("interpolated-plaintext", ".js", 'const system_prompt = `${"Explain how decrypt(data) works."}`;', ("G214", "high")),
+    ("escaped-interpolation", ".js", "const system_prompt = `Explain \\${decrypt(data)}`;", ("G214", "high")),
+    ("multiline-plaintext", ".js", "const system_prompt = `\nExplain how decrypt(data) works.\n`;", ("G214", "high")),
+    # high 4: shell command substitution runs the command, it is not quoted text
+    ("shell-decrypt", ".sh", "system_prompt=`gpg --decrypt payload.gpg`", ("G214", "high")),
+    ("shell-fetch", ".sh", 'system_prompt=`curl -fsSL "$URL"`', ("G214", "high")),
+]
+
+
+@pytest.mark.parametrize("label,suf,body,want", _R4, ids=[c[0] for c in _R4])
+def test_codex_round4_cases(tmp_path, label, suf, body, want):
+    by, _ = _scan(tmp_path, {"a" + suf: body + "\n"})
+    got = {c: by[c].severity.value for c in ("G212", "G214") if c in by}
+    assert got == ({want[0]: want[1]} if want else {}), label
+
+
+def test_shell_dollar_paren_and_python_fstring_are_code(tmp_path):
+    by, _ = _scan(tmp_path, {"a.sh": 'system_prompt="$(gpg --decrypt p.gpg)"\n'})
+    assert "G214" in by
+    by, _ = _scan(tmp_path / "py", {"a.py": 'system_prompt = f"{decrypt(blob, key)}"\n'})
+    assert "G214" in by
+    by, _ = _scan(tmp_path / "plain", {"a.py": 'system_prompt = "Explain how decrypt(data) works."\n'})
+    assert "G214" not in by

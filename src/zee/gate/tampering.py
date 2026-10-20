@@ -62,14 +62,21 @@ _WRITE_SH = re.compile(r"\b(?:cp|mv|ln)\s+-?\w*\s")  # shell verbs: too common a
 _COPY = re.compile(r"copy|cpSync|(?:^|\.)cp\b|^cp\s")  # a write match that is a copy (source, destination)
 _ASSIGNED = re.compile(r"^\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=(?!=)")
 _STR = re.compile(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`")  # quoted text on one line
-_INTERP = re.compile(r"\$\{([^}]*)\}")
+_UNQUOTE_SUFFIX = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py"}  # never shell: `...` / $() run commands
 _BACKUP = re.compile(r"\.(?:[A-Za-z0-9_-]+\.)?(?:bak|orig|backup|original)\b|[_-](?:bak|orig|backup)\b",
                      re.I)
 
 
 def _unquote(line: str) -> str:
-    """The line with quoted text emptied; a template literal keeps only its ${...} parts."""
-    return _STR.sub(lambda m: " ".join(_INTERP.findall(m.group(0))) if m.group(0)[0] == "`" else '""', line)
+    """JS / Python line with plain quoted text emptied. A string that can run code inside it
+    (a template literal with `${`, an f-string with `{`) is kept whole: reading it as code may
+    flag plain text, but never hides a call."""
+    def sub(m: re.Match[str]) -> str:
+        q = m.group(0)
+        if q[0] == "`":
+            return q if "${" in q else '""'
+        return q if "{" in q and "f" in line[max(0, m.start() - 2):m.start()].lower() else '""'
+    return _STR.sub(sub, line)
 
 
 # --- G213: re-apply on every start ----------------------------------------
@@ -169,7 +176,10 @@ def _copy_args(line: str, end: int, shell: bool) -> tuple[str, str] | None:
     told from this line. Arguments are split at top-level commas (quotes and brackets
     respected), so text after the call on the same line is not read as an argument."""
     if shell:
-        toks = [x for x in re.split(r"[;&|]", line[end:], maxsplit=1)[0].split() if not x.startswith("-")]
+        seg = re.split(r"\s#", re.split(r"[;&|]", line[end:], maxsplit=1)[0], maxsplit=1)[0]
+        if re.search(r"['\"`\\]|\$\(", seg):
+            return None  # quoting, escapes or substitution: the words cannot be told apart safely
+        toks = [x for x in seg.split() if not x.startswith("-")]
         return (toks[0], toks[-1]) if len(toks) >= 2 else None
     m = re.compile(r"[\w$.]*\s*\(").match(line, end)  # `end` = where the call name starts
     if not m:
@@ -181,6 +191,8 @@ def _copy_args(line: str, end: int, shell: bool) -> tuple[str, str] | None:
             esc, quote = (False, quote) if esc else (ch == "\\", "" if ch == quote else quote)
         elif ch in "'\"`":
             quote = ch
+        elif rest.startswith(("/*", "//"), i) or ch == "#":
+            return None  # a comment inside the call: its commas are not argument breaks
         elif ch in "([{":
             depth += 1
         elif ch in ")]}":
@@ -266,8 +278,8 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                                    (_OPAQUE_REF, "a reference to an encrypted / sealed prompt file", 6),
                                    (_FETCH, "a network fetch", 2)):
                 # a call word inside quoted text ("explain how decrypt(x) works") is not a call
-                other = _hits([_unquote(x) for x in lines] if pat in (_DECRYPT, _FETCH) else lines,
-                              pat, None, False)
+                quoted = pat in (_DECRYPT, _FETCH) and suf in _UNQUOTE_SUFFIX
+                other = _hits([_unquote(x) for x in lines] if quoted else lines, pat, None, False)
                 p = None
                 if pat is _FETCH:
                     # same line, or just above and the prompt line takes a value (await / .text / .json ...)
