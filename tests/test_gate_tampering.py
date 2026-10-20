@@ -355,3 +355,12 @@ _R5 = [
 def test_codex_round5_cases(tmp_path, label, suf, body, want):
     by, _ = _scan(tmp_path, {"a" + suf: body + "\n"})
     assert (by["G214"].severity.value if "G214" in by else None) == want, label
+
+
+def test_call_inside_a_string_that_spans_lines_is_not_hidden(tmp_path):
+    by, _ = _scan(tmp_path, {"a.py": 'system_prompt = f"""\nSay "{decrypt(blob, key)}" first.\n"""\n'})
+    assert by["G214"].severity.value == "high"
+    by, _ = _scan(tmp_path / "js", {"a.js": 'const system_prompt = `\nSay "${decrypt(blob, key)}" first.\n`;\n'})
+    assert by["G214"].severity.value == "high"
+    by, _ = _scan(tmp_path / "js2", {"a.js": "const system_prompt = `\nSay 'x' ${decrypt(blob, key)}\n`;\n"})
+    assert by["G214"].severity.value == "high"

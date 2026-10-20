@@ -271,13 +271,16 @@ def _code_flags(rel: str, lines: list[str], nums: list[int], suf: str) -> list[F
                                    rel, nums[i], lines[i]))
                 break
         sink = _hits(lines, _SINK, None, False)
+        # a string that spans lines (triple quotes, an unclosed backquote) cannot be followed line by
+        # line: then nothing in the file is unquoted, so a call inside such a string is never hidden
+        multiline = any('"""' in x or "'''" in x or x.count("`") % 2 for x in lines)
         if sink:
             # window per kind: a fetch only counts when its result can reach the prompt line
             for pat, what, win in ((_DECRYPT, "a decrypt call", 4), (_BLOB, "a 200+ character encoded string", 4),
                                    (_OPAQUE_REF, "a reference to an encrypted / sealed prompt file", 6),
                                    (_FETCH, "a network fetch", 2)):
                 # a call word inside quoted text ("explain how decrypt(x) works") is not a call
-                quoted = pat in (_DECRYPT, _FETCH) and suf in _UNQUOTE_SUFFIX
+                quoted = pat in (_DECRYPT, _FETCH) and suf in _UNQUOTE_SUFFIX and not multiline
                 other = _hits([_unquote(x) for x in lines] if quoted else lines, pat, None, False)
                 p = None
                 if pat is _FETCH:
