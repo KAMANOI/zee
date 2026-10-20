@@ -470,7 +470,7 @@ def test_nul_is_found_or_reported_never_silent(tmp_path, name):
     body, code = _NUL_CASES[name]
     clean, _ = _scan(tmp_path / "clean", {name: body.replace("\0", "")})
     assert code in clean  # the case is a real detection without the NUL
-    by, flags = _scan(tmp_path / "nul", {name: body})
+    by, flags = _scan(tmp_path / "with_nul", {name: body})  # not "nul": a reserved device name on Windows
     assert code in by, [f.code for f in flags]  # every check reads it (NUL removed) ...
     gaps = [f for f in flags if f.code == "G911"]
     named = name in ("Dockerfile", "Makefile", "README", "bin/setup")
@@ -571,7 +571,8 @@ def test_lone_surrogate_name_does_not_crash_the_text_output(tmp_path, capsys):
 def test_audit_rescan_failure_log_is_escaped(tmp_path, monkeypatch, caplog):
     from zee.gate import audit, inspector
     from zee.gate.pins import PinRegistry
-    d = tmp_path / "inst\x1b[2J"; d.mkdir()
+    import os
+    d = tmp_path / ("inst" if os.name == "nt" else "inst\x1b[2J"); d.mkdir()  # Windows forbids controls in names
     (d / "a.txt").write_text("x", encoding="utf-8")
     reg = PinRegistry(tmp_path / "pins.jsonl")
     reg.pin(name="p", kind="package", source="s", content_hash="0" * 64, install_dir=str(d))
