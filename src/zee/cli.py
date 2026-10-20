@@ -645,11 +645,13 @@ def _cmd_gate_add(args: argparse.Namespace) -> int:
         if args.json:
             print(_json.dumps(
                 error_payload(str(args.source), detail),
-                ensure_ascii=False, indent=2,
+                ensure_ascii=True, indent=2,
             ))
         return EXIT_ERROR
     if args.json:
-        print(_json.dumps(verdict.to_dict(), ensure_ascii=False, indent=2))
+        # ASCII-only JSON: every non-ASCII character (C1 controls, U+202E, U+200B ...) is a \u escape,
+        # so --json printed to a terminal cannot rewrite it; json.loads gives the raw values back
+        print(_json.dumps(verdict.to_dict(), ensure_ascii=True, indent=2))
     else:
         print(verdict.to_text())
     if args.promote_to:
@@ -691,7 +693,7 @@ def _cmd_gate_audit(args: argparse.Namespace) -> int:
         PinRegistry(), rescan=args.rescan, behavioral=args.behavioral
     )
     if args.json:
-        print(_json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+        print(_json.dumps(report.to_dict(), ensure_ascii=True, indent=2))
     else:
         print(report.to_text())
     return report.exit_code

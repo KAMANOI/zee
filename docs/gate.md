@@ -24,17 +24,18 @@ on the raw bytes of the first 8 KiB. No NUL byte there: text. A file chosen by i
 Makefile, README*, dotfiles such as `.bashrc` / `.env`) or starting with `#!`: text, whatever it holds. A NUL in
 a file whose suffix any check reads as text (`.py` `.js` `.jsx` `.ts` `.tsx` `.sh` `.json` `.yaml` `.md` `.html`
 ...): the file is still scanned, and it is also reported as G911 (not inspected), because it looks binary and
-the result may be incomplete. Anything else with a NUL (images, archives, and macOS Finder files `.DS_Store` /
-`._*` recognised by their magic bytes) is binary: outside the text scan and not counted as a gap. Every text
+the result may be incomplete. Anything else with a NUL (images, archives) is binary: outside the text scan and not counted as a gap. There
+is no exception by file content (macOS `.DS_Store` / `._*` are dotfiles and are read as text: a magic number
+is as attacker-written as the rest of the file). Every text
 file is read with its NUL bytes removed (anywhere in the file), so a NUL does not switch a check off; a Python
 file that still does not parse after that is reported as G911. A UTF-16 text file (NUL in every other byte)
 is therefore G911 with a text suffix and binary without one: Zee reads UTF-8 only. Text files are scanned
 whatever their extension.
 
 Text quoted from the artifact (file and server names, manifest name, version, capabilities, install hooks,
-flag evidence, imported scanner results, notes) is stored and written to `--json` as it is (JSON escapes
-U+0000-U+001F itself; DEL, C1 and other invisible characters are written as they are, as JSON allows), so a
-consumer gets the real path back. In the terminal output (the verdict, `zee
+flag evidence, imported scanner results, notes) is stored as it is. `--json` is ASCII-only: every
+non-ASCII character (C1 controls, U+202E, U+200B, and also Japanese text) and every control character is a
+`\uXXXX` escape, so the JSON cannot rewrite a terminal and a JSON parser gives the real path back. In the terminal output (the verdict, `zee
 gate audit`, promotion and error messages) control and other invisible characters are shown as visible
 escapes (`\x1b`, `\u200b`), and a backslash that would read as such an escape is doubled (`\\x0a` is the four
 characters, `\x0a` a line feed), so two different names never look the same.

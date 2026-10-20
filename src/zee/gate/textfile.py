@@ -8,8 +8,9 @@ instructions G217-G220). Judged on the raw bytes of the first 8 KiB.
 - A NUL in a file whose suffix any check reads as text (TEXT_SUFFIXES): read
   with the NUL bytes removed AND reported by the main pass as G911 ("looks
   binary"), so a NUL can neither switch the checks off nor pass silently.
-- Anything else with a NUL (image, archive, .DS_Store): binary, outside the
-  text scan.
+- Anything else with a NUL (image, archive): binary, outside the text scan.
+  There is no exception by file content: macOS .DS_Store / ._x files are dotfiles,
+  so they are read as text (their bytes are attacker-written like any other).
 """
 
 from __future__ import annotations
@@ -29,14 +30,6 @@ TEXT_SUFFIXES = frozenset({
     ".md", ".markdown", ".txt", ".rst", ".html", ".htm",
 })
 
-
-def _finder_meta(p: Path, head: bytes) -> bool:
-    """macOS Finder metadata in nearly every Mac-made archive: binary, though a dotfile (and
-    `._x.js` has a text suffix). Judged by name AND magic, so a script cannot hide behind the name."""
-    return (p.name == ".DS_Store" and head[4:8] == b"Bud1") or \
-        (p.name.startswith("._") and head.startswith(b"\0\5\x16\7"))  # AppleDouble
-
-
 _NAMED_TEXT = re.compile(
     r"^(?:Dockerfile|Containerfile|Makefile|GNUmakefile|Procfile|README|LICENSE|\.)", re.I)
 
@@ -47,8 +40,6 @@ def classify(p: Path, head: bytes) -> str:
     """TEXT, GAP (text-typed but looks binary: scanned and reported G911) or BINARY."""
     if b"\0" not in head:
         return TEXT
-    if _finder_meta(p, head):
-        return BINARY
     if _NAMED_TEXT.match(p.name) or head.startswith(b"#!"):
         return TEXT
     return GAP if p.suffix.lower() in TEXT_SUFFIXES else BINARY

