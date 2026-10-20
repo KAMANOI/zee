@@ -312,6 +312,18 @@ def _doc_flags(rel: str, lines: list[str], nums: list[int]) -> list[Flag]:
     return []
 
 
+_NAMED_TEXT = re.compile(r"^(?:Dockerfile|Containerfile|Makefile|GNUmakefile|Procfile|README|LICENSE|\.)", re.I)
+
+
+def is_binary(p: Path, text: str) -> bool:
+    """The main pass's rule (static_checks): a NUL in the first 8 KiB of a file without a text
+    suffix means binary. A file chosen by its name (Dockerfile*, Makefile, README*, dotfiles such
+    as .bashrc / .env) or a `#!` script is text whatever it holds."""
+    from .static_checks import _TEXT_SUFFIXES
+    return ("\0" in text[:8192] and p.suffix.lower() not in _TEXT_SUFFIXES
+            and not _NAMED_TEXT.match(p.name) and not text.startswith("#!"))
+
+
 def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
     """Run the tampering checks over the (already enumerated) files. Oversized
     or unreadable files are skipped here: the main pass reports them (G910 / G911)."""
@@ -342,11 +354,9 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
         except (OSError, MemoryError):
             continue
         if "\0" in text:
-            # a NUL in a text file must not switch the checks off (one byte would hide the file);
-            # only an extensionless file that is not a script is treated as binary, as in the main pass
-            if p.suffix == "" and not text.startswith("#!"):
-                continue
-            text = text.replace("\0", " ")
+            if is_binary(p, text):
+                continue  # binary (image, archive, executable): outside the text scan, as in the main pass
+            text = text.replace("\0", "")  # deleted, not spaced: the tokens and indentation stay as written
         lines, nums = [], []
         for n, ln in enumerate(text.splitlines(), 1):
             if len(ln) <= _LONG:

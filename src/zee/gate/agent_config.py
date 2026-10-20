@@ -541,7 +541,7 @@ def _python_flags(rel: str, tree: ast.AST, helpers: set[str]) -> list[Flag]:
 
 
 def _is_test(rel: str) -> bool:
-    parts = rel.lower().replace("\\", "/").split("/")
+    parts = rel.lower().split("/")  # rel is POSIX (as_posix): a backslash is part of a name on Linux / macOS
     return any(x in ("test", "tests", "__tests__") for x in parts[:-1]) \
         or parts[-1].startswith(("test_", "conftest")) or ".test." in parts[-1]
 
@@ -563,6 +563,7 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
     texts: dict[str, str] = {}
     held = 0
     parsed: set[str] = set()
+    nul: set[str] = set()
     helpers: set[str] = set()
     callers: dict[str, set[str]] = {}
 
@@ -591,11 +592,11 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
         except (OSError, MemoryError):
             continue
         if "\0" in text:
-            # a NUL in a text file must not switch the checks off (one byte would hide the file);
-            # only an extensionless file that is not a script is treated as binary, as in the main pass
-            if p.suffix == "" and not text.startswith("#!"):
-                continue
-            text = text.replace("\0", " ")
+            from .tampering import is_binary
+            if is_binary(p, text):
+                continue  # binary: outside the text scan, as in the main pass
+            nul.add(str(p))
+            text = text.replace("\0", "")  # deleted, not spaced: Python indentation stays valid
         rel = p.relative_to(root).as_posix()
         texts[rel] = text
         if suf in _PY:
@@ -605,7 +606,9 @@ def scan_tree(root: Path, paths: list[Path]) -> list[Flag]:
                 _collect_helpers(ast.parse(text), helpers, callers)
                 parsed.add(rel)
             except (SyntaxError, ValueError):
-                pass  # not Python we can read: the regex checks below still run
+                if str(p) in nul:
+                    gap(rel, "contains NUL bytes and does not parse as Python")  # never silently clean
+                # otherwise not Python we can read: the regex checks below still run
             except (RecursionError, MemoryError):
                 gap(rel, "too deep or too large to parse")  # never silently "clean"
 

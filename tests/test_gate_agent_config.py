@@ -326,20 +326,28 @@ _ADVERSARIAL = [
 def test_adversarial_lines_stay_fast(tmp_path, body):
     # What this guards is the growth, not the machine: a quadratic regression (as found and fixed
     # in review: 16,000 lines took 14 s) shows as a ratio, while runner speed varies. GitHub runners
-    # took 3.0-5.0 s for the largest case (2026-10-20, all OSes) where a 2021 MacBook Pro takes 2.4 s,
-    # so the absolute cap is about twice the slowest runner.
-    def run(b: str, d: Path) -> float:
+    # took 3.0-5.0 s for the old largest case (2026-10-20, all OSes) where a 2021 MacBook Pro took
+    # 2.4 s, so the absolute cap is about twice the slowest runner. Both sizes stay under the 2 MiB
+    # read limit, so the larger one really does twice the work (no file is skipped as G910).
+    def run(b: str, reps: int, d: Path) -> float:
         d.mkdir()
         (d / "p.yaml").write_text("network_policies:\n" + b + "\n", encoding="utf-8")
-        (d / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + b[:1500] + "\n") * 300,
+        (d / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + b[:1500] + "\n") * 30 * reps,
                                 encoding="utf-8")
-        (d / "s.sh").write_text(b + "\n" + (b + " \\\n") * 25, encoding="utf-8")
-        t = time.perf_counter()
-        static_checks.scan_tree(d)
-        return time.perf_counter() - t
-    one, two = run(body[:len(body) // 2], tmp_path / "half"), run(body, tmp_path / "full")
+        (d / "s.sh").write_text((b + " \\\n") * reps, encoding="utf-8")
+        best = float("inf")
+        for _ in range(3):
+            t = time.perf_counter()
+            flags = static_checks.scan_tree(d)
+            best = min(best, time.perf_counter() - t)
+        assert not any(f.code == "G910" for f in flags)
+        return best
+
+    unit = body[:50000]
+    run(unit[:1000], 1, tmp_path / "warm")
+    one, two = run(unit, 6, tmp_path / "one"), run(unit, 12, tmp_path / "two")
     assert two < 10.0
-    assert two < 3 * one + 0.5  # doubling the input must not much more than double the time
+    assert two < 2.6 * one + 0.05  # twice the input, at most a little over twice the time
 
 
 def test_review_round2_cases(tmp_path):
@@ -389,6 +397,8 @@ def test_g205_stdlib_call_does_not_spread_a_helper_name(tmp_path):
 
 def test_windows_separators_are_test_paths_and_evidence_is_posix(tmp_path):
     from zee.gate.agent_config import _is_test
-    assert _is_test("tests\\test_x.py") and _is_test("pkg\\__tests__\\a.js")
+    assert _is_test("tests/test_x.py") and _is_test("pkg/__tests__/a.js")
+    # on Linux / macOS a backslash is part of a file name: `tests\x.py` is one file at the top
+    assert not _is_test("tests\\x.py")
     got = _scan(tmp_path, {"tools/run.py": _RUN, "tools/tool.py": _UNSAFE_TOOL})
     assert all("\\" not in e for e in got["G205"])

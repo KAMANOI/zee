@@ -64,9 +64,15 @@ class Severity(str, Enum):
         return {"low": 1, "medium": 4, "high": 10}[self.value]
 
 
-def printable(s: str) -> str:
-    """Keep spaces and printable characters; drop control and other non-printable ones."""
-    return "".join(c for c in s if c == " " or c.isprintable())
+def printable(s: str | None) -> str | None:
+    """Show control and other non-printable characters as visible escapes (`\x1b`, `\u200b`)
+    instead of passing them to a terminal. Escaping (not deleting) keeps `a<LF>b` and `ab`
+    apart. Spaces and printable characters are kept as they are."""
+    if s is None:
+        return None
+    return "".join(c if c == " " or c.isprintable() else
+                   (f"\\x{ord(c):02x}" if ord(c) < 0x100 else f"\\u{ord(c):04x}" if ord(c) < 0x10000
+                    else f"\\U{ord(c):08x}") for c in s)
 
 
 @dataclass(frozen=True)
@@ -109,15 +115,17 @@ class Artifact:
     version: Optional[str] = None  # declared version (npm/pypi/vscode), if any
 
     def to_dict(self) -> dict[str, Any]:
+        # every field but the hash can come from the inspected artifact (manifest name, version,
+        # capabilities, hook commands, the path or URL given): escaped at this exit
         return {
             "kind": self.kind.value,
-            "source": self.source,
-            "name": self.name,
-            "version": self.version,
+            "source": printable(self.source),
+            "name": printable(self.name),
+            "version": printable(self.version),
             "content_hash": self.content_hash,
-            "declared_capabilities": list(self.declared_capabilities),
-            "install_hooks": list(self.install_hooks),
-            "root": self.root,
+            "declared_capabilities": [printable(x) for x in self.declared_capabilities],
+            "install_hooks": [printable(x) for x in self.install_hooks],
+            "root": printable(self.root),
         }
 
 
@@ -155,16 +163,16 @@ class Verdict:
             "risk_level": self.risk_level.value,
             "risk_score": self.risk_score,
             "flags": [f.to_dict() for f in self.flags],
-            "notes": list(self.notes),
+            "notes": [printable(n) for n in self.notes],
         }
 
     def to_text(self) -> str:
-        name = self.artifact.name
+        name = printable(self.artifact.name)
         if self.artifact.version:
-            name = f"{name}@{self.artifact.version}"
+            name = f"{name}@{printable(self.artifact.version)}"
         lines = [
             f"zee gate — {self.artifact.kind.value}: {name}",
-            f"  source : {self.artifact.source}",
+            f"  source : {printable(self.artifact.source)}",
             f"  sha256 : {self.artifact.content_hash[:16]}…",
             f"  verdict: {self.risk_level.value}  (score {self.risk_score})",
             f"  inspect: {self.inspection.value}",
@@ -187,7 +195,7 @@ class Verdict:
                     )
                     lines.append(f"            ↳ {ev}")
         for note in self.notes:
-            lines.append(f"  note   : {note}")
+            lines.append(f"  note   : {printable(note)}")
         return "\n".join(lines)
 
 

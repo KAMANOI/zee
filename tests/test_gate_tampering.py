@@ -393,3 +393,36 @@ def test_control_characters_never_reach_a_flag(tmp_path):
     assert "G219" in by
     for f in flags:
         assert all(c == " " or c.isprintable() for c in f.message + f.evidence), f
+
+
+def test_nul_at_the_start_of_python_still_finds_g205_or_reports_a_gap(tmp_path):
+    from zee.gate import agent_config
+    d = tmp_path / "py"; d.mkdir()
+    (d / "t.py").write_text("\0import os\ndef f(n):\n    os.system('ls ' + n)\n", encoding="utf-8")
+    assert any(f.code == "G205" for f in agent_config.scan_tree(d, [d / "t.py"]))
+    (d / "u.py").write_text("import os\n\0  def f(n):\n    os.system('ls ' + n)\n", encoding="utf-8")
+    assert any(f.code in ("G205", "G911") for f in agent_config.scan_tree(d, [d / "u.py"]))
+
+
+def test_nul_does_not_hide_files_chosen_by_name(tmp_path):
+    by, _ = _scan(tmp_path, {
+        "Dockerfile": "\0RUN echo 'u ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers\n",
+        "bin/tool": "\0" + "const fs = require('fs');\nfs.writeFileSync('node_modules/pkg/index.js', x);\n",
+    })
+    assert "G210" in by  # Dockerfile is text by its name
+    # an extensionless file that is not chosen by name and not a script is binary, as in the main pass
+    from zee.gate.tampering import is_binary
+    from pathlib import Path as P
+    assert is_binary(P("bin/tool"), "\0abc") and not is_binary(P(".env"), "\0abc")
+    assert not is_binary(P("Makefile"), "\0abc") and not is_binary(P("a.js"), "\0abc")
+
+
+def test_artifact_and_notes_are_escaped_at_the_output(tmp_path):
+    from zee.gate.model import Artifact, ArtifactKind, RiskLevel, Verdict
+    a = Artifact(ArtifactKind.NPM, "./x\x1b[2J", "pkg\x1b[31m", "0" * 64,
+                 declared_capabilities=("net\x07",), install_hooks=("echo\rhi",), version="1\x1b]0;t")
+    v = Verdict(a, RiskLevel.LOW, 0, notes=["n\x1bote"])
+    out = v.to_text() + str(v.to_dict())
+    assert "\x1b" not in out and "\x07" not in out and "\r" not in out
+    assert "pkg\\x1b[31m" in v.to_text()
+    assert a.source == "./x\x1b[2J"  # the real path is kept for use; only the output is escaped

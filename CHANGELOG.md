@@ -42,9 +42,11 @@ releases.
 
 ### Changed
 
-- Control characters quoted from an inspected artifact are removed from every
-  flag's message and evidence (before: only imported scanner results), so a
-  file or server name cannot rewrite the terminal output.
+- Control and other non-printable characters quoted from an inspected artifact
+  are shown as visible escapes (`\x1b`) in every flag, the artifact fields
+  (name, version, source, capabilities, install hooks) and notes, in the
+  terminal and in `--json` (before: only imported scanner results were cleaned),
+  so a file or server name cannot rewrite the terminal output.
 
 ### Notes
 
