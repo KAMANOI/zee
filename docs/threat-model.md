@@ -17,6 +17,10 @@ The exit-side boundaries are documented in [README Limitations](../README.md#lim
 [SECURITY Honesty boundaries](../SECURITY.md#honesty-boundaries-current-release),
 and [gate Limits](gate.md#limits-invariant-i5); they are not repeated here.
 
+A scanner-oriented summary of what Zee processes from untrusted sources, how
+findings are rated, and what is out of scope is kept in
+[`.oss-scanner/threat_model.md`](../.oss-scanner/threat_model.md).
+
 ## Attacker positions (entry gate)
 
 - **Malicious from the start.** An artifact author includes harmful content in
