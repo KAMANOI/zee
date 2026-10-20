@@ -62,21 +62,20 @@ _WRITE_SH = re.compile(r"\b(?:cp|mv|ln)\s+-?\w*\s")  # shell verbs: too common a
 _COPY = re.compile(r"copy|cpSync|(?:^|\.)cp\b|^cp\s")  # a write match that is a copy (source, destination)
 _ASSIGNED = re.compile(r"^\s*(?:(?:const|let|var)\s+)?([A-Za-z_$][\w$]*)\s*=(?!=)")
 _STR = re.compile(r"'(?:\\.|[^'\\\n])*'|\"(?:\\.|[^\"\\\n])*\"|`(?:\\.|[^`\\])*`")  # quoted text on one line
+_CODE_STR = re.compile(r"\$\{|\'\'\'|\"\"\"|(?<![\w])[rRbB]?[fF][rRbB]?[\"']")
 _UNQUOTE_SUFFIX = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py"}  # never shell: `...` / $() run commands
 _BACKUP = re.compile(r"\.(?:[A-Za-z0-9_-]+\.)?(?:bak|orig|backup|original)\b|[_-](?:bak|orig|backup)\b",
                      re.I)
 
 
 def _unquote(line: str) -> str:
-    """JS / Python line with plain quoted text emptied. A string that can run code inside it
-    (a template literal with `${`, an f-string with `{`) is kept whole: reading it as code may
-    flag plain text, but never hides a call."""
-    def sub(m: re.Match[str]) -> str:
-        q = m.group(0)
-        if q[0] == "`":
-            return q if "${" in q else '""'
-        return q if "{" in q and "f" in line[max(0, m.start() - 2):m.start()].lower() else '""'
-    return _STR.sub(sub, line)
+    """JS / Python line with quoted text emptied, so a word in plain text ("explain how
+    decrypt(x) works") is not read as a call. A line that may hold a string able to run code
+    (`${`, an f-string prefix, triple quotes) is kept whole: that may flag plain text, but a
+    regular expression cannot split such strings safely, and it must never hide a call."""
+    if _CODE_STR.search(line):
+        return line
+    return _STR.sub('""', line)
 
 
 # --- G213: re-apply on every start ----------------------------------------

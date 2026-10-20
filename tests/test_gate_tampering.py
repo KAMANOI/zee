@@ -338,3 +338,20 @@ def test_shell_dollar_paren_and_python_fstring_are_code(tmp_path):
     assert "G214" in by
     by, _ = _scan(tmp_path / "plain", {"a.py": 'system_prompt = "Explain how decrypt(data) works."\n'})
     assert "G214" not in by
+
+
+# ---- Codex round 5 ----------------------------------------------------------
+_R5 = [
+    ("nested-template-decrypt", ".js", "const system_prompt = `${`prefix`, decrypt(blob, key)}`;", "high"),
+    ("nested-template-fetch", ".js", "const system_prompt = `${`p`, await (await fetch(url)).text()}`;", "high"),
+    ("py-triple-fstring", ".py", 'system_prompt = f"""{decrypt(blob, key)}"""', "high"),
+    ("py-plain-triple", ".py", 'system_prompt = """Explain how decrypt(data) works."""', "high"),  # known false positive
+    ("json-plain-text", ".json", '{"system_prompt": "Explain how decrypt(data) works."}', "high"),  # known false positive
+    ("py-plain", ".py", 'system_prompt = "Explain how decrypt(data) works."', None),
+]
+
+
+@pytest.mark.parametrize("label,suf,body,want", _R5, ids=[c[0] for c in _R5])
+def test_codex_round5_cases(tmp_path, label, suf, body, want):
+    by, _ = _scan(tmp_path, {"a" + suf: body + "\n"})
+    assert (by["G214"].severity.value if "G214" in by else None) == want, label
