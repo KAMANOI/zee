@@ -146,7 +146,8 @@ def _append(reg, alias, purpose):
 
 @pytest.mark.parametrize(
     "dup",
-    ["alias", "place", "bad-alias", "bad-domain", "nl-alias", "nl-place", "nl-domain"],
+    ["alias", "place", "bad-alias", "bad-domain", "nl-alias", "nl-place", "nl-domain",
+     "null-purpose", "int-purpose"],
 )
 def test_conflicting_or_malformed_mapping_stops(tmp_path, dup):
     reg = _reg(tmp_path)
@@ -162,6 +163,10 @@ def test_conflicting_or_malformed_mapping_stops(tmp_path, dup):
         "nl-alias": ("e" * 32 + "\n", f"place:other|{DOMAIN}"),
         "nl-place": ("d" * 32, f"place:other\n|{DOMAIN}"),
         "nl-domain": ("c" * 32, f"place:other|{DOMAIN}\n"),
+        # a non-string purpose is a corrupt record, not a skippable non-place
+        # one: it must stop the run, not drop silently from the dup/quota count.
+        "null-purpose": ("b" * 32, None),
+        "int-purpose": ("9" * 32, 123),
     }[dup]
     _append(reg, alias, purpose)
     with pytest.raises(ValueError):

@@ -85,7 +85,11 @@ def _records(registry: CanaryTokenRegistry) -> list[tuple[str, str, str]]:
             purpose, alias = rec["purpose"], rec["decoy_path"]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise ValueError(f"{path}:{n} is not a valid mapping record") from e
-        if not isinstance(purpose, str) or not purpose.startswith(PLACE_PREFIX):
+        # A non-string purpose is a corrupt record, not a non-place one: stop
+        # (silently skipping it would drop the record from the dup/quota count).
+        if not isinstance(purpose, str):
+            raise ValueError(f"{path}:{n} is not a valid mapping record")
+        if not purpose.startswith(PLACE_PREFIX):
             continue
         place, _, domain = purpose[len(PLACE_PREFIX):].partition("|")
         alias = alias.rsplit("/", 1)[-1] if isinstance(alias, str) else ""
