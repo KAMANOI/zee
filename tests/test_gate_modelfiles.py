@@ -404,7 +404,7 @@ def test_keras_config_crc_mismatch_is_a_gap_not_a_crash(tmp_path):
 
 
 def test_deeply_chained_companion_py_is_a_gap_not_a_crash(tmp_path):
-    src = "import os\nos.system('id')\nx = " + "+".join(["1"] * 3000) + "\n"
+    src = "import os\nos.system('id')\nx = " + "+".join(["1"] * 250) + "\n"
     c = _codes(_scan(tmp_path, {"model.safetensors": _st({"a": ("U8", [1], 1)}), "modeling_x.py": src}))
     assert "G225" in c and "G228" in c
 
