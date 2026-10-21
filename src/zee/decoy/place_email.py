@@ -35,13 +35,27 @@ FREE_TIER_MAX_ADDRESSES = 10
 _PLACE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
 _ALIAS_RE = re.compile(r"^[0-9a-f]{32}$")  # issue_query_canary's token shape
 _LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+# RFC 5321 limits on the address the operator receives breach mail at. The
+# local part is always _generate_safe_token() == secrets.token_hex(16).
+EMAIL_MAX = 254
+LOCAL_MAX = 64
+_TOKEN_LEN = 32
 
 
 def check_domain_syntax(domain: str) -> None:
     """Lowercase hostname, >=2 labels of 1-63 chars, <=253 total."""
     labels = domain.split(".")
-    if len(domain) > 253 or len(labels) < 2 or not all(_LABEL_RE.match(x) for x in labels):
+    # fullmatch, not match: match's $ accepts a trailing newline, so a label
+    # like "test\n" would pass and the stored value would never resolve.
+    if len(domain) > 253 or len(labels) < 2 or not all(_LABEL_RE.fullmatch(x) for x in labels):
         raise ValueError(f"not a valid mail domain: {domain!r}")
+
+
+def _check_address(address: str) -> None:
+    """Reject an address past RFC 5321's local-part / total-length limits."""
+    local, _, _domain = address.rpartition("@")
+    if len(local) > LOCAL_MAX or len(address) > EMAIL_MAX:
+        raise ValueError(f"e-mail address exceeds RFC limits ({len(address)} chars): {address!r}")
 
 
 @dataclass(frozen=True)
@@ -76,7 +90,9 @@ def _records(registry: CanaryTokenRegistry) -> list[tuple[str, str, str]]:
         place, _, domain = purpose[len(PLACE_PREFIX):].partition("|")
         alias = alias.rsplit("/", 1)[-1] if isinstance(alias, str) else ""
         try:
-            if not _ALIAS_RE.match(alias) or not _PLACE_RE.match(place):
+            # fullmatch: match's $ lets a trailing newline through, which
+            # persists but never resolves against the clean value.
+            if not _ALIAS_RE.fullmatch(alias) or not _PLACE_RE.fullmatch(place):
                 raise ValueError("bad alias or place")
             check_domain_syntax(domain)
         except ValueError as e:
@@ -96,17 +112,26 @@ def issue_place_email(registry: CanaryTokenRegistry, domain: str, place: str) ->
     pass the cap or mint two addresses for one place.
     """
     domain = domain.strip().lower()
-    if not _PLACE_RE.match(place):
+    if not _PLACE_RE.fullmatch(place):  # fullmatch: reject a trailing newline
         raise ValueError(f"place name must match {_PLACE_RE.pattern!r}: {place!r}")
     check_domain_syntax(domain)
     check_domain(domain)  # also for an already-issued place
+    # Guard the full address length before minting, since issue_query_canary
+    # persists the token before returning it.
+    if _TOKEN_LEN + 1 + len(domain) > EMAIL_MAX:
+        raise ValueError(
+            f"address would be {_TOKEN_LEN + 1 + len(domain)} chars (> RFC max {EMAIL_MAX}); "
+            f"domain too long: {domain!r}"
+        )
     with HostLock(Path(str(registry.registry_path) + ".lock")):
         recs = _records(registry)
         for alias, p, d in recs:
             if p == place:
                 if d != domain:
                     raise ValueError(f"{place!r} already has an address on another domain")
-                return f"{alias}@{domain}"
+                addr = f"{alias}@{domain}"
+                _check_address(addr)
+                return addr
         if len({p for _, p, _ in recs}) >= FREE_TIER_MAX_ADDRESSES:
             raise ValueError(
                 f"{FREE_TIER_MAX_ADDRESSES} places already hold an address; more could "
@@ -116,6 +141,7 @@ def issue_place_email(registry: CanaryTokenRegistry, domain: str, place: str) ->
             registry, "email", f"{PLACE_PREFIX}{place}|{domain}", domain=domain
         ).value
         _records(registry)  # re-validate: a token collision raises here
+        _check_address(value)
         return value
 
 

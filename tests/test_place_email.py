@@ -144,7 +144,10 @@ def _append(reg, alias, purpose):
         f.write(json.dumps({"purpose": purpose, "decoy_path": alias}) + "\n")
 
 
-@pytest.mark.parametrize("dup", ["alias", "place", "bad-alias", "bad-domain"])
+@pytest.mark.parametrize(
+    "dup",
+    ["alias", "place", "bad-alias", "bad-domain", "nl-alias", "nl-place", "nl-domain"],
+)
 def test_conflicting_or_malformed_mapping_stops(tmp_path, dup):
     reg = _reg(tmp_path)
     a = issue_place_email(reg, DOMAIN, "prod-db-dump").split("@")[0]
@@ -153,9 +156,41 @@ def test_conflicting_or_malformed_mapping_stops(tmp_path, dup):
         "place": ("f" * 32, f"place:prod-db-dump|{DOMAIN}"),  # second alias for one place
         "bad-alias": ("NOT-A-TOKEN", f"place:other|{DOMAIN}"),
         "bad-domain": ("e" * 32, "place:other|a@b"),
+        # finding 1: a trailing newline slips past re.match ($ sits before it),
+        # so the record persists but the clean value never resolves; fullmatch
+        # must treat the whole field as corrupt and stop the run.
+        "nl-alias": ("e" * 32 + "\n", f"place:other|{DOMAIN}"),
+        "nl-place": ("d" * 32, f"place:other\n|{DOMAIN}"),
+        "nl-domain": ("c" * 32, f"place:other|{DOMAIN}\n"),
     }[dup]
     _append(reg, alias, purpose)
     with pytest.raises(ValueError):
         locate(reg, DOMAIN, {a: ["X"]})
     with pytest.raises(ValueError):
         issue_place_email(reg, DOMAIN, "support-export")
+
+
+def test_place_name_with_trailing_newline_is_rejected(tmp_path):
+    # finding 1 (root): the pre-persist place check must also use fullmatch,
+    # or "prod-db-dump\n" is written and every later read stops on "corrupt".
+    reg = _reg(tmp_path)
+    with pytest.raises(ValueError):
+        issue_place_email(reg, DOMAIN, "prod-db-dump\n")
+    assert not reg.registry_path.exists()
+
+
+def test_address_length_bounded_by_rfc_max(tmp_path):
+    # finding 2: a valid domain can still make the <32hex>@<domain> address
+    # exceed RFC 5321's 254-char limit. local(32) + "@"(1) + domain must be <=254.
+    reg = _reg(tmp_path)
+    ok_domain = ".".join(["a" * 63] * 3) + "." + "a" * 29  # 221 chars -> address 254
+    assert len(ok_domain) == 221
+    addr = issue_place_email(reg, ok_domain, "prod-db-dump")
+    assert len(addr) == 254
+
+    reg2 = _reg(tmp_path / "over")
+    too_long = ".".join(["a" * 63] * 3) + "." + "a" * 30  # 222 chars -> address 255
+    assert len(too_long) == 222
+    with pytest.raises(ValueError):
+        issue_place_email(reg2, too_long, "prod-db-dump")
+    assert not reg2.registry_path.exists()  # rejected before persisting
