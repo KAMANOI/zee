@@ -470,7 +470,7 @@ _G603_DOCKERFILE = re.compile(r"^\s*(?:ENV|ARG)\b[^\n]*?(?<![\w])(?:" + _KEYNAME
 _G603_RUN = re.compile(r"\b(?:docker|podman|nerdctl)\b[^\n]{0,200}?\brun\b[^\n]*?"
                        r"(?:-e|--env)[ =]+[\"']?(?:" + _KEYNAME + r")(?![\w])")
 _G603_COMPOSE = re.compile(r"^\s*(?:-\s*)?[\"']?(?:" + _KEYNAME + r")[\"']?\s*(?:[:=]|$)")
-_G603_ENVBLOCK = re.compile(r"^(\s*)environment\s*:\s*$")
+_G603_ENVBLOCK = re.compile(r"^(\s*)environment\s*:\s*(?:#.*)?$")  # allow an end-of-line comment
 # "never" / "do not" in prose, but not an option value such as --pull=never
 _G603_NEG = re.compile(r"(?<![=\w-])never\b|\b(?:do not|don't|dont|must not|avoid)\b|^\s*#|\.example\b", re.I)
 _G603_SUFFIX = {".sh", ".bash", ".zsh", ".yaml", ".yml", ""}

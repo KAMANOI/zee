@@ -1,5 +1,6 @@
 """G603 (provider key passed whole to a container) and the doctor egress drift line."""
 import io
+import json
 
 import pytest
 
@@ -51,6 +52,20 @@ def test_g603_clean(tmp_path, rel, body):
 
 NFT = "__zee_nft_egress_table__"
 IPT4, IPT6 = "__zee_iptables_egress_chain__", "__zee_ip6tables_egress_chain__"
+
+_OIF_LO = {"match": {"op": "==", "left": {"meta": {"key": "oif"}}, "right": "lo"}}
+
+
+def _nftj(rules, *, hook="output", policy="drop"):
+    """A faked `nft -j list table inet zee_egress` dump. `rules` is a list of
+    rule dicts (each with its own `expr`, optional `comment`)."""
+    objs = [{"metainfo": {"version": "1.0"}},
+            {"table": {"family": "inet", "name": "zee_egress"}},
+            {"chain": {"family": "inet", "table": "zee_egress", "name": "out",
+                       "type": "filter", "hook": hook, "prio": 0, "policy": policy}}]
+    for r in rules:
+        objs.append({"rule": {"family": "inet", "table": "zee_egress", "chain": "out", **r}})
+    return json.dumps({"nftables": objs})
 
 
 def _doctor(tmp_path, monkeypatch, states, *, record=False, damaged=False, cuts=()):
@@ -113,12 +128,14 @@ def test_doctor_damaged_record_is_not_compared(tmp_path, monkeypatch):
     assert "[INFO] egress rules" in _line(out)
 
 
-@pytest.mark.parametrize("plat,tool,table,expect", [
-    ("linux", "nft", "table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n accept\n }\n}", "unexpected"),
-    ("linux", "nft", "table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n }\n}", "present"),
+@pytest.mark.parametrize("table,expect", [
+    # a bare unconditional accept (no match) is a bypass -> unexpected
+    (_nftj([{"expr": [_OIF_LO, {"accept": None}]}, {"expr": [{"accept": None}]}]), "unexpected"),
+    # only conditional accepts + the drop policy -> the shape Zee loads
+    (_nftj([{"expr": [_OIF_LO, {"accept": None}]}]), "present"),
 ])
-def test_egress_state_reads_with_shape(monkeypatch, plat, tool, table, expect):
-    monkeypatch.setattr(doctor.sys, "platform", plat)
+def test_egress_state_reads_with_shape(monkeypatch, table, expect):
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
     monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
     monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
     st = doctor._egress_state()
@@ -149,13 +166,31 @@ def test_egress_state_reads_ip6tables_of_same_backend(monkeypatch):
     assert seen == ["legacy"] and st["iptables"] == "present" and st["ip6tables"] == "absent"
 
 
-def test_egress_state_nft_counter_accept_is_unexpected(monkeypatch):
-    table = ("table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n"
-             " counter packets 0 bytes 0 accept\n }\n}")
+def test_egress_state_nft_json_counter_and_hash_comment(monkeypatch):
+    # finding #2: decide via `nft -j` JSON structurally, not text munging. A
+    # clean cut reads as present; an unconditional accept carrying a counter and
+    # a rule comment with '#' in it is a bypass -> unexpected. (The old text
+    # parser split on '#', mangled the comment, and read the accept as present.)
     monkeypatch.setattr(doctor.sys, "platform", "linux")
     monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
-    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
-    assert doctor._egress_state()["nft"] == "unexpected"
+
+    def nft(table):
+        monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
+        return doctor._egress_state()["nft"]
+
+    clean = _nftj([{"expr": [_OIF_LO, {"accept": None}]}])
+    bypass = _nftj([{"comment": 'ticket #123',
+                     "expr": [{"counter": {"packets": 0, "bytes": 0}}, {"accept": None}]}])
+    assert nft(clean) == "present"
+    assert nft(bypass) == "unexpected"
+
+
+def test_egress_state_nft_non_json_is_unreadable(monkeypatch):
+    # an old nft without `-j` prints text, not JSON: unchecked, never present.
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, "table inet zee_egress { chain o { } }"))
+    assert doctor._egress_state()["nft"] == "unreadable"
 
 
 # ---- review round 3 ---------------------------------------------------------
@@ -173,20 +208,34 @@ def test_egress_state_iptables_without_output_jump_is_unexpected(monkeypatch):
     assert doctor._egress_state()["iptables"] == "unexpected"
 
 
-def test_egress_state_nft_counter_accept_with_comment_is_unexpected(monkeypatch):
-    # counter values AND an nft comment on an unconditional accept must both be
-    # normalised away, or the bypassing accept reads as present.
-    table = ("table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n"
-             " counter packets 0 bytes 0 accept comment \"temporary\"\n }\n}")
-    monkeypatch.setattr(doctor.sys, "platform", "linux")
-    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
-    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
-    assert doctor._egress_state()["nft"] == "unexpected"
+def test_egress_state_pf_block_rule_is_unverified_not_present(monkeypatch):
+    # finding #1: on macOS the single pf read shows the block rule, but cannot
+    # confirm pf is enabled and its anchor referenced -> report "unverified",
+    # never "present".
+    rules = ("pass out quick on lo0 all\npass out quick to 10.0.0.0/8\n"
+             "pass out quick to 172.16.0.0/12\npass out quick to 192.168.0.0/16\n"
+             "block drop out quick all\n")
+    monkeypatch.setattr(doctor.sys, "platform", "darwin")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "pfctl" else None)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, rules))
+    assert doctor._egress_state()["pf"] == "unverified"
+
+
+def test_doctor_pf_unverified_warns_not_ok(tmp_path, monkeypatch):
+    out = _line(_doctor(tmp_path, monkeypatch, {"pf": "unverified"}))
+    assert "[WARN] egress rules" in out and "[OK]" not in out
 
 
 def test_g603_compose_comment_does_not_close_env_block(tmp_path):
     # a comment at the key's own indent must not end the environment block
     body = "services:\n  a:\n    environment:\n    # a comment\n    - OPENAI_API_KEY\n"
+    assert "G603" in _codes(tmp_path, {"compose.yaml": body})
+
+
+def test_g603_env_block_with_eol_comment(tmp_path):
+    # finding #3: an end-of-line comment on the `environment:` line must not hide
+    # the block, or the key under it misses G603.
+    body = "services:\n  a:\n    environment: # credentials\n      - OPENAI_API_KEY\n"
     assert "G603" in _codes(tmp_path, {"compose.yaml": body})
 
 

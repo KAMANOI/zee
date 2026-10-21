@@ -5,12 +5,17 @@ setting, a running `zee watch` and cut privileges, and prints what is
 missing with the next step. It only reads: it never seeds decoys, never
 reads the token's value (stat only), never talks to the privsep daemon
 (its `status` op counts as watch liveness) and never goes to the network.
+
+The egress-rule drift check (`_egress_state`) confirms a block authoritatively
+only on Linux (nft via `nft -j` JSON, iptables via `-S` plus the OUTPUT jump).
+On macOS a loaded-looking pf anchor is reported "unverified", never "present",
+because this read cannot confirm pf is enabled and its anchor is referenced.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import re
 import shlex
 import stat
 import subprocess
@@ -24,7 +29,7 @@ from .decoy.canary_token import normalize_base_url
 from .errors import ZeeError
 from .recovery.auth import default_token_path
 from .responder.cut_egress import (PF_ANCHOR, _ABSENT, _ip6tables_tool, _iptables_chain_structure,
-                                   _iptables_jump_first, _lines, _nft_structure, _pf_block_rule)
+                                   _iptables_jump_first, _lines, _pf_block_rule)
 from .responder.cut_full import (SENTINEL_LINUX_IP6TABLES_EGRESS, SENTINEL_LINUX_IPTABLES_EGRESS,
                                  SENTINEL_LINUX_NFT_EGRESS, SENTINEL_MACOS_PFCTL_EGRESS, _run,
                                  iptables_backend, kernel_ipv6_absent, sbin_which)
@@ -76,37 +81,75 @@ _BACKEND = {SENTINEL_LINUX_NFT_EGRESS: "nft", SENTINEL_LINUX_IPTABLES_EGRESS: "i
             SENTINEL_LINUX_IP6TABLES_EGRESS: "ip6tables", SENTINEL_MACOS_PFCTL_EGRESS: "pf"}
 
 
-def _nft_bare(ln: str) -> str:
-    """An nft rule line with its comment and counter (and the counter's values)
-    removed, so an unconditional `accept` reads as `accept` whichever it carries."""
-    ln = re.sub(r'\bcomment "[^"]*"', "", ln)
-    ln = re.sub(r"\bcounter(?: packets \d+ bytes \d+)?", "", ln)
-    return re.sub(r"\s+", " ", ln).strip()
+def _nft_json_present(out: str, _profiles: set[str]) -> str:
+    """Judge `nft -j list table inet zee_egress` (JSON) structurally, so a
+    comment or counter on a rule cannot change the verdict:
+    "confirmed" = a chain hooked on output with policy drop and no unconditional
+    `accept` in it; "missing" = present but not that shape; "unparsed" = not nft
+    JSON (an old nft without `-j`), which the caller treats as unchecked, never
+    present. An unconditional accept = a rule with an `accept` verdict and no
+    `match` expression (counter and comment are separate statements, and comment
+    is a rule-level field, so neither narrows the rule)."""
+    try:
+        objs = json.loads(out)["nftables"]
+        if not isinstance(objs, list):
+            raise ValueError
+    except (ValueError, TypeError, KeyError):
+        return "unparsed"
+    drop_chains: set = set()
+    for o in objs:
+        if isinstance(o, dict):
+            c = o.get("chain")
+            if isinstance(c, dict) and c.get("hook") == "output" and c.get("policy") == "drop":
+                drop_chains.add(c.get("name"))
+    if not drop_chains:
+        return "missing"
+    for o in objs:
+        r = o.get("rule") if isinstance(o, dict) else None
+        if not isinstance(r, dict) or r.get("chain") not in drop_chains:
+            continue
+        expr = r.get("expr") or []
+        has_accept = any(isinstance(e, dict) and "accept" in e for e in expr)
+        has_match = any(isinstance(e, dict) and "match" in e for e in expr)
+        if has_accept and not has_match:
+            return "missing"
+    return "confirmed"
 
 
 def _egress_state() -> dict[str, str]:
     """Read (never write) the egress-cut rules Zee loads, per backend:
-    "present" (the shape Zee loads), "absent", "unexpected" (there, but not that shape) or
-    "unreadable" (tool missing or needs admin rights). macOS / Linux only."""
+    "present" (the shape Zee loads), "absent", "unexpected" (there, but not that shape),
+    "unreadable" (tool missing or needs admin rights) or "unverified" (loaded-looking,
+    but this platform's read cannot confirm the block is in force).
+
+    The block is confirmed authoritatively only on Linux: nft via `nft -j` JSON
+    (structural, so a comment or counter cannot hide a bypassing accept) and
+    iptables/ip6tables via `-S` with the OUTPUT jump read back. On macOS the single
+    pf read shows the anchor's rules but not whether pf is enabled or its anchor is
+    referenced, so a loaded-looking pf block is reported "unverified", never "present"
+    (cut_egress._verify_egress does the full pf confirmation on the cut path).
+    macOS / Linux only."""
     # jump=True: an iptables-family backend whose chain only blocks while OUTPUT
     # still jumps to it -- read OUTPUT back and verify the jump, or a disabled
     # block (chain + DROP present, jump gone) would read as "present".
+    # authoritative=False: a confirmed shape is not proof the block is in force
+    # (macOS pf) -- reported "unverified", never "present".
     if sys.platform == "darwin":
-        checks = [("pf", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule, False)]
+        checks = [("pf", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule, False, False)]
     elif sys.platform.startswith("linux"):
-        checks = [("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure, False),
-                  ("iptables", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure, True)]
+        checks = [("nft", ["nft", "-j", "list", "table", "inet", "zee_egress"], _nft_json_present, False, True),
+                  ("iptables", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure, True, True)]
         ipt = sbin_which("iptables")
         if ipt is not None and not kernel_ipv6_absent():
             # IPv6 has its own table: read it through the ip6tables of the same kernel backend
             # as iptables, as the cut does (nft's inet table already covers both families)
             ok_v, version = _run([ipt, "--version"])
             v6 = _ip6tables_tool(iptables_backend(version) if ok_v else None) or "ip6tables"
-            checks.append(("ip6tables", [v6, "-S", "ZEE_EGRESS"], _iptables_chain_structure, True))
+            checks.append(("ip6tables", [v6, "-S", "ZEE_EGRESS"], _iptables_chain_structure, True, True))
     else:
         return {}
     res: dict[str, str] = {}
-    for name, cmd, shape, jump in checks:
+    for name, cmd, shape, jump, authoritative in checks:
         exe = sbin_which(cmd[0])
         if exe is None:
             res[name] = "unreadable"
@@ -115,17 +158,17 @@ def _egress_state() -> dict[str, str]:
         if ok and not _lines(out):
             res[name] = "absent"
         elif ok:
-            # Drop nft comments (`comment "..."`) and `counter` values
-            # ("counter packets 3 bytes 180 accept"), or an unconditional accept
-            # carrying either still slips past the bypass check below.
-            plain = [_nft_bare(ln) for ln in _lines(out)]
-            # an unconditional accept in the chain is not the cut Zee loads (the shape check
-            # looks only for the hooked drop policy), nor is a chain OUTPUT no longer jumps to
-            present = shape(out, set()) == "confirmed" and "accept" not in plain
+            verdict = shape(out, set())
+            if verdict == "unparsed":  # nft without -j JSON: unchecked, not present
+                res[name] = "unreadable"
+                continue
+            present = verdict == "confirmed"
             if present and jump:
                 ok_j, out_j = _run([exe, "-S", "OUTPUT"])
                 present = ok_j and _iptables_jump_first(out_j, set()) == "confirmed"
-            res[name] = "present" if present else "unexpected"
+            # loaded-looking but unconfirmable (macOS pf): never claim "present"
+            res[name] = ("unverified" if present and not authoritative
+                         else "present" if present else "unexpected")
         elif any(a in out for a in _ABSENT):
             res[name] = "absent"
         else:
@@ -350,6 +393,7 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     if states:
         bad = sorted(k for k, v in states.items() if v == "unexpected")
         on = sorted(k for k, v in states.items() if v == "present")
+        unverified = sorted(k for k, v in states.items() if v == "unverified")
         recorded: Optional[set[str]] = None  # None = not comparable (no usable config / damaged record)
         if cfg is not None:
             try:
@@ -373,6 +417,11 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
         elif lost:
             say("WARN", "egress rules", f"the cut record says an egress cut is open but Zee's "
                 f"{', '.join(lost)} rules are not loaded", "zee restore   (closes the record)")
+        elif unverified:
+            say("WARN", "egress rules", f"{', '.join(unverified)}: Zee's cut rules are loaded in the "
+                "pf anchor, but this check cannot confirm they are in force on this platform "
+                "(whether pf is enabled and its anchor referenced is not read here)",
+                "zee restore removes them; or check `sudo pfctl -s info` and `sudo pfctl -s rules`")
         elif "unreadable" in states.values():
             say("INFO", "egress rules", "not checked: reading firewall rules needs admin rights "
                 "or the tool is not usable (run `sudo zee doctor` to include it)")
