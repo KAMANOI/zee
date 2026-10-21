@@ -82,3 +82,14 @@ Deviations from the design, on purpose:
     end ≤ file size` is verified; a shortfall is G226. The dtype→(block, type_size) table is taken verbatim
     from llama.cpp `gguf-py/gguf/constants.py` `GGML_QUANT_SIZES`; a tensor of a type not in the table
     cannot be sized and makes the file a gap (G225), not a pass.
+
+## 既知の残存リスク（2026-10-21・残存リスク明記で確定）
+
+3回の外部レビュー（Codex ASTRA）で層を厚くしたが、敵対的に作り込んだファイルで以下は依然すり抜ける。モデルファイル検査は**出荷するが、唯一の防衛線ではない**（信頼できない配布元のモデルは別経路でも審査する前提）。次に腰を据えて直すなら専用パーサの導入が必要（別タスク）。
+
+- **zipbypass（高）**: ZIP メンバー `data/payload.bin` を PROTO マーカーの無いプロトコル0/1の eval 参照 pickle にすると指摘ゼロ。生テンソルの除外を「形式と参照関係の確認が取れた場合に限る」まで厳密化できていない。
+- **zipreadgap（中）**: 先頭読み取りの展開エラーを空データ扱いするため、非 .pkl メンバーの DEFLATE 破損が G225 なしで通る経路が残る。
+- **kerasescape（中）**: config.json の class_name を `Lambda` と書くと JSON 上は Lambda と等価でも G229 が出ない（復号後の再帰検査が未実装）。
+- **stdtype（中）**: safetensors の未知 dtype でサイズ検証を省くため、`dtype=NOT_A_DTYPE・shape=[1000000]・実データ1バイト` が指摘ゼロ。
+
+対応方針（確定）：上記を既知の制約として明記したうえで現行版を出す。利用者向けには「未知形式・改変ファイルは完全には検知しない。配布元の信頼とハッシュ照合を併用」と案内する。
