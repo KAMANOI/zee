@@ -56,15 +56,21 @@ IPT4, IPT6 = "__zee_iptables_egress_chain__", "__zee_ip6tables_egress_chain__"
 _OIF_LO = {"match": {"op": "==", "left": {"meta": {"key": "oif"}}, "right": "lo"}}
 
 
-def _nftj(rules, *, hook="output", policy="drop"):
+def _nftj(rules, *, hook="output", policy="drop", flags=None, extra=()):
     """A faked `nft -j list table inet zee_egress` dump. `rules` is a list of
-    rule dicts (each with its own `expr`, optional `comment`)."""
+    rule dicts (each with its own `expr`, optional `comment`). `flags` sets the
+    table's `flags` member (string or list); `extra` appends raw objects
+    (further chains, sets, rules) to the dump."""
+    table = {"family": "inet", "name": "zee_egress"}
+    if flags is not None:
+        table["flags"] = flags
     objs = [{"metainfo": {"version": "1.0"}},
-            {"table": {"family": "inet", "name": "zee_egress"}},
+            {"table": table},
             {"chain": {"family": "inet", "table": "zee_egress", "name": "out",
                        "type": "filter", "hook": hook, "prio": 0, "policy": policy}}]
     for r in rules:
         objs.append({"rule": {"family": "inet", "table": "zee_egress", "chain": "out", **r}})
+    objs.extend(extra)
     return json.dumps({"nftables": objs})
 
 
@@ -321,3 +327,48 @@ def test_nft_full_local_table_is_present(monkeypatch):  # positive control
     rules += [{"expr": [_daddr(n), {"accept": None}]}
               for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
     assert _nft_state(monkeypatch, _nftj(rules)) == "present"
+
+
+# ---- table-level completion (Astra findings 1 and 2) ------------------------
+# The Zee table must match the table Zee loads exactly: enabled (no dormant/
+# other flag), exactly its one output-drop chain, and no rule anywhere in the
+# table outside Zee's allowlist. Each negative isolates one changed line.
+
+_FULL_RULES = [{"expr": [_OIF_LO, {"accept": None}]}] + [
+    {"expr": [_daddr(n), {"accept": None}]}
+    for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+
+
+@pytest.mark.parametrize("flags", [["dormant"], "dormant"])
+def test_nft_dormant_table_is_not_present(monkeypatch, flags):
+    # finding 1: a dormant table unregisters its base chains (not evaluated),
+    # yet the chain still reads hook output / policy drop.
+    assert _nft_state(monkeypatch, _nftj(_FULL_RULES, flags=flags)) == "unexpected"
+
+
+def test_nft_extra_chain_is_not_present(monkeypatch):
+    # finding 2: an extra chain in the Zee table -> the table is not exactly
+    # Zee's one output-drop chain.
+    extra = [{"chain": {"family": "inet", "table": "zee_egress", "name": "side",
+                        "type": "filter", "hook": "output", "prio": 1, "policy": "accept"}}]
+    assert _nft_state(monkeypatch, _nftj(_FULL_RULES, extra=extra)) == "unexpected"
+
+
+def test_nft_extra_rule_in_other_chain_is_not_present(monkeypatch):
+    # finding 2: an unconditional accept in a different chain of the Zee table.
+    # Pre-fix the rule loop skipped any rule whose chain != the drop chain.
+    extra = [{"rule": {"family": "inet", "table": "zee_egress", "chain": "side",
+                       "expr": [{"accept": None}]}}]
+    assert _nft_state(monkeypatch, _nftj(_FULL_RULES, extra=extra)) == "unexpected"
+
+
+def test_nft_exact_expected_table_is_present(monkeypatch):  # positive control
+    assert _nft_state(monkeypatch, _nftj(_FULL_RULES)) == "present"
+
+
+def test_iptables_unconditional_accept_in_zee_chain_is_not_present(monkeypatch):
+    # iptables analog: an extra unconditional ACCEPT inserted at the top of the
+    # Zee chain (what `-I ZEE_EGRESS 1 -j ACCEPT` prints back). Already caught
+    # by the chain allowlist pre-fix -- evidence the iptables side is complete.
+    chain = _V4_FULL.replace("-N ZEE_EGRESS\n", "-N ZEE_EGRESS\n-A ZEE_EGRESS -j ACCEPT\n")
+    assert _ipt_state(monkeypatch, chain) == "unexpected"

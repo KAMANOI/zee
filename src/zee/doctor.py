@@ -104,37 +104,49 @@ _NFT_ALLOWED_RULES = [
 
 def _nft_json_present(out: str, _profiles: set[str]) -> str:
     """Judge `nft -j list table inet zee_egress` (JSON) by an allowlist of the
-    exact rule exprs Zee loads (`_NFT_ALLOWED_RULES`): "confirmed" = a chain
-    hooked on output with policy drop whose every rule is one of Zee's own
-    local-accept exprs with no rule comment; "missing" = present but any rule is
-    not that shape -- an unconditional accept, a counter/comment on a rule, a
-    jump/goto/return/queue verdict out of the chain, or an accept to a
-    destination Zee never loads (all drift, fail closed); "unparsed" = not nft
-    JSON (an old nft without `-j`), which the caller treats as unchecked, never
-    present. Judged by value, not by statement type, so a narrow non-Zee accept
-    cannot read as present -- matching the iptables allowlist on the other side."""
+    whole table Zee loads: "confirmed" = the table is enabled (no `flags`: Zee
+    sets none, so any flag -- `dormant` unregisters the base chains so the table
+    is not evaluated -- is drift), holds EXACTLY Zee's one output/policy-drop
+    chain and nothing else (no extra chain, set, map, ...), and every rule in
+    the table is one of Zee's own local-accept exprs (`_NFT_ALLOWED_RULES`) with
+    no rule comment. "missing" = present but anything differs -- a disabling
+    flag, an extra/other-kind object, an unconditional accept, a counter/comment
+    on a rule, a jump/goto/return/queue verdict, or an accept to a destination
+    Zee never loads (all drift, fail closed). "unparsed" = not nft JSON (an old
+    nft without `-j`), which the caller treats as unchecked, never present.
+    Judged by value, not by statement type, so a narrow non-Zee accept cannot
+    read as present -- matching the iptables allowlist on the other side. Only
+    the Zee table is read; other nftables tables are not (nft(8): `accept` ends
+    only the current base chain, so an accept in another table on the same hook
+    cannot override Zee's drop)."""
     try:
         objs = json.loads(out)["nftables"]
         if not isinstance(objs, list):
             raise ValueError
     except (ValueError, TypeError, KeyError):
         return "unparsed"
-    drop_chains: set = set()
+    chains: list[dict] = []
     for o in objs:
-        if isinstance(o, dict):
-            c = o.get("chain")
-            if isinstance(c, dict) and c.get("hook") == "output" and c.get("policy") == "drop":
-                drop_chains.add(c.get("name"))
-    if not drop_chains:
-        return "missing"
-    for o in objs:
-        r = o.get("rule") if isinstance(o, dict) else None
-        if not isinstance(r, dict) or r.get("chain") not in drop_chains:
+        if not isinstance(o, dict) or "metainfo" in o:
             continue
-        # A comment on the rule, or any expr Zee does not load, is drift.
-        # (`handle` is a separate rule-level key, so comparing `expr` ignores it.)
-        if "comment" in r or (r.get("expr") or []) not in _NFT_ALLOWED_RULES:
+        if "table" in o:
+            t = o["table"]
+            if not isinstance(t, dict) or t.get("flags"):  # Zee sets no table flag; any is drift
+                return "missing"
+        elif "chain" in o:
+            chains.append(o["chain"])
+        elif "rule" in o:
+            r = o["rule"]
+            # A comment on the rule, or any expr Zee does not load, is drift.
+            # (`handle` is a separate rule-level key, so comparing `expr` ignores it.)
+            if not isinstance(r, dict) or "comment" in r or (r.get("expr") or []) not in _NFT_ALLOWED_RULES:
+                return "missing"
+        else:  # any other object kind (set, map, flowtable, ...) is not Zee's
             return "missing"
+    # Exactly Zee's one chain, hooked on output with policy drop.
+    c = chains[0] if len(chains) == 1 else None
+    if not isinstance(c, dict) or c.get("hook") != "output" or c.get("policy") != "drop":
+        return "missing"
     return "confirmed"
 
 
@@ -409,8 +421,9 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
 
     # --- egress rules vs the cut record (read-only; light drift check) ------
     # ponytail: compares what is loaded with the shape Zee itself loads and with the cut record;
-    # there is no stored list of approved destinations yet (egress approval is not wired),
-    # and rules from other software are not inspected. Windows is not checked.
+    # there is no stored list of approved destinations yet (egress approval is not wired).
+    # Zee's own table/chain is inspected exactly (any foreign flag/chain/rule in it is drift);
+    # other nftables tables / firewall rules outside Zee's own are not read. Windows is not checked.
     states = egress()
     if states:
         bad = sorted(k for k, v in states.items() if v == "unexpected")
