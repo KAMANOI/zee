@@ -41,8 +41,8 @@ Deviations from the design, on purpose:
   * a broken zip member (CRC mismatch, unsupported compression) in a Keras config is G225, not a crash.
   * a companion `.py` too deeply nested for the `ast` walk (e.g. a long `1+1+...` chain) is G225; calls
     already seen are still reported.
-  * a later pickle stream that started (PROTO) or imported, then breaks off, is broken (G224 / G225); plain
-    raw tensor bytes after the last stream are still not.
+  * a later pickle stream that started (PROTO) and imported, then breaks off, is broken (G224 / G225); raw
+    tensor bytes after the last stream are still not (either alone happens by chance in raw data).
   * GGUF: version other than 2 / 3 is G225; a tensor table that does not fit the file (count, > 4 dims,
     offsets past the end, tensors with no data) or a key-value table that runs past the end is G226.
   * (medium) per-file diff cache: not built, see above.

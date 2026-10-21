@@ -163,6 +163,10 @@ def test_legacy_multi_stream_pickle_with_trailing_raw_data(tmp_path):
     body = pickle.dumps(1, protocol=2) + pickle.dumps(OrderedDict(a=1), protocol=2) + b"\xff" * 64
     c = _codes(_scan(tmp_path, {"w.pth": body}))
     assert "G225" not in c and "G224" not in c and "G221" in c
+    # legacy raw region starts with an int64 count: 128 reads as PROTO, then dies; still not a cut-off stream
+    body = pickle.dumps(1, protocol=2) + pickle.dumps(OrderedDict(a=1), protocol=2) + struct.pack("<q", 128) + b"\0" * 64
+    c = _codes(_scan(tmp_path / "b", {"w.pth": body}))
+    assert "G225" not in c and "G224" not in c and "G221" in c
 
 
 # --- safetensors -------------------------------------------------------------
@@ -402,7 +406,7 @@ def test_keras_config_crc_mismatch_is_a_gap_not_a_crash(tmp_path):
 def test_deeply_chained_companion_py_is_a_gap_not_a_crash(tmp_path):
     src = "import os\nos.system('id')\nx = " + "+".join(["1"] * 3000) + "\n"
     c = _codes(_scan(tmp_path, {"model.safetensors": _st({"a": ("U8", [1], 1)}), "modeling_x.py": src}))
-    assert "G225" in c
+    assert "G225" in c and "G228" in c
 
 
 def test_second_stream_cut_after_import_is_broken(tmp_path):

@@ -180,7 +180,7 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
     f = _Capped(f)
     done = 0
     while True:
-        n0, proto_next = len(imports), f.buf == b"\x80"  # did this stream import / start with PROTO?
+        n0, u0, proto_next = len(imports), unresolved, f.buf == b"\x80"  # did this stream start with PROTO and import?
         recent: list = []  # last pushed values: str, or None for "something else"
         memo: dict[int, object] = {}
         stopped = False
@@ -222,8 +222,10 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
             return imports, unresolved, "limit"
         except Exception:  # genops: ValueError on a bad opcode or EOF inside a stream
             # garbage after a finished stream (legacy torch files end with raw tensor data) is not a break,
-            # unless that tail already started a new stream (PROTO) or imported: then a stream was cut off
-            return imports, unresolved, "ok" if done and not proto_next and len(imports) == n0 else "broken"
+            # unless that tail started a new stream (PROTO) and imported: then a stream was cut off.
+            # Either alone happens by chance in raw data (an int64 count of 128 reads as PROTO, 99 as GLOBAL).
+            cut = proto_next and (len(imports) > n0 or unresolved > u0)
+            return imports, unresolved, "ok" if done and not cut else "broken"
         if not stopped:
             return imports, unresolved, "broken"
         done += 1
@@ -271,7 +273,7 @@ def _pickle_flags(rel: str, f, *, sure: bool) -> tuple[list[Flag], bool]:
     return flags, True
 
 
-def _zip_flags(p: Path, rel: str) -> tuple[list[Flag], bool, bool]:
+def _zip_flags(p: Path, rel: str, named: bool = True) -> tuple[list[Flag], bool, bool]:
     """(flags, has_pickle, is_keras)."""
     flags: list[Flag] = []
     has_pickle = keras = False
@@ -293,12 +295,13 @@ def _zip_flags(p: Path, rel: str) -> tuple[list[Flag], bool, bool]:
                 flags.append(Flag(Severity.LOW, "G225", "encrypted zip member; not inspected",
                                   evidence=f"{rel}!{name}"))
             elif low.endswith((".pkl", ".pickle")) or _pickle_member(zf, info):
-                has_pickle = True
                 try:
-                    with zf.open(info) as m:
-                        fl, _ = _pickle_flags(f"{rel}!{name}", m, sure=True)
+                    with zf.open(info) as m:  # outside a model-named zip, two bytes alike are not enough
+                        fl, was = _pickle_flags(f"{rel}!{name}", m, sure=named or low.endswith((".pkl", ".pickle")))
+                    has_pickle |= was
                     flags += fl
                 except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
+                    has_pickle = True
                     flags.append(Flag(Severity.LOW, "G225", "zip member could not be read; not inspected",
                                       evidence=f"{rel}!{name}"))
             elif low == "config.json" and "metadata.json" in names:
@@ -638,7 +641,7 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
             continue
         if fmt == "zip":  # by first bytes: a pickle zip renamed weights.dat is still read
             named = suf in _PICKLE_SUFFIXES or suf in (".keras", ".pt2")
-            fl, has_pickle, keras = _zip_flags(p, rel)
+            fl, has_pickle, keras = _zip_flags(p, rel, named)
             if not (named or has_pickle or keras):
                 continue  # ponytail: an ordinary zip (.docx/.whl) without a pickle: its nested / encrypted members are not gaps
             has_model = True
