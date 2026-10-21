@@ -75,7 +75,10 @@ def _doctor(tmp_path, monkeypatch, states, *, record=False, damaged=False, cuts=
         monkeypatch.setenv(k, str(h))
     monkeypatch.setenv("XDG_STATE_HOME", str(h / "state"))
     cfg = tmp_path / "assets.toml"
-    cfg.write_text('dry_run = true\n[[assets]]\nid = "a"\ndecoy_paths = ["%s"]\n' % (h / "d.txt"))
+    # .as_posix(): a Windows decoy path (C:\...) inside a double-quoted TOML
+    # string hits \-escape parsing (\U, \A, ...) and the config fails to load,
+    # which would make this helper's config unusable only on Windows.
+    cfg.write_text('dry_run = true\n[[assets]]\nid = "a"\ndecoy_paths = ["%s"]\n' % (h / "d.txt").as_posix())
     cfg.chmod(0o600)
     if damaged:
         from zee.telemetry.cut_state import default_cut_state_path
