@@ -46,3 +46,39 @@ Deviations from the design, on purpose:
   * GGUF: version other than 2 / 3 is G225; a tensor table that does not fit the file (count, > 4 dims,
     offsets past the end, tensors with no data) or a key-value table that runs past the end is G226.
   * (medium) per-file diff cache: not built, see above.
+- Round 4 (2026-10-21, four findings that persisted through round 3 because the earlier fixes were
+  point-patches). Root cause and single rule applied to all four: **the scanner must never return "ok"
+  for a region it could not actually read and verify** — a failed read / parse / decompress, or a region
+  whose contents cannot be positively confirmed as raw tensor data, resolves to G225 (or G226 when the
+  format is definitively contradicted). Fail toward "unscanned", never toward "ok".
+  * kerascrash (HIGH): a DEFLATE-corrupt `config.json` raised `zlib.error` uncaught and aborted the whole
+    scan (CRC mismatch was caught, DEFLATE corruption was not). Fixed by one helper, `_read_member`, that
+    is the single place a zip member is decompressed; every decode failure at header-read or body-read
+    (`zlib.error`, `lzma.LZMAError`, `BadZipFile`, `NotImplementedError`, `EOFError`, `OSError`) maps to
+    G225. Pickle members are now read through it into memory, so a decompression fault can no longer be
+    swallowed mid-scan as "ok".
+  * zipbypass (HIGH): a dangerous pickle at `.../data/payload.bin` was skipped by **path** alone (any
+    member under `data/` was treated as a raw tensor slot). Path is no longer a skip reason: every member
+    that starts with a pickle PROTO is read whatever its path, and `sure` (name-confirmed pickle) is now
+    derived only from a `.pkl` / `.pickle` member name — a raw-tensor slot that merely starts like a pickle
+    is read but flags nothing unless it parses as a real stream. **Deliberate deviation:** confirming which
+    members are genuine tensor storages by parsing `data.pkl`'s persistent-id index was *not* built; the
+    conservative content check replaces the path skip instead (unconfirmed members are scanned, not
+    trusted). A legacy `.pt` zip whose raw `data/N` storage happens to start `0x80 0x02-05` and parses an
+    import before failing will now flag (exit 2/3 where it was 0) — the safe direction. A `sure=False`
+    member (known a pickle only by its magic bytes) is dropped as "not a pickle" only on a genuine parse
+    failure (`broken`); a member that parsed cleanly up to the read cap (`limit`) is kept as G225, so a
+    dangerous `__reduce__` padded past 16/64 MiB under a non-`.pkl` name cannot slip through.
+  * pickletail (MEDIUM): a valid pickle followed by a proto-0 second stream (`c<module>\n<name>\n`, first
+    byte `0x63`, not `0x80`) that imported then truncated still returned "ok", because cut-off detection
+    required a `0x80` PROTO marker. There is no verified tensor-data span in a bare pickle file, so any
+    failed trailing segment that imported anything (GLOBAL / STACK_GLOBAL / EXT) is now a cut-off stream
+    (G224 + G225); a segment that imported nothing is still raw trailing data (ok). A legacy non-zip `.pt`
+    whose raw tail parses an import before failing will now flag (the safe direction).
+  * ggufvalidation (MEDIUM): a 58-byte GGUF declaring a 1,000,000-element F32 tensor with one byte of data
+    returned "ok" — only the offset was bounds-checked, not the tensor's byte length. Now each tensor's
+    required bytes are computed from dims × dtype size over its block (ceil, so never underestimated),
+    honouring `general.alignment` (default 32; a non-power-of-two is G226), and `data_start + max tensor
+    end ≤ file size` is verified; a shortfall is G226. The dtype→(block, type_size) table is taken verbatim
+    from llama.cpp `gguf-py/gguf/constants.py` `GGML_QUANT_SIZES`; a tensor of a type not in the table
+    cannot be sized and makes the file a gap (G225), not a pass.

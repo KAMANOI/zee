@@ -17,14 +17,20 @@ Flag codes:
                   (tensor / storage / OrderedDict / numpy array rebuilders).
     G224  HIGH    the pickle breaks off before STOP after it already imported
                   something (a loader runs the part that comes before the break).
-    G225  GAP     could not be read: unknown or unparsable format, over a size /
-                  time limit, encrypted zip, unresolvable import, GGUF version
-                  other than 2/3, companion .py too deep to walk. Inspection is
-                  then partial (exit 3): the gate cannot vouch for it.
+    G225  GAP     could not be read and positively confirmed: unknown or
+                  unparsable format, over a size / time limit, encrypted zip, a
+                  zip member that would not decompress, an unresolvable import, a
+                  trailing pickle stream that imported then broke, GGUF version
+                  other than 2/3 or a GGUF tensor of a type we cannot size,
+                  companion .py too deep to walk. Inspection is then partial
+                  (exit 3): the gate cannot vouch for it. A region never passes
+                  by default -- fail toward "unscanned", never toward "ok".
     G226  HIGH    a file that is, or is named, safetensors but breaks the format
                   (bad header, duplicate keys, holes / overlaps, size mismatch,
                   or a pickle / zip under a .safetensors name), or a GGUF whose
-                  key-value / tensor table does not fit the file.
+                  key-value / tensor table does not fit the file (tensors with no
+                  data, offsets past the end, bad alignment, or more tensor bytes
+                  than the file holds).
     G227  MEDIUM  config names code to import on load (`auto_map`), companion
                   modeling_/configuration_/... .py files next to model weights,
                   or `trust_remote_code=True`. `False` does not lower it
@@ -47,11 +53,14 @@ Best-effort (invariant I5): a clean result is not a proof.
 from __future__ import annotations
 
 import ast
+import io
 import json
+import lzma
 import pickletools
 import re
 import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 from .model import Flag, Severity
@@ -180,7 +189,7 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
     f = _Capped(f)
     done = 0
     while True:
-        n0, u0, proto_next = len(imports), unresolved, f.buf == b"\x80"  # did this stream start with PROTO and import?
+        n0, u0 = len(imports), unresolved  # imports / unresolved before this stream attempt
         recent: list = []  # last pushed values: str, or None for "something else"
         memo: dict[int, object] = {}
         stopped = False
@@ -221,10 +230,12 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
         except _Limit:
             return imports, unresolved, "limit"
         except Exception:  # genops: ValueError on a bad opcode or EOF inside a stream
-            # garbage after a finished stream (legacy torch files end with raw tensor data) is not a break,
-            # unless that tail started a new stream (PROTO) and imported: then a stream was cut off.
-            # Either alone happens by chance in raw data (an int64 count of 128 reads as PROTO, 99 as GLOBAL).
-            cut = proto_next and (len(imports) > n0 or unresolved > u0)
+            # garbage after a finished stream (legacy torch files end with raw tensor data) is not a break.
+            # But we have no verified tensor-data span here, so a failed trailing segment that imported
+            # anything (GLOBAL / STACK_GLOBAL / EXT) is a cut-off stream: a loader runs the part before the
+            # break, including a REDUCE on that import. PROTO is not required (a proto-0 GLOBAL starts with
+            # 'c', not 0x80). A segment that imported nothing is raw bytes that failed to parse -> not a cut.
+            cut = len(imports) > n0 or unresolved > u0
             return imports, unresolved, "ok" if done and not cut else "broken"
         if not stopped:
             return imports, unresolved, "broken"
@@ -233,15 +244,21 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
             if not f.more():
                 return imports, unresolved, "ok"
         except Exception:
-            return imports, unresolved, "ok"
+            # could not read on to see whether another stream follows: do not vouch "ok" for what was
+            # not read. 'limit' adds G225 (partial, exit 3) without fabricating a G224 for a stream that
+            # did reach STOP.
+            return imports, unresolved, "limit"
         f.used = 0  # each stream gets its own cap
 
 
 def _pickle_flags(rel: str, f, *, sure: bool) -> tuple[list[Flag], bool]:
     """(flags, was_pickle). `sure`: format already known from the first bytes."""
     imports, unresolved, end = _scan_pickle(f)
-    if not sure and not imports and end != "ok":
-        return [], False  # suffix said pickle, content does not parse as one
+    if not sure and not imports and not unresolved and end == "broken":
+        return [], False  # not name-confirmed, no callable primitive, and genops failed to parse it:
+        # raw bytes that merely started like a pickle. Only 'broken' drops -- a 'limit' hit means the stream
+        # parsed cleanly up to the cap (it IS a pickle we did not finish, kept as G225), and an unresolved
+        # GLOBAL / EXT that then broke off is a real code path a loader would run, so it is kept too.
     flags: list[Flag] = []
     seen: set[tuple[str, str]] = set()
     for mod, nm in imports:
@@ -273,7 +290,31 @@ def _pickle_flags(rel: str, f, *, sure: bool) -> tuple[list[Flag], bool]:
     return flags, True
 
 
-def _zip_flags(p: Path, rel: str, named: bool = True) -> tuple[list[Flag], bool, bool]:
+# Every way reading one zip member can fail -- a corrupt/unsupported compressor (zlib / lzma / bz2->OSError),
+# a CRC mismatch or structural fault (BadZipFile), an unsupported method (NotImplementedError) or a short
+# stream (EOFError). All of them map to "could not read" -> G225, never to a silent "ok".
+_MEMBER_ERRORS = (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError, zlib.error, lzma.LZMAError)
+
+
+def _read_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, limit: int = _PICKLE_CAP) -> bytes | None:
+    """Decompress a zip member into memory, bounded by `limit` (plus one read). Returns the bytes, or
+    None when the member cannot be read or decompressed -- the single choke point where any decode
+    failure, at header-read or body-read, becomes G225 (fail toward unscanned)."""
+    try:
+        with zf.open(info) as m:
+            out, got = [], 0
+            while got <= limit:
+                chunk = m.read(_READ_CAP)  # a bomb decompresses lazily: at most _READ_CAP output per read
+                if not chunk:
+                    return b"".join(out)
+                out.append(chunk)
+                got += len(chunk)
+            return b"".join(out)  # over the cap; the pickle scanner's own cap then marks it G225 'limit'
+    except _MEMBER_ERRORS:
+        return None
+
+
+def _zip_flags(p: Path, rel: str) -> tuple[list[Flag], bool, bool]:
     """(flags, has_pickle, is_keras)."""
     flags: list[Flag] = []
     has_pickle = keras = False
@@ -295,15 +336,16 @@ def _zip_flags(p: Path, rel: str, named: bool = True) -> tuple[list[Flag], bool,
                 flags.append(Flag(Severity.LOW, "G225", "encrypted zip member; not inspected",
                                   evidence=f"{rel}!{name}"))
             elif low.endswith((".pkl", ".pickle")) or _pickle_member(zf, info):
-                try:
-                    with zf.open(info) as m:  # outside a model-named zip, two bytes alike are not enough
-                        fl, was = _pickle_flags(f"{rel}!{name}", m, sure=named or low.endswith((".pkl", ".pickle")))
-                    has_pickle |= was
-                    flags += fl
-                except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
+                data = _read_member(zf, info)
+                if data is None:
                     has_pickle = True
                     flags.append(Flag(Severity.LOW, "G225", "zip member could not be read; not inspected",
                                       evidence=f"{rel}!{name}"))
+                else:  # a member only known as a pickle by its magic bytes is not 'sure': raw tensor bytes
+                    # that happen to start with PROTO must not become a gap unless they parse as a real stream
+                    fl, was = _pickle_flags(f"{rel}!{name}", io.BytesIO(data), sure=low.endswith((".pkl", ".pickle")))
+                    has_pickle |= was
+                    flags += fl
             elif low == "config.json" and "metadata.json" in names:
                 keras = True
                 flags += _keras_config(zf, info, rel)
@@ -318,15 +360,14 @@ def _member_head(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     try:
         with zf.open(info) as m:
             return m.read(4)
-    except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
+    except _MEMBER_ERRORS:
         return b""
 
 
 def _pickle_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
-    """A member that starts like a pickle (PROTO 2-5) is read as one whatever its name.
-    ponytail: raw tensor members under `.../data/` are skipped (they start with arbitrary bytes)."""
-    if "/data/" in "/" + info.filename.lower():
-        return False
+    """A member that starts like a pickle (PROTO 2-5) is read as one whatever its name or path.
+    Path is never the sole reason to skip a member: a raw-tensor slot (e.g. `.../data/N`) is not a
+    *confirmed* tensor region -- it is read, and bytes that are not a real pickle flag nothing."""
     h = _member_head(zf, info)
     return len(h) >= 2 and h[0] == 0x80 and 2 <= h[1] <= 5
 
@@ -334,10 +375,10 @@ def _pickle_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
 def _keras_config(zf: zipfile.ZipFile, info: zipfile.ZipInfo, rel: str) -> list[Flag]:
     if info.file_size > _JSON_CAP:
         return [Flag(Severity.LOW, "G225", "keras config too large; not inspected", evidence=rel)]
-    try:
-        txt = zf.read(info).decode("utf-8", "replace")
-    except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
+    data = _read_member(zf, info, limit=_JSON_CAP)
+    if data is None:
         return [Flag(Severity.LOW, "G225", "keras config could not be read", evidence=rel)]
+    txt = data.decode("utf-8", "replace")
     if re.search(r'"class_name"\s*:\s*"Lambda"|enable_unsafe_deserialization|__lambda__|"module"\s*:\s*"(?!(?:keras|keras_hub|keras_nlp|builtins)[."])', txt):
         return [Flag(Severity.MEDIUM, "G229", "Keras model holds a Lambda layer or custom code reference",
                      evidence=f"{rel}: config.json")]
@@ -413,6 +454,16 @@ def _safetensors_problem(p: Path, size: int) -> str | None:
 
 # --- GGUF --------------------------------------------------------------------
 _GGUF_SCALAR = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+# ggml tensor type id -> (block size in elements, bytes per block). From llama.cpp
+# gguf-py/gguf/constants.py GGML_QUANT_SIZES (fetched 2026-10-21). A type id not here cannot be sized,
+# so its tensor is a gap (G225), never silently vouched. Deprecated ids (4, 5, 31-33, 36-38) are absent.
+_GGML_QUANT_SIZE = {
+    0: (1, 4), 1: (1, 2), 2: (32, 18), 3: (32, 20), 6: (32, 22), 7: (32, 24), 8: (32, 34), 9: (32, 36),
+    10: (256, 84), 11: (256, 110), 12: (256, 144), 13: (256, 176), 14: (256, 210), 15: (256, 292),
+    16: (256, 66), 17: (256, 74), 18: (256, 98), 19: (256, 50), 20: (32, 18), 21: (256, 110), 22: (256, 82),
+    23: (256, 136), 24: (1, 1), 25: (1, 2), 26: (1, 4), 27: (1, 8), 28: (1, 8), 29: (256, 56), 30: (1, 2),
+    34: (256, 54), 35: (256, 66), 39: (32, 17), 40: (64, 36), 41: (128, 18), 42: (64, 18),
+}
 _JINJA_INTERNALS = re.compile(r"__class__|__globals__|__subclasses__|__mro__|__builtins__|__import__|"
                               r"\bos\s*\.|popen|\bimport\b|lipsum\.|cycler\.|joiner\.|namespace\.__")
 
@@ -459,27 +510,51 @@ def _gguf_read(p: Path, size: int) -> tuple[str | None, str]:
                 return o
             raise ValueError
 
+        align = 32  # GGUF default; general.alignment (UINT32) overrides it
         for _ in range(nkv):
             key, pos = rd_str(pos)
             (t,) = struct.unpack_from("<I", data, pos)
             pos += 4
             if t == 8 and key == "tokenizer.chat_template":
                 tpl = rd_str(pos)[0]
+            elif t == 4 and key == "general.alignment":
+                (align,) = struct.unpack_from("<I", data, pos)
             pos = skip(t, pos)
             if pos > len(data):
                 raise struct.error
+        if align <= 0 or align & (align - 1):  # the spec requires a power of two
+            return tpl, f"corrupt: alignment {align} is not a power of two"
+        unsized = False  # a tensor whose type we cannot size: the data region is then unverifiable (gap)
+        max_end = 0  # furthest tensor end, measured from the start of the data section
         for i in range(nt):
             _name, pos = rd_str(pos)
             (nd,) = struct.unpack_from("<I", data, pos)
             if nd > 4:
                 return tpl, f"corrupt: tensor {i} has {nd} dimensions"
+            dims = struct.unpack_from(f"<{nd}Q", data, pos + 4)
             pos += 4 + 8 * nd
-            _typ, off = struct.unpack_from("<IQ", data, pos)
+            typ, off = struct.unpack_from("<IQ", data, pos)
             pos += 12
-            if pos + off > size:  # data starts at or after the end of this table
+            if pos + off > size:  # the offset alone already lands past the end of the file
                 return tpl, f"corrupt: tensor {i} data offset beyond the file"
-        if nt and pos >= size:
-            return tpl, "corrupt: tensors declared but no data"
+            qs = _GGML_QUANT_SIZE.get(typ)
+            if qs is None:
+                unsized = True
+                continue
+            block, tsize = qs
+            cnt = 1
+            for x in dims:
+                cnt *= x
+            nbytes = (cnt + block - 1) // block * tsize  # ceil over the block: never underestimate the need
+            max_end = max(max_end, off + nbytes)
+        if nt:
+            data_start = (pos + align - 1) // align * align  # tensor data starts aligned after the table
+            if data_start + max_end > size:  # the declared tensor bytes do not fit in the file
+                return tpl, "corrupt: tensor data runs past the end of the file"
+            if unsized:  # could not size every tensor -> cannot vouch for the whole data region
+                return tpl, "gap"
+            if pos >= size:
+                return tpl, "corrupt: tensors declared but no data"
     except ValueError:
         return tpl, "corrupt: malformed key-value table (unknown type or count beyond the file)"
     except (struct.error, RecursionError):
@@ -641,7 +716,7 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
             continue
         if fmt == "zip":  # by first bytes: a pickle zip renamed weights.dat is still read
             named = suf in _PICKLE_SUFFIXES or suf in (".keras", ".pt2")
-            fl, has_pickle, keras = _zip_flags(p, rel, named)
+            fl, has_pickle, keras = _zip_flags(p, rel)
             if not (named or has_pickle or keras):
                 continue  # ponytail: an ordinary zip (.docx/.whl) without a pickle: its nested / encrypted members are not gaps
             has_model = True

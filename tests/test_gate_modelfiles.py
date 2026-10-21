@@ -306,10 +306,10 @@ def test_pickle_in_a_zip_under_any_name_is_read(tmp_path):
     p.parent.mkdir()
     with zipfile.ZipFile(p, "w") as z:
         z.writestr("archive/payload.bin", _evil())
-        z.writestr("archive/data/0", _evil())  # raw tensor slot: not read as a pickle
+        z.writestr("archive/data/0", b"\x80\x03" + b"\xff" * 30)  # raw tensor slot that starts like a pickle but is not one
         z.writestr("archive/inner.zip", b"PK\x03\x04" + b"\0" * 30)
     c = _codes(static_checks.scan_tree(p.parent))
-    assert len(c["G222"]) == 1 and "payload.bin" in c["G222"][0].evidence
+    assert len(c["G222"]) == 1 and "payload.bin" in c["G222"][0].evidence  # garbage slot is read but not misread as a pickle
     assert any("zip inside a zip" in f.message for f in c["G225"])
 
 
@@ -423,3 +423,58 @@ def test_gguf_unknown_version_is_a_gap_and_missing_tensors_are_high(tmp_path):
     assert "G226" in _codes(_scan(tmp_path / "c", {"m.gguf": b"GGUF" + struct.pack("<IQQ", 3, 1, 0) + entry + b"\0" * 32}))
     good = b"GGUF" + struct.pack("<IQQ", 3, 1, 0) + entry[:-8] + struct.pack("<Q", 0) + b"\0" * 32
     assert _codes(_scan(tmp_path / "d", {"m.gguf": good})) == {}
+
+
+# --- round-4 fixes (2026-10-21): never vouch "ok" for a region not read and verified ----------
+def test_keras_config_deflate_corrupt_is_a_gap_not_a_crash(tmp_path):
+    # a DEFLATE-compressed config.json with a broken deflate stream: zlib.error must map to G225, not crash
+    p = tmp_path / "d" / "m.keras"
+    p.parent.mkdir()
+    cfg = ('{"layers": [' + ",".join(['{"class_name": "Dense"}'] * 50) + "]}").encode()
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("metadata.json", "{}")
+        z.writestr("config.json", cfg)
+    raw = bytearray(p.read_bytes())
+    with zipfile.ZipFile(p) as z:
+        off = z.getinfo("config.json").header_offset
+    namelen = struct.unpack_from("<H", raw, off + 26)[0]
+    extralen = struct.unpack_from("<H", raw, off + 28)[0]
+    raw[off + 30 + namelen + extralen] = 0x06  # invalid DEFLATE block type -> zlib.error on decompress
+    p.write_bytes(bytes(raw))
+    assert "G225" in _codes(static_checks.scan_tree(p.parent))
+
+
+def test_dangerous_pickle_under_data_path_is_not_skipped(tmp_path):
+    # a dangerous pickle at .../data/payload.bin was excluded by PATH alone; path is never the sole skip reason
+    p = tmp_path / "d" / "weights.dat"
+    p.parent.mkdir()
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("archive/data/payload.bin", _evil())
+    c = _codes(static_checks.scan_tree(p.parent))
+    assert "G222" in c and "payload.bin" in c["G222"][0].evidence
+
+
+def test_proto0_trailing_stream_that_imports_then_truncates_is_broken(tmp_path):
+    # a proto-0 GLOBAL (no 0x80 PROTO marker) after a valid stream, cut off before STOP: a loader runs the
+    # import, so the tail is a cut-off stream (G224 + G225), not "ok" -- detection must not hinge on PROTO
+    body = pickle.dumps(1, protocol=2) + b"ccollections\nOrderedDict\n"
+    c = _codes(_scan(tmp_path, {"w.pth": body}))
+    assert "G224" in c and "G225" in c
+
+
+def test_gguf_tensor_data_shorter_than_declared_is_high(tmp_path):
+    # 58-byte GGUF declaring a 1,000,000-element F32 tensor with one byte of data: shortfall -> G226
+    entry = (struct.pack("<Q", 1) + b"w" + struct.pack("<I", 1) + struct.pack("<Q", 1_000_000)
+             + struct.pack("<IQ", 0, 0))  # name "w", nd=1, dim=1e6, type F32, data offset 0
+    body = b"GGUF" + struct.pack("<IQQ", 3, 1, 0) + entry + b"\x00"
+    assert "G226" in _codes(_scan(tmp_path, {"m.gguf": body}))
+
+
+def test_capped_non_pkl_member_is_a_gap_not_dropped(tmp_path):
+    # a member parsed cleanly up to the read cap is a pickle we did not finish (G225), not "not a pickle":
+    # a >16 MiB BINBYTES prefix before a __reduce__ payload must not slip through under a non-.pkl name
+    p = tmp_path / "d" / "pytorch_model.bin"
+    p.parent.mkdir()
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("archive/payload.bin", b"\x80\x04\x8e" + struct.pack("<Q", 1 << 40) + b"x")
+    assert "G225" in _codes(static_checks.scan_tree(p.parent))
