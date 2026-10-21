@@ -25,6 +25,7 @@ def _codes(tmp_path, files):
     ("compose.yml", "services:\n  a:\n    environment:\n      OPENAI_API_KEY:\n"),
     ("Dockerfile", "FROM x\nENV APP_MODE=prod OPENAI_API_KEY=$OPENAI_API_KEY\n"),
     ("run.sh", "docker run --pull=never -e OPENAI_API_KEY demo\n"),
+    ("compose.yaml", "services:\n  a:\n    environment:\n    - OPENAI_API_KEY\n"),  # same-indent list
 ])
 def test_g603_bad(tmp_path, rel, body):
     assert "G603" in _codes(tmp_path, {rel: body})
@@ -40,6 +41,7 @@ def test_g603_bad(tmp_path, rel, body):
     ("compose.yaml", "services:\n  a:\n    environment:\n      LOG: 1\n"),
     ("compose.yaml", "services:\n  a:\n    labels:\n      OPENAI_API_KEY: doc\n"),
     ("compose.yaml", "services:\n  a:\n    environment:\n      LOG: 1\n    labels:\n      OPENAI_API_KEY: x\n"),
+    ("compose.yaml", "services:\n  a:\n    environment:\n    - LOG=1\n    labels:\n      OPENAI_API_KEY: x\n"),
 ])
 def test_g603_clean(tmp_path, rel, body):
     assert "G603" not in _codes(tmp_path, {rel: body})
@@ -47,7 +49,11 @@ def test_g603_clean(tmp_path, rel, body):
 
 # ---- doctor: egress drift -------------------------------------------------
 
-def _doctor(tmp_path, monkeypatch, states, *, record=False, damaged=False):
+NFT = "__zee_nft_egress_table__"
+IPT4, IPT6 = "__zee_iptables_egress_chain__", "__zee_ip6tables_egress_chain__"
+
+
+def _doctor(tmp_path, monkeypatch, states, *, record=False, damaged=False, cuts=()):
     h = tmp_path / "h"
     h.mkdir()
     for k in ("HOME", "USERPROFILE"):
@@ -61,9 +67,10 @@ def _doctor(tmp_path, monkeypatch, states, *, record=False, damaged=False):
         default_cut_state_path().parent.mkdir(parents=True, exist_ok=True)
         default_cut_state_path().write_text("not json\n")
     if record:
-        from zee.telemetry.cut_state import CutStateLog
-        CutStateLog().record_cut(asset_id="a", method="egress", platform="linux",
-                                 modified=["__zee_nft_egress__"])
+        cuts = [("egress", [NFT]), *cuts]
+    from zee.telemetry.cut_state import CutStateLog
+    for method, modified in cuts:
+        CutStateLog().record_cut(asset_id="a", method=method, platform="linux", modified=modified)
     buf = io.StringIO()
     doctor.run(cfg, ps=lambda: [], egress=lambda: states, out=buf)
     return buf.getvalue()
@@ -116,3 +123,43 @@ def test_egress_state_reads_with_shape(monkeypatch, plat, tool, table, expect):
     monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
     st = doctor._egress_state()
     assert st["nft"] == expect and st["iptables"] == "unreadable"  # missing tool is reported, not dropped
+
+
+# ---- review round 2 ---------------------------------------------------------
+
+def test_doctor_ipv6_chain_deleted_warns(tmp_path, monkeypatch):
+    # IPv4 chain still there, IPv6 chain gone: not "no drift"
+    out = _doctor(tmp_path, monkeypatch, {"nft": "unreadable", "iptables": "present", "ip6tables": "absent"},
+                  cuts=[("egress", [IPT4, IPT6, "__zee_iptables_backend__:nf_tables"])])
+    assert "[WARN] egress rules" in _line(out) and "ip6tables" in _line(out)
+
+
+def test_egress_state_reads_ip6tables_of_same_backend(monkeypatch):
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n.startswith("ip") else None)
+    monkeypatch.setattr(doctor, "kernel_ipv6_absent", lambda: False)
+    seen = []
+    monkeypatch.setattr(doctor, "_ip6tables_tool", lambda b: seen.append(b) or "ip6tables-legacy")
+    chain = "-N ZEE_EGRESS\n-A ZEE_EGRESS -j DROP"
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, "iptables v1.8.7 (legacy)") if cmd[-1] == "--version"
+                        else (True, "") if cmd[0].endswith("ip6tables-legacy") else (True, chain))
+    st = doctor._egress_state()
+    assert seen == ["legacy"] and st["iptables"] == "present" and st["ip6tables"] == "absent"
+
+
+def test_egress_state_nft_counter_accept_is_unexpected(monkeypatch):
+    table = ("table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n"
+             " counter packets 0 bytes 0 accept\n }\n}")
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
+    assert doctor._egress_state()["nft"] == "unexpected"
+
+
+def test_doctor_egress_then_full_still_compares_firewall(tmp_path, monkeypatch):
+    # latest cut is full, but the egress table from the first cut is still in the record
+    out = _doctor(tmp_path, monkeypatch, {"nft": "absent"}, cuts=[("egress", [NFT]), ("full", ["eth0"])])
+    assert "[WARN] egress rules" in _line(out)
+    (tmp_path / "b").mkdir()
+    out2 = _doctor(tmp_path / "b", monkeypatch, {"nft": "present"}, cuts=[("egress", [NFT]), ("full", ["eth0"])])
+    assert "[OK] egress rules" in _line(out2)

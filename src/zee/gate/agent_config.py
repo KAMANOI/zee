@@ -493,7 +493,9 @@ def _g603(rel: str, text: str) -> Flag | None:
             if m:
                 env_indent = len(m.group(1))
                 continue
-            if line.strip() and len(line) - len(line.lstrip()) <= env_indent:
+            ind = len(line) - len(line.lstrip())
+            # YAML allows the list items at the key's own indent ("environment:\n- KEY")
+            if line.strip() and (ind < env_indent or (ind == env_indent and not line.lstrip().startswith("-"))):
                 env_indent = -1
         if _G603_NEG.search(line):
             continue

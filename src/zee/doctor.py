@@ -10,6 +10,7 @@ reads the token's value (stat only), never talks to the privsep daemon
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import stat
 import subprocess
@@ -22,9 +23,11 @@ from .config.schema import Config, duplicate_decoys
 from .decoy.canary_token import normalize_base_url
 from .errors import ZeeError
 from .recovery.auth import default_token_path
-from .responder.cut_egress import (PF_ANCHOR, _ABSENT, _iptables_chain_structure, _lines,
-                                   _nft_structure, _pf_block_rule)
-from .responder.cut_full import _run, sbin_which
+from .responder.cut_egress import (PF_ANCHOR, _ABSENT, _ip6tables_tool, _iptables_chain_structure,
+                                   _lines, _nft_structure, _pf_block_rule)
+from .responder.cut_full import (SENTINEL_LINUX_IP6TABLES_EGRESS, SENTINEL_LINUX_IPTABLES_EGRESS,
+                                 SENTINEL_LINUX_NFT_EGRESS, SENTINEL_MACOS_PFCTL_EGRESS, _run,
+                                 iptables_backend, kernel_ipv6_absent, sbin_which)
 from .telemetry.cut_state import CutStateLog
 from .telemetry.events_log import default_log_dir
 
@@ -68,6 +71,11 @@ def _synced(p: Path) -> Optional[str]:
     return next((n for n in _SYNCED if n in rel.parts), None)
 
 
+# cut record entry -> the backend name `_egress_state` reports it under
+_BACKEND = {SENTINEL_LINUX_NFT_EGRESS: "nft", SENTINEL_LINUX_IPTABLES_EGRESS: "iptables",
+            SENTINEL_LINUX_IP6TABLES_EGRESS: "ip6tables", SENTINEL_MACOS_PFCTL_EGRESS: "pf"}
+
+
 def _egress_state() -> dict[str, str]:
     """Read (never write) the egress-cut rules Zee loads, per backend:
     "present" (the shape Zee loads), "absent", "unexpected" (there, but not that shape) or
@@ -77,6 +85,13 @@ def _egress_state() -> dict[str, str]:
     elif sys.platform.startswith("linux"):
         checks = [("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure),
                   ("iptables", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure)]
+        ipt = sbin_which("iptables")
+        if ipt is not None and not kernel_ipv6_absent():
+            # IPv6 has its own table: read it through the ip6tables of the same kernel backend
+            # as iptables, as the cut does (nft's inet table already covers both families)
+            ok_v, version = _run([ipt, "--version"])
+            v6 = _ip6tables_tool(iptables_backend(version) if ok_v else None) or "ip6tables"
+            checks.append(("ip6tables", [v6, "-S", "ZEE_EGRESS"], _iptables_chain_structure))
     else:
         return {}
     res: dict[str, str] = {}
@@ -89,7 +104,9 @@ def _egress_state() -> dict[str, str]:
         if ok and not _lines(out):
             res[name] = "absent"
         elif ok:
-            plain = [ln.replace("counter ", "") for ln in _lines(out)]
+            # `counter` prints its values ("counter packets 3 bytes 180 accept"): drop them too
+            plain = [re.sub(r"\bcounter(?: packets \d+ bytes \d+)?\s*", "", ln).strip()
+                     for ln in _lines(out)]
             # an unconditional accept in the chain is not the cut Zee loads (the shape check
             # looks only for the hooked drop policy)
             res[name] = "present" if shape(out, set()) == "confirmed" and "accept" not in plain \
@@ -318,24 +335,29 @@ def run(config_path: Path, *, ps: Callable[[], Optional[list[str]]] = _ps_lines,
     if states:
         bad = sorted(k for k, v in states.items() if v == "unexpected")
         on = sorted(k for k, v in states.items() if v == "present")
-        recorded = None  # None = could not be compared (no usable config, or the record is damaged)
+        recorded: Optional[set[str]] = None  # None = not comparable (no usable config / damaged record)
         if cfg is not None:
             try:
                 res = [CutStateLog().unresolved_for(a.id) for a in cfg.assets]
                 if not any(damaged for _r, damaged in res):
-                    recorded = any(r is not None and r.method == "egress" for r, _d in res)
+                    # every firewall entry of the merged record, not the latest cut's method (an
+                    # egress cut followed by a full cut still leaves the egress rules to restore)
+                    recorded = {_BACKEND[name] for r, _d in res if r is not None
+                                for kind, name in r.entries() if kind == "firewall" and name in _BACKEND}
             except (OSError, ValueError):
                 pass
+        extra = [k for k in on if recorded is not None and k not in recorded]
+        lost = sorted(k for k in (recorded or ()) if states.get(k) == "absent")
         if bad:
             say("WARN", "egress rules", f"{', '.join(bad)}: Zee's cut rules are there but not in the "
                 "shape Zee loads (changed by hand or by other software?)",
                 "inspect them, then `zee restore` to remove Zee's rules")
-        elif on and recorded is False:
-            say("WARN", "egress rules", f"Zee cut rules are in force ({', '.join(on)}) but the cut "
-                "record has no open egress cut", "zee restore   (if you did not cut on purpose)")
-        elif not on and recorded and "unreadable" not in states.values():
-            say("WARN", "egress rules", "the cut record says an egress cut is open but no Zee rules "
-                "are loaded", "zee restore   (closes the record)")
+        elif extra:
+            say("WARN", "egress rules", f"Zee cut rules are in force ({', '.join(extra)}) but the cut "
+                "record has no open egress cut for them", "zee restore   (if you did not cut on purpose)")
+        elif lost:
+            say("WARN", "egress rules", f"the cut record says an egress cut is open but Zee's "
+                f"{', '.join(lost)} rules are not loaded", "zee restore   (closes the record)")
         elif "unreadable" in states.values():
             say("INFO", "egress rules", "not checked: reading firewall rules needs admin rights "
                 "or the tool is not usable (run `sudo zee doctor` to include it)")
