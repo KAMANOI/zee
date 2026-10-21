@@ -249,3 +249,75 @@ def test_doctor_egress_then_full_still_compares_firewall(tmp_path, monkeypatch):
     (tmp_path / "b").mkdir()
     out2 = _doctor(tmp_path / "b", monkeypatch, {"nft": "present"}, cuts=[("egress", [NFT]), ("full", ["eth0"])])
     assert "[OK] egress rules" in _line(out2)
+
+
+# ---- convergent allowlist redesign: each prior whack-a-mole bypass ----------
+# The drift check now judges the chain by an allowlist of the exact rule shapes
+# `cut_egress._cut_egress_linux` loads; anything else is drift (fail closed).
+
+_V4_FULL = ("-N ZEE_EGRESS\n-A ZEE_EGRESS -o lo -j ACCEPT\n"
+            "-A ZEE_EGRESS -d 10.0.0.0/8 -j ACCEPT\n"
+            "-A ZEE_EGRESS -d 172.16.0.0/12 -j ACCEPT\n"
+            "-A ZEE_EGRESS -d 192.168.0.0/16 -j ACCEPT\n-A ZEE_EGRESS -j DROP")
+_OUTPUT_JUMP = "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS"
+
+
+def _ipt_state(monkeypatch, chain, output=_OUTPUT_JUMP):
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "iptables" else None)
+    monkeypatch.setattr(doctor, "kernel_ipv6_absent", lambda: True)  # skip the v6 branch
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, output) if cmd[-1] == "OUTPUT" else (True, chain))
+    return doctor._egress_state()["iptables"]
+
+
+def _nft_state(monkeypatch, table):
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
+    return doctor._egress_state()["nft"]
+
+
+def _daddr(net):
+    a, length = net.split("/")
+    return {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}},
+                      "right": {"prefix": {"addr": a, "len": int(length)}}}}
+
+
+def test_iptables_return_before_drop_is_not_present(monkeypatch):
+    # bypass (round 3): a RETURN ahead of the DROP escapes the chain to OUTPUT.
+    chain = ("-N ZEE_EGRESS\n-A ZEE_EGRESS -o lo -j ACCEPT\n"
+             "-A ZEE_EGRESS -j RETURN\n-A ZEE_EGRESS -j DROP")
+    assert _ipt_state(monkeypatch, chain) == "unexpected"
+
+
+def test_iptables_accept_to_other_host_is_not_present(monkeypatch):
+    # bypass: a narrow ACCEPT to a non-local host (has a -d, so not "unconditional").
+    chain = _V4_FULL.replace("-A ZEE_EGRESS -j DROP",
+                             "-A ZEE_EGRESS -d 203.0.113.5/32 -j ACCEPT\n-A ZEE_EGRESS -j DROP")
+    assert _ipt_state(monkeypatch, chain) == "unexpected"
+
+
+def test_iptables_full_chain_is_present(monkeypatch):  # positive control
+    assert _ipt_state(monkeypatch, _V4_FULL) == "present"
+
+
+@pytest.mark.parametrize("verdict", [{"jump": {"target": "sneaky"}}, {"goto": {"target": "sneaky"}}])
+def test_nft_jump_or_goto_out_of_drop_chain_is_not_present(monkeypatch, verdict):
+    # bypass: a jump/goto to another chain that accepts -- no `accept` verdict in
+    # the drop chain's own rule, so the denylist check read it as present.
+    table = _nftj([{"expr": [_OIF_LO, {"accept": None}]}, {"expr": [verdict]}])
+    assert _nft_state(monkeypatch, table) == "unexpected"
+
+
+def test_nft_accept_to_other_host_is_not_present(monkeypatch):
+    # bypass: a conditional accept to a destination Zee never loads (match+accept,
+    # so a statement-type view would miss it; the value allowlist catches it).
+    table = _nftj([{"expr": [_OIF_LO, {"accept": None}]}, {"expr": [_daddr("203.0.113.5/32"), {"accept": None}]}])
+    assert _nft_state(monkeypatch, table) == "unexpected"
+
+
+def test_nft_full_local_table_is_present(monkeypatch):  # positive control
+    rules = [{"expr": [_OIF_LO, {"accept": None}]}]
+    rules += [{"expr": [_daddr(n), {"accept": None}]}
+              for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+    assert _nft_state(monkeypatch, _nftj(rules)) == "present"

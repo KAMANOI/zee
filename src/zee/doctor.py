@@ -28,8 +28,9 @@ from .config.schema import Config, duplicate_decoys
 from .decoy.canary_token import normalize_base_url
 from .errors import ZeeError
 from .recovery.auth import default_token_path
-from .responder.cut_egress import (PF_ANCHOR, _ABSENT, _ip6tables_tool, _iptables_chain_structure,
-                                   _iptables_jump_first, _lines, _pf_block_rule)
+from .responder.cut_egress import (IPT4_LOCAL, PF_ANCHOR, _ABSENT, _ip6tables_tool,
+                                   _iptables_chain_structure, _iptables_jump_first, _lines,
+                                   _pf_block_rule)
 from .responder.cut_full import (SENTINEL_LINUX_IP6TABLES_EGRESS, SENTINEL_LINUX_IPTABLES_EGRESS,
                                  SENTINEL_LINUX_NFT_EGRESS, SENTINEL_MACOS_PFCTL_EGRESS, _run,
                                  iptables_backend, kernel_ipv6_absent, sbin_which)
@@ -81,15 +82,37 @@ _BACKEND = {SENTINEL_LINUX_NFT_EGRESS: "nft", SENTINEL_LINUX_IPTABLES_EGRESS: "i
             SENTINEL_LINUX_IP6TABLES_EGRESS: "ip6tables", SENTINEL_MACOS_PFCTL_EGRESS: "pf"}
 
 
+def _nft_daddr_match(net: str) -> dict:
+    """The JSON `nft -j` prints for `ip daddr <net>` (libnftables-json(5):
+    a `payload` left, a `prefix` right, op `==`)."""
+    addr, length = net.split("/")
+    return {"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "daddr"}},
+                      "right": {"prefix": {"addr": addr, "len": int(length)}}}}
+
+
+# The exact rule exprs `_cut_egress_linux` loads into the nft output-drop chain,
+# in the JSON `nft -j` prints them back: `oif lo accept` and `ip daddr <net>
+# accept` for each local net (IPv6 non-local is left to the chain's drop policy).
+# This is the allowlist the drift check judges against. The encodings come from
+# libnftables-json(5), not a captured dump, so a real-nft form that differs
+# fails closed (reported "missing", never a false "present").
+_NFT_ALLOWED_RULES = [
+    [{"match": {"op": "==", "left": {"meta": {"key": "oif"}}, "right": "lo"}}, {"accept": None}],
+    *[[_nft_daddr_match(net), {"accept": None}] for net in IPT4_LOCAL],
+]
+
+
 def _nft_json_present(out: str, _profiles: set[str]) -> str:
-    """Judge `nft -j list table inet zee_egress` (JSON) structurally, so a
-    comment or counter on a rule cannot change the verdict:
-    "confirmed" = a chain hooked on output with policy drop and no unconditional
-    `accept` in it; "missing" = present but not that shape; "unparsed" = not nft
+    """Judge `nft -j list table inet zee_egress` (JSON) by an allowlist of the
+    exact rule exprs Zee loads (`_NFT_ALLOWED_RULES`): "confirmed" = a chain
+    hooked on output with policy drop whose every rule is one of Zee's own
+    local-accept exprs with no rule comment; "missing" = present but any rule is
+    not that shape -- an unconditional accept, a counter/comment on a rule, a
+    jump/goto/return/queue verdict out of the chain, or an accept to a
+    destination Zee never loads (all drift, fail closed); "unparsed" = not nft
     JSON (an old nft without `-j`), which the caller treats as unchecked, never
-    present. An unconditional accept = a rule with an `accept` verdict and no
-    `match` expression (counter and comment are separate statements, and comment
-    is a rule-level field, so neither narrows the rule)."""
+    present. Judged by value, not by statement type, so a narrow non-Zee accept
+    cannot read as present -- matching the iptables allowlist on the other side."""
     try:
         objs = json.loads(out)["nftables"]
         if not isinstance(objs, list):
@@ -108,10 +131,9 @@ def _nft_json_present(out: str, _profiles: set[str]) -> str:
         r = o.get("rule") if isinstance(o, dict) else None
         if not isinstance(r, dict) or r.get("chain") not in drop_chains:
             continue
-        expr = r.get("expr") or []
-        has_accept = any(isinstance(e, dict) and "accept" in e for e in expr)
-        has_match = any(isinstance(e, dict) and "match" in e for e in expr)
-        if has_accept and not has_match:
+        # A comment on the rule, or any expr Zee does not load, is drift.
+        # (`handle` is a separate rule-level key, so comparing `expr` ignores it.)
+        if "comment" in r or (r.get("expr") or []) not in _NFT_ALLOWED_RULES:
             return "missing"
     return "confirmed"
 

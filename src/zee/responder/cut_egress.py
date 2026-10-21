@@ -148,19 +148,24 @@ def _nft_structure(out: str, _profiles: set[str]) -> str:
 
 
 def _iptables_chain_structure(out: str, _profiles: set[str]) -> str:
-    """`iptables -S ZEE_EGRESS`: an unconditional `-j DROP` must exist and no
-    unconditional ACCEPT may come before it."""
+    """`iptables -S ZEE_EGRESS`: confirmed only if the chain holds nothing but
+    the shapes Zee loads -- the `-N`, Zee's own local `-j ACCEPT` exceptions
+    (`_IPT_ALLOWED_ACCEPTS`) and a terminal `-j DROP`. Judged by that allowlist,
+    not a denylist: any other rule (a `-j RETURN` / `-j`/`-g` jump / QUEUE ahead
+    of the DROP, an unconditional or non-local or comment-bearing ACCEPT,
+    anything unrecognised) is drift and fails closed. Loading fewer accepts than
+    Zee does is only more restrictive, so their order and completeness are not
+    required; the DROP is."""
     lines = _lines(out)
     if not lines or lines[0] != "-N ZEE_EGRESS":
         return "unverified"
+    has_drop = False
     for ln in lines[1:]:
-        # A comment does not narrow a rule: drop it before judging.
-        bare = re.sub(r'\s-m comment --comment ("[^"]*"|\S+)', "", ln)
-        if bare == "-A ZEE_EGRESS -j ACCEPT":
+        if ln == _IPT_DROP:
+            has_drop = True
+        elif ln not in _IPT_ALLOWED_ACCEPTS:
             return "missing"
-        if ln == "-A ZEE_EGRESS -j DROP":
-            return "confirmed"
-    return "missing"
+    return "confirmed" if has_drop else "missing"
 
 
 def _iptables_jump_first(out: str, _profiles: set[str]) -> str:
@@ -240,6 +245,22 @@ def _pf_siblings_clear(out: str, _profiles: set[str]) -> str:
 # discovery (ICMPv6, filtered by OUTPUT unlike ARP): without it the
 # link-local / ULA allowances stop working once the neighbor cache expires.
 IPV6_LOCAL = ("fe80::/10", "fc00::/7", "ff02::/16")
+
+# IPv4 destinations the egress cut leaves reachable: loopback is matched by
+# `-o lo` / `oif lo`, the rest are the RFC 1918 private ranges. One source of
+# truth: `_cut_egress_linux` builds its load rules from this, and the drift
+# check builds its allowlist from it (below), so the two cannot drift apart.
+IPT4_LOCAL = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+
+# The exact rules `_cut_egress_linux` loads into ZEE_EGRESS, as `iptables -S`
+# / `ip6tables -S` print them back (the iptables-save form is deterministic):
+# Zee's own local `-j ACCEPT` exceptions, plus the terminal `-j DROP`. One
+# allowlist for both families (a v6 address cannot load into iptables, and a
+# local-scope ACCEPT is never an egress path, so the union is safe to share).
+_IPT_DROP = "-A ZEE_EGRESS -j DROP"
+_IPT_ALLOWED_ACCEPTS = frozenset(
+    ["-A ZEE_EGRESS -o lo -j ACCEPT"]
+    + [f"-A ZEE_EGRESS -d {net} -j ACCEPT" for net in (*IPT4_LOCAL, *IPV6_LOCAL)])
 
 # IPv4 outside RFC 1918 (10/8, 172.16/12, 192.168/16) and loopback (127/8),
 # then IPv6 outside ::/127 (:: and ::1; a connect to :: reaches the host
@@ -351,9 +372,7 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
             "add chain inet zee_egress out "
             "{ type filter hook output priority 0; policy drop; }\n"
             "add rule inet zee_egress out oif lo accept\n"
-            "add rule inet zee_egress out ip daddr 10.0.0.0/8 accept\n"
-            "add rule inet zee_egress out ip daddr 172.16.0.0/12 accept\n"
-            "add rule inet zee_egress out ip daddr 192.168.0.0/16 accept\n"
+            + "".join(f"add rule inet zee_egress out ip daddr {net} accept\n" for net in IPT4_LOCAL)
         )
         try:
             cp = subprocess.run(
@@ -374,9 +393,7 @@ def _cut_egress_linux() -> tuple[bool, str, list[str]]:
         commands = [
             ["iptables", "-N", "ZEE_EGRESS"],
             ["iptables", "-A", "ZEE_EGRESS", "-o", "lo", "-j", "ACCEPT"],
-            ["iptables", "-A", "ZEE_EGRESS", "-d", "10.0.0.0/8", "-j", "ACCEPT"],
-            ["iptables", "-A", "ZEE_EGRESS", "-d", "172.16.0.0/12", "-j", "ACCEPT"],
-            ["iptables", "-A", "ZEE_EGRESS", "-d", "192.168.0.0/16", "-j", "ACCEPT"],
+            *(["iptables", "-A", "ZEE_EGRESS", "-d", net, "-j", "ACCEPT"] for net in IPT4_LOCAL),
             ["iptables", "-A", "ZEE_EGRESS", "-j", "DROP"],
             ["iptables", "-I", "OUTPUT", "-j", "ZEE_EGRESS"],
         ]
