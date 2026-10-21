@@ -577,11 +577,31 @@ def _root_name(n: ast.AST) -> str:
 
 
 class _ImportTime(ast.NodeVisitor):
+    # Explicit depth cap so a too-deep subtree is a deterministic gap, not a
+    # crash that depends on the interpreter's own recursion limit (which differs
+    # by platform/build: the same `1+1+...` chain raises on one CI runner and
+    # parses fine on another). Well below where ast walking would RecursionError.
+    _DEPTH_CAP = 200
+
     def __init__(self):
         self.hard: list[tuple[int, str]] = []
         self.soft: list[tuple[int, str]] = []
         self.mod_alias: dict[str, str] = {}  # `import os as o` -> o: os
         self.name_alias: dict[str, tuple[str, str]] = {}  # `from os import system as s` -> s: (os, system)
+        self._depth = 0
+        self.too_deep = False
+
+    def generic_visit(self, node):
+        # Truncate this subtree past the cap but keep visiting siblings, so an
+        # import-time eval/os call elsewhere is still found (gap, not a crash).
+        if self._depth >= self._DEPTH_CAP:
+            self.too_deep = True
+            return
+        self._depth += 1
+        try:
+            super().generic_visit(node)
+        finally:
+            self._depth -= 1
 
     def visit_Import(self, node):
         for a in node.names:
@@ -635,7 +655,9 @@ def _py_flags(p: Path, rel: str) -> list[Flag]:
     out = []
     try:
         v.visit(tree)
-    except (RecursionError, MemoryError):  # e.g. a long `1+1+...` chain: what was seen so far still counts
+    except (RecursionError, MemoryError):  # backstop below the explicit cap; what was seen so far still counts
+        v.too_deep = True
+    if v.too_deep:  # e.g. a long `1+1+...` chain: a gap (G225), but import-time calls elsewhere still flagged
         out.append(Flag(Severity.LOW, "G225", "companion .py nested too deep to analyse; not fully inspected", evidence=rel))
     if v.hard:
         ln, nm = v.hard[0]
