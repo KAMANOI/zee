@@ -34,4 +34,15 @@ Deviations from the design, on purpose:
   * size: a read inside a pickle over 16 MiB or a stream over 64 MiB stops the analysis (G225) before
     anything is allocated; `sha256_tree` hashes in chunks; manifests in `adapters.py` are capped at 8 MiB
     (G912 above that). There is no total budget across the tree (stated).
+- Round 3 (2026-10-21, Codex on the branch diff: 62, needs fixing), five points handled:
+  * a zip is recognised by its first bytes whatever its suffix (a pickle zip renamed `weights.dat` is read);
+    an ordinary zip (`.docx`, `.whl` ...) with no pickle and no Keras config raises nothing, so its nested /
+    encrypted members are not gaps there.
+  * a broken zip member (CRC mismatch, unsupported compression) in a Keras config is G225, not a crash.
+  * a companion `.py` too deeply nested for the `ast` walk (e.g. a long `1+1+...` chain) is G225; calls
+    already seen are still reported.
+  * a later pickle stream that started (PROTO) or imported, then breaks off, is broken (G224 / G225); plain
+    raw tensor bytes after the last stream are still not.
+  * GGUF: version other than 2 / 3 is G225; a tensor table that does not fit the file (count, > 4 dims,
+    offsets past the end, tensors with no data) or a key-value table that runs past the end is G226.
   * (medium) per-file diff cache: not built, see above.

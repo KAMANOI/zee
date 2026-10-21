@@ -368,3 +368,54 @@ def test_keras_custom_module_prefix_is_not_allowlisted(tmp_path):
         z.writestr("metadata.json", "{}")
         z.writestr("config.json", '{"module": "keras_evil.x"}')
     assert "G229" in _codes(static_checks.scan_tree(p))
+
+
+# --- review fixes (2026-10-21) -------------------------------------------------
+def test_pickle_zip_under_any_suffix_is_read(tmp_path):
+    p = tmp_path / "d" / "weights.dat"
+    p.parent.mkdir()
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("archive/data.pkl", _evil())
+    c = _codes(static_checks.scan_tree(p.parent))
+    assert "G222" in c and "G221" in c
+
+
+def test_ordinary_zip_without_pickle_is_not_a_gap(tmp_path):
+    p = tmp_path / "d" / "report.docx"
+    p.parent.mkdir()
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("word/embeddings/sheet.xlsx", b"PK\x03\x04" + b"\0" * 30)
+    assert static_checks.scan_tree(p.parent) == []
+
+
+def test_keras_config_crc_mismatch_is_a_gap_not_a_crash(tmp_path):
+    p = tmp_path / "d" / "m.keras"
+    p.parent.mkdir()
+    cfg = b'{"layers": [{"class_name": "Dense"}]}'
+    with zipfile.ZipFile(p, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("metadata.json", "{}")
+        z.writestr("config.json", cfg)
+    p.write_bytes(p.read_bytes().replace(b"Dense", b"Dxnse"))
+    assert "G225" in _codes(static_checks.scan_tree(p.parent))
+
+
+def test_deeply_chained_companion_py_is_a_gap_not_a_crash(tmp_path):
+    src = "import os\nos.system('id')\nx = " + "+".join(["1"] * 3000) + "\n"
+    c = _codes(_scan(tmp_path, {"model.safetensors": _st({"a": ("U8", [1], 1)}), "modeling_x.py": src}))
+    assert "G225" in c
+
+
+def test_second_stream_cut_after_import_is_broken(tmp_path):
+    body = pickle.dumps(1, protocol=2) + _p4(_s("posix"), _s("system"), b"\x93")[:-1]  # no STOP
+    c = _codes(_scan(tmp_path, {"w.pth": body}))
+    assert "G222" in c and "G224" in c and "G225" in c
+
+
+def test_gguf_unknown_version_is_a_gap_and_missing_tensors_are_high(tmp_path):
+    assert "G225" in _codes(_scan(tmp_path / "a", {"m.gguf": b"GGUF" + struct.pack("<IQQ", 999, 0, 0)}))
+    assert "G226" in _codes(_scan(tmp_path / "b", {"m.gguf": b"GGUF" + struct.pack("<IQQ", 3, 100, 0)}))
+    # one tensor entry whose data offset points past the end of the file
+    entry = struct.pack("<Q", 1) + b"w" + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<IQ", 0, 1 << 20)
+    assert "G226" in _codes(_scan(tmp_path / "c", {"m.gguf": b"GGUF" + struct.pack("<IQQ", 3, 1, 0) + entry + b"\0" * 32}))
+    good = b"GGUF" + struct.pack("<IQQ", 3, 1, 0) + entry[:-8] + struct.pack("<Q", 0) + b"\0" * 32
+    assert _codes(_scan(tmp_path / "d", {"m.gguf": good})) == {}

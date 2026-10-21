@@ -6,7 +6,7 @@ every file in the tree is checked whatever kind the artifact was given.
 
 Flag codes:
     G221  MEDIUM  the tree holds a pickle-based model (.bin/.pt/.pth/.ckpt/.pkl/
-                  .joblib, or a zip with a *.pkl inside). One flag per tree.
+                  .joblib, or any zip, by first bytes, with a pickle inside). One flag per tree.
                   Always a person's call: pickle can run code when it is loaded
                   and no scanner is complete (Hugging Face says so itself).
                   A lone MEDIUM passes `fail-on: high` but blocks `--promote-to`.
@@ -18,11 +18,13 @@ Flag codes:
     G224  HIGH    the pickle breaks off before STOP after it already imported
                   something (a loader runs the part that comes before the break).
     G225  GAP     could not be read: unknown or unparsable format, over a size /
-                  time limit, encrypted zip, unresolvable import. Inspection is
+                  time limit, encrypted zip, unresolvable import, GGUF version
+                  other than 2/3, companion .py too deep to walk. Inspection is
                   then partial (exit 3): the gate cannot vouch for it.
     G226  HIGH    a file that is, or is named, safetensors but breaks the format
                   (bad header, duplicate keys, holes / overlaps, size mismatch,
-                  or a pickle / zip under a .safetensors name).
+                  or a pickle / zip under a .safetensors name), or a GGUF whose
+                  key-value / tensor table does not fit the file.
     G227  MEDIUM  config names code to import on load (`auto_map`), companion
                   modeling_/configuration_/... .py files next to model weights,
                   or `trust_remote_code=True`. `False` does not lower it
@@ -178,6 +180,7 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
     f = _Capped(f)
     done = 0
     while True:
+        n0, proto_next = len(imports), f.buf == b"\x80"  # did this stream import / start with PROTO?
         recent: list = []  # last pushed values: str, or None for "something else"
         memo: dict[int, object] = {}
         stopped = False
@@ -218,8 +221,9 @@ def _scan_pickle(f) -> tuple[list[tuple[str, str]], int, str]:
         except _Limit:
             return imports, unresolved, "limit"
         except Exception:  # genops: ValueError on a bad opcode or EOF inside a stream
-            # garbage after a finished stream (legacy torch files end with raw tensor data) is not a break
-            return imports, unresolved, "ok" if done else "broken"
+            # garbage after a finished stream (legacy torch files end with raw tensor data) is not a break,
+            # unless that tail already started a new stream (PROTO) or imported: then a stream was cut off
+            return imports, unresolved, "ok" if done and not proto_next and len(imports) == n0 else "broken"
         if not stopped:
             return imports, unresolved, "broken"
         done += 1
@@ -294,7 +298,7 @@ def _zip_flags(p: Path, rel: str) -> tuple[list[Flag], bool, bool]:
                     with zf.open(info) as m:
                         fl, _ = _pickle_flags(f"{rel}!{name}", m, sure=True)
                     flags += fl
-                except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError):
+                except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
                     flags.append(Flag(Severity.LOW, "G225", "zip member could not be read; not inspected",
                                       evidence=f"{rel}!{name}"))
             elif low == "config.json" and "metadata.json" in names:
@@ -311,7 +315,7 @@ def _member_head(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     try:
         with zf.open(info) as m:
             return m.read(4)
-    except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError):
+    except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
         return b""
 
 
@@ -329,7 +333,7 @@ def _keras_config(zf: zipfile.ZipFile, info: zipfile.ZipInfo, rel: str) -> list[
         return [Flag(Severity.LOW, "G225", "keras config too large; not inspected", evidence=rel)]
     try:
         txt = zf.read(info).decode("utf-8", "replace")
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, zipfile.BadZipFile, NotImplementedError, EOFError):
         return [Flag(Severity.LOW, "G225", "keras config could not be read", evidence=rel)]
     if re.search(r'"class_name"\s*:\s*"Lambda"|enable_unsafe_deserialization|__lambda__|"module"\s*:\s*"(?!(?:keras|keras_hub|keras_nlp|builtins)[."])', txt):
         return [Flag(Severity.MEDIUM, "G229", "Keras model holds a Lambda layer or custom code reference",
@@ -410,24 +414,29 @@ _JINJA_INTERNALS = re.compile(r"__class__|__globals__|__subclasses__|__mro__|__b
                               r"\bos\s*\.|popen|\bimport\b|lipsum\.|cycler\.|joiner\.|namespace\.__")
 
 
-def _gguf_template(p: Path) -> tuple[str | None, bool]:
-    """(chat template or None, parsed ok). Reads the key-value table only."""
+def _gguf_read(p: Path, size: int) -> tuple[str | None, str]:
+    """(chat template or None, state): state 'ok', 'gap' (unsupported version / over the read cap /
+    unreadable) or 'corrupt: why' (the header contradicts itself or the file size)."""
     try:
         with p.open("rb") as f:
             data = f.read(_GGUF_CAP)
     except OSError:
-        return None, False
-    pos = 4
+        return None, "gap"
+    tpl = None
     try:
-        _ver, _nt, nkv = struct.unpack_from("<IQQ", data, pos)
-        pos += 20
-        if nkv > 100000:
-            return None, False
+        ver, nt, nkv = struct.unpack_from("<IQQ", data, 4)
+        if ver not in (2, 3):  # v1 has 32-bit counts; anything else is unknown
+            return None, "gap"
+        pos = 24
+        if nkv > 100000 or pos + nkv * 12 > size:
+            return None, "corrupt: key-value count beyond the file"
+        if pos + nt * 24 > size:  # each tensor entry is at least 24 bytes
+            return None, f"corrupt: {nt} tensors declared, file too short"
 
         def rd_str(o):
             (ln,) = struct.unpack_from("<Q", data, o)
-            if ln > len(data):
-                raise ValueError
+            if o + 8 + ln > len(data):
+                raise struct.error
             return data[o + 8:o + 8 + ln].decode("utf-8", "replace"), o + 8 + ln
 
         def skip(t, o):
@@ -438,10 +447,12 @@ def _gguf_template(p: Path) -> tuple[str | None, bool]:
             if t == 9:
                 (et, cnt) = struct.unpack_from("<IQ", data, o)
                 o += 12
+                if o + cnt > size:  # every element takes at least one byte
+                    raise ValueError
                 for _ in range(cnt):
                     o = skip(et, o)
                     if o > len(data):
-                        raise ValueError
+                        raise struct.error
                 return o
             raise ValueError
 
@@ -450,13 +461,28 @@ def _gguf_template(p: Path) -> tuple[str | None, bool]:
             (t,) = struct.unpack_from("<I", data, pos)
             pos += 4
             if t == 8 and key == "tokenizer.chat_template":
-                return rd_str(pos)[0], True
+                tpl = rd_str(pos)[0]
             pos = skip(t, pos)
             if pos > len(data):
-                return None, False
-    except (struct.error, ValueError, RecursionError):
-        return None, False
-    return None, True
+                raise struct.error
+        for i in range(nt):
+            _name, pos = rd_str(pos)
+            (nd,) = struct.unpack_from("<I", data, pos)
+            if nd > 4:
+                return tpl, f"corrupt: tensor {i} has {nd} dimensions"
+            pos += 4 + 8 * nd
+            _typ, off = struct.unpack_from("<IQ", data, pos)
+            pos += 12
+            if pos + off > size:  # data starts at or after the end of this table
+                return tpl, f"corrupt: tensor {i} data offset beyond the file"
+        if nt and pos >= size:
+            return tpl, "corrupt: tensors declared but no data"
+    except ValueError:
+        return tpl, "corrupt: malformed key-value table (unknown type or count beyond the file)"
+    except (struct.error, RecursionError):
+        # ran off the bytes read: the file is shorter than its header says, or longer than the cap
+        return tpl, "gap" if len(data) < size else "corrupt: header runs past the end of the file"
+    return tpl, "ok"
 
 
 # --- companion python / config ----------------------------------------------
@@ -528,8 +554,11 @@ def _py_flags(p: Path, rel: str) -> list[Flag]:
     except (SyntaxError, ValueError, RecursionError, MemoryError, OSError):
         return [Flag(Severity.LOW, "G225", "companion .py could not be parsed; not inspected", evidence=rel)]
     v = _ImportTime()
-    v.visit(tree)
     out = []
+    try:
+        v.visit(tree)
+    except (RecursionError, MemoryError):  # e.g. a long `1+1+...` chain: what was seen so far still counts
+        out.append(Flag(Severity.LOW, "G225", "companion .py nested too deep to analyse; not fully inspected", evidence=rel))
     if v.hard:
         ln, nm = v.hard[0]
         out.append(Flag(Severity.HIGH, "G228", "companion .py runs a command / network / eval call at import time",
@@ -592,10 +621,12 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
             continue
         if fmt == "gguf":
             has_model = True
-            tpl, ok = _gguf_template(p)
-            if not ok:
-                flags.append(Flag(Severity.LOW, "G225", "GGUF metadata could not be parsed; not inspected", evidence=rel))
-            elif tpl is not None:
+            tpl, state = _gguf_read(p, size)
+            if state == "gap":
+                flags.append(Flag(Severity.LOW, "G225", "GGUF metadata could not be read (version / size limit); not inspected", evidence=rel))
+            elif state != "ok":
+                flags.append(Flag(Severity.HIGH, "G226", "GGUF file breaks the format", evidence=f"{rel}: {state[9:]}"))
+            if tpl is not None:
                 sev = Severity.HIGH if _JINJA_INTERNALS.search(tpl) else Severity.LOW
                 flags.append(Flag(sev, "G229", "GGUF chat template (Jinja) present; shown, not run",
                                   evidence=f"{rel}: {' '.join(tpl.split())[:80]}"))
@@ -605,9 +636,12 @@ def scan_tree(root: Path, files: list[Path]) -> list[Flag]:
             flags.append(Flag(Severity.MEDIUM, "G229", "HDF5 (.h5) model: Keras can run code from it; a person decides",
                               evidence=rel))
             continue
-        if fmt == "zip" and (suf in _PICKLE_SUFFIXES or suf in (".keras", ".pt2")):
+        if fmt == "zip":  # by first bytes: a pickle zip renamed weights.dat is still read
+            named = suf in _PICKLE_SUFFIXES or suf in (".keras", ".pt2")
+            fl, has_pickle, keras = _zip_flags(p, rel)
+            if not (named or has_pickle or keras):
+                continue  # ponytail: an ordinary zip (.docx/.whl) without a pickle: its nested / encrypted members are not gaps
             has_model = True
-            fl, has_pickle, _k = _zip_flags(p, rel)
             flags += fl
             if has_pickle:
                 pickles.append(rel)
