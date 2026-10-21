@@ -493,9 +493,13 @@ def _g603(rel: str, text: str) -> Flag | None:
             if m:
                 env_indent = len(m.group(1))
                 continue
-            ind = len(line) - len(line.lstrip())
-            # YAML allows the list items at the key's own indent ("environment:\n- KEY")
-            if line.strip() and (ind < env_indent or (ind == env_indent and not line.lstrip().startswith("-"))):
+            stripped = line.lstrip()
+            ind = len(line) - len(stripped)
+            # A comment or blank line does not end a YAML block; only the next real
+            # key does. YAML also allows the list items at the key's own indent
+            # ("environment:\n- KEY").
+            if stripped and not stripped.startswith("#") \
+                    and (ind < env_indent or (ind == env_indent and not stripped.startswith("-"))):
                 env_indent = -1
         if _G603_NEG.search(line):
             continue

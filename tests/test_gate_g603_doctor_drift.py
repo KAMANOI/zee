@@ -141,8 +141,10 @@ def test_egress_state_reads_ip6tables_of_same_backend(monkeypatch):
     seen = []
     monkeypatch.setattr(doctor, "_ip6tables_tool", lambda b: seen.append(b) or "ip6tables-legacy")
     chain = "-N ZEE_EGRESS\n-A ZEE_EGRESS -j DROP"
+    output = "-P OUTPUT ACCEPT\n-A OUTPUT -j ZEE_EGRESS"  # OUTPUT jump read back (round 3)
     monkeypatch.setattr(doctor, "_run", lambda cmd: (True, "iptables v1.8.7 (legacy)") if cmd[-1] == "--version"
-                        else (True, "") if cmd[0].endswith("ip6tables-legacy") else (True, chain))
+                        else (True, "") if cmd[0].endswith("ip6tables-legacy")
+                        else (True, output) if cmd[-1] == "OUTPUT" else (True, chain))
     st = doctor._egress_state()
     assert seen == ["legacy"] and st["iptables"] == "present" and st["ip6tables"] == "absent"
 
@@ -154,6 +156,38 @@ def test_egress_state_nft_counter_accept_is_unexpected(monkeypatch):
     monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
     monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
     assert doctor._egress_state()["nft"] == "unexpected"
+
+
+# ---- review round 3 ---------------------------------------------------------
+
+def test_egress_state_iptables_without_output_jump_is_unexpected(monkeypatch):
+    # chain + DROP are still there, but OUTPUT no longer jumps to ZEE_EGRESS:
+    # the block is disabled and must not read as "present".
+    chain = "-N ZEE_EGRESS\n-A ZEE_EGRESS -j DROP"
+    output = "-P OUTPUT ACCEPT"  # jump to ZEE_EGRESS removed
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "iptables" else None)
+    monkeypatch.setattr(doctor, "kernel_ipv6_absent", lambda: True)  # skip the v6 branch
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, output) if cmd[-1] == "OUTPUT"
+                        else (True, chain))
+    assert doctor._egress_state()["iptables"] == "unexpected"
+
+
+def test_egress_state_nft_counter_accept_with_comment_is_unexpected(monkeypatch):
+    # counter values AND an nft comment on an unconditional accept must both be
+    # normalised away, or the bypassing accept reads as present.
+    table = ("table inet zee_egress {\n chain o {\n type filter hook output priority 0; policy drop;\n"
+             " counter packets 0 bytes 0 accept comment \"temporary\"\n }\n}")
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "sbin_which", lambda n: "/x/" + n if n == "nft" else None)
+    monkeypatch.setattr(doctor, "_run", lambda cmd: (True, table))
+    assert doctor._egress_state()["nft"] == "unexpected"
+
+
+def test_g603_compose_comment_does_not_close_env_block(tmp_path):
+    # a comment at the key's own indent must not end the environment block
+    body = "services:\n  a:\n    environment:\n    # a comment\n    - OPENAI_API_KEY\n"
+    assert "G603" in _codes(tmp_path, {"compose.yaml": body})
 
 
 def test_doctor_egress_then_full_still_compares_firewall(tmp_path, monkeypatch):

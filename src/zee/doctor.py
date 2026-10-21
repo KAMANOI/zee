@@ -24,7 +24,7 @@ from .decoy.canary_token import normalize_base_url
 from .errors import ZeeError
 from .recovery.auth import default_token_path
 from .responder.cut_egress import (PF_ANCHOR, _ABSENT, _ip6tables_tool, _iptables_chain_structure,
-                                   _lines, _nft_structure, _pf_block_rule)
+                                   _iptables_jump_first, _lines, _nft_structure, _pf_block_rule)
 from .responder.cut_full import (SENTINEL_LINUX_IP6TABLES_EGRESS, SENTINEL_LINUX_IPTABLES_EGRESS,
                                  SENTINEL_LINUX_NFT_EGRESS, SENTINEL_MACOS_PFCTL_EGRESS, _run,
                                  iptables_backend, kernel_ipv6_absent, sbin_which)
@@ -76,26 +76,37 @@ _BACKEND = {SENTINEL_LINUX_NFT_EGRESS: "nft", SENTINEL_LINUX_IPTABLES_EGRESS: "i
             SENTINEL_LINUX_IP6TABLES_EGRESS: "ip6tables", SENTINEL_MACOS_PFCTL_EGRESS: "pf"}
 
 
+def _nft_bare(ln: str) -> str:
+    """An nft rule line with its comment and counter (and the counter's values)
+    removed, so an unconditional `accept` reads as `accept` whichever it carries."""
+    ln = re.sub(r'\bcomment "[^"]*"', "", ln)
+    ln = re.sub(r"\bcounter(?: packets \d+ bytes \d+)?", "", ln)
+    return re.sub(r"\s+", " ", ln).strip()
+
+
 def _egress_state() -> dict[str, str]:
     """Read (never write) the egress-cut rules Zee loads, per backend:
     "present" (the shape Zee loads), "absent", "unexpected" (there, but not that shape) or
     "unreadable" (tool missing or needs admin rights). macOS / Linux only."""
+    # jump=True: an iptables-family backend whose chain only blocks while OUTPUT
+    # still jumps to it -- read OUTPUT back and verify the jump, or a disabled
+    # block (chain + DROP present, jump gone) would read as "present".
     if sys.platform == "darwin":
-        checks = [("pf", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule)]
+        checks = [("pf", ["pfctl", "-a", PF_ANCHOR, "-s", "rules"], _pf_block_rule, False)]
     elif sys.platform.startswith("linux"):
-        checks = [("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure),
-                  ("iptables", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure)]
+        checks = [("nft", ["nft", "list", "table", "inet", "zee_egress"], _nft_structure, False),
+                  ("iptables", ["iptables", "-S", "ZEE_EGRESS"], _iptables_chain_structure, True)]
         ipt = sbin_which("iptables")
         if ipt is not None and not kernel_ipv6_absent():
             # IPv6 has its own table: read it through the ip6tables of the same kernel backend
             # as iptables, as the cut does (nft's inet table already covers both families)
             ok_v, version = _run([ipt, "--version"])
             v6 = _ip6tables_tool(iptables_backend(version) if ok_v else None) or "ip6tables"
-            checks.append(("ip6tables", [v6, "-S", "ZEE_EGRESS"], _iptables_chain_structure))
+            checks.append(("ip6tables", [v6, "-S", "ZEE_EGRESS"], _iptables_chain_structure, True))
     else:
         return {}
     res: dict[str, str] = {}
-    for name, cmd, shape in checks:
+    for name, cmd, shape, jump in checks:
         exe = sbin_which(cmd[0])
         if exe is None:
             res[name] = "unreadable"
@@ -104,13 +115,17 @@ def _egress_state() -> dict[str, str]:
         if ok and not _lines(out):
             res[name] = "absent"
         elif ok:
-            # `counter` prints its values ("counter packets 3 bytes 180 accept"): drop them too
-            plain = [re.sub(r"\bcounter(?: packets \d+ bytes \d+)?\s*", "", ln).strip()
-                     for ln in _lines(out)]
+            # Drop nft comments (`comment "..."`) and `counter` values
+            # ("counter packets 3 bytes 180 accept"), or an unconditional accept
+            # carrying either still slips past the bypass check below.
+            plain = [_nft_bare(ln) for ln in _lines(out)]
             # an unconditional accept in the chain is not the cut Zee loads (the shape check
-            # looks only for the hooked drop policy)
-            res[name] = "present" if shape(out, set()) == "confirmed" and "accept" not in plain \
-                else "unexpected"
+            # looks only for the hooked drop policy), nor is a chain OUTPUT no longer jumps to
+            present = shape(out, set()) == "confirmed" and "accept" not in plain
+            if present and jump:
+                ok_j, out_j = _run([exe, "-S", "OUTPUT"])
+                present = ok_j and _iptables_jump_first(out_j, set()) == "confirmed"
+            res[name] = "present" if present else "unexpected"
         elif any(a in out for a in _ABSENT):
             res[name] = "absent"
         else:
