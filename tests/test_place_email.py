@@ -3,11 +3,14 @@ result -> leaked place. No network, no real domain (example.test)."""
 
 import json
 import stat
+import sys
 
 import pytest
 
 from zee.decoy.canary_token import CanaryTokenRegistry
 from zee.decoy.place_email import FREE_TIER_MAX_ADDRESSES, issue_place_email, locate
+
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
 
 DOMAIN = "mailbox-sample.example.test"
 PLACES = ["prod-db-dump", "nightly-backup", "partner-share", "support-export"]
@@ -36,6 +39,7 @@ def test_issue_locate_roundtrip(tmp_path):
     assert unknown == ["alice"]
 
 
+@posix_only
 def test_no_hit_and_table_is_private(tmp_path):
     reg = _reg(tmp_path)
     issue_place_email(reg, DOMAIN, "prod-db-dump")
@@ -86,6 +90,7 @@ def test_concurrent_issue_keeps_cap_and_idempotence(tmp_path):
     assert len(errs) == 4  # the 2 places beyond the cap, asked twice each
 
 
+@posix_only
 def test_corrupt_or_loose_table_stops(tmp_path):
     reg = _reg(tmp_path)
     issue_place_email(reg, DOMAIN, "prod-db-dump")
@@ -97,3 +102,60 @@ def test_corrupt_or_loose_table_stops(tmp_path):
     f.write_text(f.read_text() + "[]\n")
     with pytest.raises(ValueError):
         locate(reg, DOMAIN, {})
+
+
+def test_module_imports_without_fcntl():
+    # finding 1: Windows has no fcntl; the module must import (and lock) without it
+    import builtins
+    import importlib
+
+    import zee.decoy.place_email as pe
+    import zee.responder.permission as perm
+
+    real = builtins.__import__
+
+    def no_fcntl(name, *a, **k):
+        if name == "fcntl":
+            raise ImportError("no fcntl")
+        return real(name, *a, **k)
+
+    builtins.__import__ = no_fcntl
+    try:
+        importlib.reload(pe)
+    finally:
+        builtins.__import__ = real
+        importlib.reload(pe)
+    assert "fcntl" not in pe.__dict__ and pe.HostLock is perm.HostLock
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "   ", "a@example.test", "localhost", "-x.example.test", "a..example.test",
+            "x" * 64 + ".test", ".".join(["a" * 63] * 4) + ".test", "ex ample.test"],
+)
+def test_invalid_domain_is_rejected_before_persisting(tmp_path, bad):
+    reg = _reg(tmp_path)
+    with pytest.raises(ValueError):
+        issue_place_email(reg, bad, "prod-db-dump")
+    assert not reg.registry_path.exists()
+
+
+def _append(reg, alias, purpose):
+    with reg.registry_path.open("a") as f:
+        f.write(json.dumps({"purpose": purpose, "decoy_path": alias}) + "\n")
+
+
+@pytest.mark.parametrize("dup", ["alias", "place", "bad-alias", "bad-domain"])
+def test_conflicting_or_malformed_mapping_stops(tmp_path, dup):
+    reg = _reg(tmp_path)
+    a = issue_place_email(reg, DOMAIN, "prod-db-dump").split("@")[0]
+    alias, purpose = {
+        "alias": (a, f"place:nightly-backup|{DOMAIN}"),     # same alias, other place
+        "place": ("f" * 32, f"place:prod-db-dump|{DOMAIN}"),  # second alias for one place
+        "bad-alias": ("NOT-A-TOKEN", f"place:other|{DOMAIN}"),
+        "bad-domain": ("e" * 32, "place:other|a@b"),
+    }[dup]
+    _append(reg, alias, purpose)
+    with pytest.raises(ValueError):
+        locate(reg, DOMAIN, {a: ["X"]})
+    with pytest.raises(ValueError):
+        issue_place_email(reg, DOMAIN, "support-export")

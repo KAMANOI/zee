@@ -16,12 +16,13 @@ place name. Keep that jsonl apart from the places it describes.
 
 from __future__ import annotations
 
-import fcntl
 import json
-import os
 import re
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
+from ..responder.permission import HostLock  # fcntl on POSIX, msvcrt on Windows
 from .canary_token import CanaryTokenRegistry
 from .query_canary import _check_domain as check_domain
 from .query_canary import issue_query_canary
@@ -32,6 +33,15 @@ PLACE_PREFIX = "place:"
 # most len(places) addresses can ever be breached on this domain.
 FREE_TIER_MAX_ADDRESSES = 10
 _PLACE_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,62}$")
+_ALIAS_RE = re.compile(r"^[0-9a-f]{32}$")  # issue_query_canary's token shape
+_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def check_domain_syntax(domain: str) -> None:
+    """Lowercase hostname, >=2 labels of 1-63 chars, <=253 total."""
+    labels = domain.split(".")
+    if len(domain) > 253 or len(labels) < 2 or not all(_LABEL_RE.match(x) for x in labels):
+        raise ValueError(f"not a valid mail domain: {domain!r}")
 
 
 @dataclass(frozen=True)
@@ -48,8 +58,11 @@ def _records(registry: CanaryTokenRegistry) -> list[tuple[str, str, str]]:
     path = registry.registry_path
     if not path.exists():
         return out
-    if path.stat().st_mode & 0o077:
+    # Windows: POSIX bits are not the ACL; not checked (as recovery/auth.py).
+    if sys.platform != "win32" and path.stat().st_mode & 0o077:
         raise PermissionError(f"{path} must be owner-only (0600)")
+    aliases: set[str] = set()
+    places: set[str] = set()
     for n, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not raw.strip():
             continue
@@ -58,9 +71,21 @@ def _records(registry: CanaryTokenRegistry) -> list[tuple[str, str, str]]:
             purpose, alias = rec["purpose"], rec["decoy_path"]
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             raise ValueError(f"{path}:{n} is not a valid mapping record") from e
-        if purpose.startswith(PLACE_PREFIX):
-            place, _, domain = purpose[len(PLACE_PREFIX):].partition("|")
-            out.append((alias.rsplit("/", 1)[-1], place, domain))
+        if not isinstance(purpose, str) or not purpose.startswith(PLACE_PREFIX):
+            continue
+        place, _, domain = purpose[len(PLACE_PREFIX):].partition("|")
+        alias = alias.rsplit("/", 1)[-1] if isinstance(alias, str) else ""
+        try:
+            if not _ALIAS_RE.match(alias) or not _PLACE_RE.match(place):
+                raise ValueError("bad alias or place")
+            check_domain_syntax(domain)
+        except ValueError as e:
+            raise ValueError(f"{path}:{n} is not a valid mapping record") from e
+        if alias in aliases or place in places:  # would mis-attribute a hit
+            raise ValueError(f"{path}:{n} duplicates alias or place {place!r}; table is corrupt")
+        aliases.add(alias)
+        places.add(place)
+        out.append((alias, place, domain))
     return out
 
 
@@ -73,11 +98,9 @@ def issue_place_email(registry: CanaryTokenRegistry, domain: str, place: str) ->
     domain = domain.strip().lower()
     if not _PLACE_RE.match(place):
         raise ValueError(f"place name must match {_PLACE_RE.pattern!r}: {place!r}")
+    check_domain_syntax(domain)
     check_domain(domain)  # also for an already-issued place
-    registry.registry_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = os.open(str(registry.registry_path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with HostLock(Path(str(registry.registry_path) + ".lock")):
         recs = _records(registry)
         for alias, p, d in recs:
             if p == place:
@@ -92,12 +115,8 @@ def issue_place_email(registry: CanaryTokenRegistry, domain: str, place: str) ->
         value = issue_query_canary(
             registry, "email", f"{PLACE_PREFIX}{place}|{domain}", domain=domain
         ).value
-        owners = [p for a, p, _ in _records(registry) if a == value.split("@")[0]]
-        if owners != [place]:  # token collision: refuse rather than mis-attribute
-            raise RuntimeError("decoy token collision; retry")
+        _records(registry)  # re-validate: a token collision raises here
         return value
-    finally:
-        os.close(lock)
 
 
 def locate(
