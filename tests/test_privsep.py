@@ -561,14 +561,26 @@ def test_slow_and_excess_connections_cannot_block_the_daemon(tmp_path, monkeypat
     extra.connect(str(sock))
     extra.settimeout(2)
     assert extra.recv(100) == b""  # over the cap: closed at once, no thread
-    t0 = time.monotonic()
     for c in slow:
         c.sendall(b" ")  # keep trickling: the overall deadline still ends it
     time.sleep(0.6)
+    # What has to be true here is that the deadline fired, not that the machine
+    # was quick: a client that trickles must be ended, and by this point it has
+    # been idle for 0.6 s with a 0.5 s cap. A working daemon has already queued
+    # the answer, so recv returns without waiting; one that leaves such a client
+    # open fails below by timing out. The old form read a stopwatch (`< 2 s`)
+    # and so measured the runner -- 1.05 s locally against a runner about 2.9x
+    # slower would have failed on an unrelated change.
+    #
+    # What this does NOT prove is where the deadline comes from. daemon.serve
+    # sets it once per connection (`end = time.monotonic() + READ_DEADLINE`),
+    # but an implementation that restarted the 0.5 s on every read would also
+    # pass, because the wait below is longer than that. Pinning that down needs
+    # _read_line driven by a controllable clock, which no test does yet
+    # (inspection 2026-10-25, cf43904: a gap that predates this change).
     for c in slow:
-        c.settimeout(2)
+        c.settimeout(dm.READ_DEADLINE * 2)
         assert b"malformed" in c.recv(200)
-    assert time.monotonic() - t0 < 2
     assert call(sock, {"op": "status"}, server_uid=os.geteuid())["ok"]  # slots were released
 
 

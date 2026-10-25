@@ -14,6 +14,8 @@ import pytest
 
 from zee.gate import scorer, static_checks
 
+from ._timing import assert_linear, best_of
+
 
 def _scan(tmp_path: Path, files: dict[str, str]):
     for rel, body in files.items():
@@ -290,12 +292,27 @@ def test_g214_template_literal_text_is_not_a_call(tmp_path):
     assert "G214" in by
 
 
+# As in test_gate_g501.py: the old `< 5 s` budget measured the runner (1.70 s
+# locally against runners about 2.9x slower, 2026-10-25). The lookup this
+# guards was quadratic in the number of lines, so the number of lines is what
+# gets doubled.
+#   measured 2026-10-25 (M1, Python 3.13): x1.99, and the 8000-line scan
+#   (0.53 s) was 56x the calibration (9.5 ms). This ceiling is per call site
+#   because it depends on how much work the input is: the boundary is
+#   170 / 56 = about 3.0x, where the 600 used for the 2 MB inputs in
+#   test_gate_g501.py would only fire past 10x here.
+_MAX_CALIBRATED = 170
+
+
 def test_g212_many_copy_lines_stay_linear(tmp_path):
-    import time
-    body = "const d = 'node_modules/pkg';\nfs.copyFileSync('node_modules/pkg/a.svg', 'dist/a.svg');\n" * 8000
-    t0 = time.monotonic()
-    _scan(tmp_path, {"a.js": body})
-    assert time.monotonic() - t0 < 5
+    unit = "const d = 'node_modules/pkg';\nfs.copyFileSync('node_modules/pkg/a.svg', 'dist/a.svg');\n"
+    n = 4000
+
+    def scan(d: Path, reps: int) -> float:
+        return best_of(lambda: _scan(d, {"a.js": unit * reps})[1])
+
+    t1, t2 = scan(tmp_path / "a", n), scan(tmp_path / "b", 2 * n)
+    assert_linear("g212_many_copy_lines", t1, t2, n, 2 * n, max_calibrated=_MAX_CALIBRATED)
 
 
 # ---- v0.16.0 release review, Codex round 4: the 15 reproduction cases -------

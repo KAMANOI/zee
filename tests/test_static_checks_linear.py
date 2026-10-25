@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import random
 import re
-import time
 
 import pytest
 
 from zee.gate.static_checks import _PATTERNS, scan_tree
+
+from ._timing import assert_linear, best_of
 
 _P = {code: pat for code, _, pat, _ in _PATTERNS}
 _ORIG = {
@@ -89,62 +90,30 @@ _UNIT = {
 # "curl " * 16_000). A wall-clock budget in seconds measures the machine, not
 # the algorithm: on a GitHub runner the old 5.0 s budget was exceeded by 0.09 s
 # with the matchers unchanged (2026-10-25). The ratio cancels machine speed out.
-_MAX_GROWTH = 3.0     # linear ≈ 2.0, quadratic ≈ 4.0
-_REPEATS = 3          # other load can only make a run slower, so take the min
-
-# The growth ratio alone would not notice a constant-factor slowdown (10 s ->
-# 20 s still doubles). A budget in seconds would, but it also measures the
-# machine. So the budget is expressed in units of a calibration workload run
-# on the same machine, in the same process: a plain regex sweep over 2 MB,
-# repeated, which uses the same engine but cannot backtrack.
+# Linear work doubles when the input doubles; the quadratic regression this
+# test guards against quadrupled (the original regexes took 3.9 s on
+# "curl " * 16_000). A wall-clock budget in seconds measures the machine, not
+# the algorithm: on a GitHub runner the old 5.0 s budget was exceeded by 0.09 s
+# with the matchers unchanged (2026-10-25). The ratio cancels machine speed out,
+# and the calibrated ceiling catches a constant-factor slowdown that the ratio
+# alone would miss. Both live in tests/_timing.py, shared with the other
+# timing tests.
 #   measured 2026-10-25 (M1, Python 3.13): calibration 9.4 ms (spread 1 % over
 #   5 runs), scan of the 2n input 1.78 s -> 189x. The ceiling below leaves
-#   roughly a 3x margin, so a constant-factor regression of 3x or more fails
-#   while a slower machine (which slows both numbers) still passes.
+#   the detection boundary at 600 / 189 = about 3.2x: a constant-factor
+#   regression above that fails, while a slower machine (which slows both
+#   numbers) still passes. Stated this way because the ratio, not the
+#   ceiling, is what the boundary follows (ASTRA 2026-10-25, 1dc26ff).
 _MAX_CALIBRATED = 600
-_CAL_RE = re.compile(r"zzzz")          # never matches
-_CAL_TEXT = "ab" * 1_000_000           # 2 MB, no backtracking
-_CAL_SWEEPS = 20
-
-
-def _calibration() -> float:
-    """Machine speed in seconds, measured with the stdlib only."""
-    best = float("inf")
-    for _ in range(_REPEATS):
-        t = time.perf_counter()
-        for _ in range(_CAL_SWEEPS):
-            _CAL_RE.search(_CAL_TEXT)
-        best = min(best, time.perf_counter() - t)
-    return best
-
-
-def _fastest_scan(tmp_path, text):
-    """Shortest wall-clock scan of `text` over _REPEATS runs (seconds)."""
-    best = float("inf")
-    (tmp_path / "x.sh").write_text(text, encoding="utf-8")
-    for _ in range(_REPEATS):
-        t = time.perf_counter()
-        flags = scan_tree(tmp_path)
-        best = min(best, time.perf_counter() - t)
-        # A file over the read cap is reported as G910 and never scanned: the
-        # timing would then be ~0 s and the test would pass without measuring.
-        assert not any(f.code == "G910" for f in flags), "file was not scanned"
-    return best
 
 
 @pytest.mark.parametrize("name", sorted(_UNIT))
 def test_pathological_g203_g204_input_stays_linear(tmp_path, name):
     unit, n = _UNIT[name]
-    t1 = _fastest_scan(tmp_path, unit * n)
-    t2 = _fastest_scan(tmp_path, unit * (2 * n))
-    assert t2 < t1 * _MAX_GROWTH, (
-        f"{name}: {t1:.2f}s at {n} -> {t2:.2f}s at {2 * n} "
-        f"(x{t2 / t1:.1f}; linear is ~x2, quadratic ~x4)"
-    )
-    cal = _calibration()
-    assert t2 < cal * _MAX_CALIBRATED, (
-        f"{name}: {t2:.2f}s at {2 * n} is {t2 / cal:.0f}x the calibration "
-        f"({cal * 1000:.1f}ms); the ceiling is {_MAX_CALIBRATED}x. The growth "
-        f"ratio was x{t2 / t1:.1f}, so this is a constant-factor slowdown, "
-        f"not a slower machine."
-    )
+
+    def scan(text):
+        (tmp_path / "x.sh").write_text(text, encoding="utf-8")
+        return best_of(lambda: scan_tree(tmp_path))
+
+    t1, t2 = scan(unit * n), scan(unit * (2 * n))
+    assert_linear(name, t1, t2, n, 2 * n, max_calibrated=_MAX_CALIBRATED)
