@@ -17,15 +17,24 @@ from pathlib import Path
 
 from zee.config.schema import AssetProfile
 from zee.events import TrapEvent
+from zee.responder import sequence
 from zee.responder.sequence import handle
 from zee.telemetry.events_log import EventLog
 
 
 # How long slow_sender holds its thread if the test never releases it.
-# Every bound below is expressed against this one number instead of a
-# hand-picked wall-clock budget: a synchronous webhook costs _WEBHOOK_BLOCK
-# seconds, so anything well under it means the responder did not wait.
+# The waits below are expressed against this one number instead of
+# hand-picked budgets: a synchronous webhook costs _WEBHOOK_BLOCK seconds.
 _WEBHOOK_BLOCK = 5.0
+
+# Budget for the responder itself. notify_local is stubbed out for the
+# measurement (see _no_os_notifier), so what is left is in-process work
+# measured in milliseconds — which is what makes a tight bound honest.
+# It has to stay tight: a responder that waits only *part* of the webhook
+# (thread.join(timeout=...)) leaves webhook_completed unset and would slip
+# past the deterministic check below. 0.25 s is ~50x the local cost.
+# (ASTRA 2026-10-25, partial-wait-regression)
+_RESPONDER_BUDGET = 0.25
 
 
 def _asset() -> AssetProfile:
@@ -39,8 +48,14 @@ def _asset() -> AssetProfile:
     )
 
 
-def test_webhook_does_not_block_responder():
+def test_webhook_does_not_block_responder(monkeypatch):
     """Even with a slow webhook, the responder returns without awaiting it."""
+    # Step 1 and the dry_run branch of handle() both call notify_local, which
+    # hands off to the OS notifier — a separate process on Windows, and the
+    # reason the previous 0.5 s bound flaked there (CI run 40180299749).
+    # It is not what this test is about, so keep it out of the measurement.
+    monkeypatch.setattr(sequence, "notify_local", lambda *a, **k: True)
+
     webhook_entered = threading.Event()
     webhook_release = threading.Event()
     webhook_completed = threading.Event()
@@ -71,13 +86,12 @@ def test_webhook_does_not_block_responder():
         # — with webhook_completed already set.
         assert webhook_entered.wait(timeout=_WEBHOOK_BLOCK), "webhook never started"
         assert webhook_completed.is_set() is False, "webhook finished synchronously (it shouldn't)"
-        # Wall-clock backstop only. Step 1 of handle() calls notify_local,
-        # which hands off to the OS notifier (a separate process on Windows),
-        # so the budget cannot be a fraction of a second — it is half of the
-        # block a synchronous webhook would have cost.
-        assert elapsed < _WEBHOOK_BLOCK / 2, (
-            f"responder took {elapsed:.2f}s of the webhook's "
-            f"{_WEBHOOK_BLOCK:.0f}s block; webhook blocked the cut path"
+        # And the clock, which is what catches a responder that waits only
+        # part of the webhook — that one returns with webhook_completed still
+        # unset, so the check above cannot see it.
+        assert elapsed < _RESPONDER_BUDGET, (
+            f"responder took {elapsed:.3f}s (budget {_RESPONDER_BUDGET}s); "
+            f"webhook blocked the cut path"
         )
         # Release the webhook and let it finish.
         webhook_release.set()
