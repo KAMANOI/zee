@@ -53,13 +53,14 @@ reference implementation. **The path from "fix in your fork" to
 - **Found a bug?** Open an Issue with a small reproduction.
 - **Found a security issue?** Don't open a public issue. See
   [SECURITY.md](./SECURITY.md).
-- **Want to propose a change?** Open a Discussion first to talk
-  through the direction before writing code. This avoids you putting
-  in work on something the maintainer was about to redesign.
+- **Want to propose a change?** A Discussion first is welcome — it can
+  save you work on something the maintainer was about to redesign — but
+  it is **optional**: a pull request that arrives on its own is equally
+  welcome (see "Is prior discussion required?" below).
 
 ## Pull requests
 
-1. Open or comment on a Discussion or Issue first.
+1. Optionally open or comment on a Discussion or Issue first (not required).
 2. Fork, branch, and run `pytest` locally:
    ```bash
    pip install -e ".[test]"
