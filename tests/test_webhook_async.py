@@ -21,6 +21,13 @@ from zee.responder.sequence import handle
 from zee.telemetry.events_log import EventLog
 
 
+# How long slow_sender holds its thread if the test never releases it.
+# Every bound below is expressed against this one number instead of a
+# hand-picked wall-clock budget: a synchronous webhook costs _WEBHOOK_BLOCK
+# seconds, so anything well under it means the responder did not wait.
+_WEBHOOK_BLOCK = 5.0
+
+
 def _asset() -> AssetProfile:
     return AssetProfile(
         id="t-host",
@@ -40,7 +47,7 @@ def test_webhook_does_not_block_responder():
 
     def slow_sender(title, body):
         webhook_entered.set()
-        webhook_release.wait(timeout=2.0)  # blocks until we release
+        webhook_release.wait(timeout=_WEBHOOK_BLOCK)  # blocks until we release
         webhook_completed.set()
         return True, "HTTP 200"
 
@@ -58,14 +65,23 @@ def test_webhook_does_not_block_responder():
                         dry_run=True, event_log=log,
                         webhook_sender=slow_sender)
         elapsed = time.monotonic() - start
-        # Responder must return promptly; the webhook is on another thread.
-        assert elapsed < 0.5, f"responder took {elapsed:.2f}s; webhook blocked the cut path"
-        # Webhook was dispatched but not awaited.
-        assert webhook_entered.wait(timeout=1.0), "webhook never started"
+        # The real invariant, and it needs no clock: slow_sender cannot set
+        # webhook_completed until we release it below, so a responder that
+        # had awaited the sender would only return once the sender gave up
+        # — with webhook_completed already set.
+        assert webhook_entered.wait(timeout=_WEBHOOK_BLOCK), "webhook never started"
         assert webhook_completed.is_set() is False, "webhook finished synchronously (it shouldn't)"
+        # Wall-clock backstop only. Step 1 of handle() calls notify_local,
+        # which hands off to the OS notifier (a separate process on Windows),
+        # so the budget cannot be a fraction of a second — it is half of the
+        # block a synchronous webhook would have cost.
+        assert elapsed < _WEBHOOK_BLOCK / 2, (
+            f"responder took {elapsed:.2f}s of the webhook's "
+            f"{_WEBHOOK_BLOCK:.0f}s block; webhook blocked the cut path"
+        )
         # Release the webhook and let it finish.
         webhook_release.set()
-        assert webhook_completed.wait(timeout=2.0), "webhook never completed"
+        assert webhook_completed.wait(timeout=_WEBHOOK_BLOCK), "webhook never completed"
 
         # Allow the daemon thread time to write its result line.
         for _ in range(20):
