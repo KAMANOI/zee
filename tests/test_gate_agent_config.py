@@ -369,6 +369,15 @@ def test_adversarial_lines_stay_fast(tmp_path, body):
     assert max(t1, t2) < 6.0
 
 
+# This calibration must not be measured with a single run. A cold first run
+# inflates the denominator and pulls the ratio down: with runs=1 the local
+# values ranged 3.07-3.64 over five trials, and a GitHub runner produced 1.85
+# (below _GROWTH), i.e. the watchdog reported "the slow version is fine".
+# With runs=3 the same measurement sits at 3.62-3.63 locally, spread under 1 %.
+# This direction of flake is the dangerous one: it hides a real regression.
+_CALIBRATION_RUNS = 3
+
+
 def test_speed_check_fails_known_slow_implementations(tmp_path, monkeypatch):
     # Calibration: the two quadratic versions found in review must fail the growth check above.
     import types
@@ -377,14 +386,18 @@ def test_speed_check_fails_known_slow_implementations(tmp_path, monkeypatch):
     # line from every `curl`); n is small, the ratio does not depend on it
     pats = [(c, sv, static_checks._G203.full if c == "G203" else pt, m) for c, sv, pt, m in static_checks._PATTERNS]
     monkeypatch.setattr(static_checks, "_PATTERNS", pats)
-    longer, _ = _longer(tmp_path / "L", _ADVERSARIAL[7], runs=1, n=2)
+    longer, slow = _longer(tmp_path / "L", _ADVERSARIAL[7], runs=_CALIBRATION_RUNS, n=2)
+    # _longer subtracts a fixed 0.05 s of overhead: if the slower scan is not
+    # well above it, the ratio is mostly noise and proves nothing either way.
+    assert slow > 0.5, f"measurement too small to judge: {slow:.3f}s"
     assert longer > _GROWTH, longer
     monkeypatch.undo()
     # line count: G212's nearby-line lookup as it was before bisection (scans every target line)
     monkeypatch.setattr(tampering, "bisect", types.SimpleNamespace(
         bisect_left=lambda a, x: sum(1 for v in a if v < x),
         bisect_right=lambda a, x: sum(1 for v in a if v <= x)))
-    more, _ = _more(tmp_path / "N", _ADVERSARIAL[8], runs=1)
+    more, slow2 = _more(tmp_path / "N", _ADVERSARIAL[8], runs=_CALIBRATION_RUNS)
+    assert slow2 > 0.5, f"measurement too small to judge: {slow2:.3f}s"
     assert more > _GROWTH, more
 
 
