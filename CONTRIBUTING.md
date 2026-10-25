@@ -108,6 +108,39 @@ instead of 3 hours.
 - Adding any text that promises Zee can stop a given class of
   attacker (named or otherwise).
 
+## Prohibited changes (hack-back and anything unlawful)
+
+The following are rejected outright, and their authors are not credited:
+
+- **Hack-back.** Any feature that intrudes on, disrupts, stops, deletes,
+  alters, or sends anything to a host believed to be the attacker.
+- **Touching third-party machines, systems, or data without
+  authorisation** — including hosts *presumed* to belong to an attacker.
+  Attribution can be wrong, so action based on presumption is not accepted.
+- **Interception, impersonation, or credential theft**, and helpers for them.
+- **Anything unlawful where it runs.** In some jurisdictions the above are
+  criminal offences (in Japan, the Unauthorized Computer Access Act and
+  related statutes may apply).
+- **Features that require violating a third party's terms of service.**
+
+Attacking *your own* isolated Zee installation to find weaknesses is not
+covered by this section, as long as no third-party asset is involved.
+
+## Is prior discussion required?
+
+No. Opening an issue or a discussion before you write code is **optional** —
+it helps avoid duplicated work and lets us answer questions, but a pull
+request that arrives without any prior contact is equally welcome.
+
+## Crediting co-developers
+
+Contributions that improve Zee are credited: the author is listed as a
+**co-developer**. If you would like to be listed, tell us the name you want
+shown, in your issue or pull request; if you would rather not be listed,
+say so. See [改変と共同開発者の記載について](./docs/co-developers.ja.md)
+(Japanese) for the full policy, the areas where work is most useful, and the
+prohibited changes above.
+
 ## Code of Conduct
 
 By participating, you agree to follow the
