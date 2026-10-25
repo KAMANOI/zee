@@ -86,6 +86,7 @@ Zee が向き合っているのは、**攻撃能力の進化速度** と **防�
 - **入口ゲート** — AIスキル / MCP / npm / PyPI / VS Code 拡張を、導入する前に静的スキャン（`zee gate`・[docs/gate.md](./docs/gate.md)）
 - **MVP 実装** — 軽量な囮トリップワイヤ＋自動封じ込め（`src/zee/`・**既定 dry_run**）
 - **検証記録** — 実施した検証の条件・対象版・結果・未実施の範囲（[docs/verification/](./docs/verification/README.md)）
+- **事例** — 公表された事案に対して Zee がどこまで効き、どこから効かないかを確かめた記録（[docs/case-studies/](./docs/case-studies/)）
 - **封じ込め証跡のエクスポート** — 記録済みの検知・遮断の記録を、報告や相談に添付できるローカルファイルに書き出す（`zee export`・送信はしない・[法制度との関係](#法制度との関係2026-10-01)）
 - **当局向け報告書のまとめ** — `zee export` の出力を、警察または個人情報保護委員会（PPC）への相談・報告に添付する文書（json/txt/html）にまとめる（`zee incident-report`・送信はしない）
 
