@@ -40,7 +40,7 @@ def _asset() -> AssetProfile:
 
 
 def test_webhook_does_not_block_responder():
-    """Even with a slow webhook, the responder returns within ~100 ms."""
+    """Even with a slow webhook, the responder returns without awaiting it."""
     webhook_entered = threading.Event()
     webhook_release = threading.Event()
     webhook_completed = threading.Event()
