@@ -14,6 +14,8 @@ import pytest
 
 from zee.gate import static_checks
 
+from ._timing import calibration
+
 
 def _scan(tmp_path: Path, files: dict[str, str]) -> dict[str, list[str]]:
     for rel, body in files.items():
@@ -321,26 +323,38 @@ _ADVERSARIAL = [
     "curl x " * 20000,
     "copyFileSync('node_modules/x/a.svg', 'dist/a.svg'); " * 2000,
 ]
-# Two shapes, each doubled on one axis only: line length (few long lines) and line count (many
-# short lines). A cost quadratic in either axis shows as a ratio near 4 on that axis; a linear
-# one stays near 2 (measured on a 2021 MacBook Pro: 1.89-2.06 on every body and axis).
-_LONG_LINES, _MANY_LINES = (12500, 8), (60, 4000)
-# The usable window, both ends measured:
-#   upper end - what a linear implementation produces. Locally 1.93 over all
-#     nine bodies and both axes (2026-10-25, M1, Python 3.13, runs=4; the
-#     slowest single scan was 1.53 s). A GitHub runner produced 2.66
-#     (macos-latest, Python 3.13, runs=2, 2026-10-25), which failed the old
-#     2.6 ceiling on a commit that changed documentation only.
-#   lower end - what the known quadratic implementations produce. The
-#     calibration test below asserts they exceed this constant and passes, and
-#     a standalone probe the same day put their minimum at 3.27 (runs=2) and
-#     3.33 (runs=4) over five trials.
-# So the threshold sits inside [2.66, 3.27] with about 9 % of room below and
-# 13 % above. More runs is what makes the window trustworthy: the spread comes
-# from the runner being busy, and a minimum over more runs is closer to the
-# true cost at both ends.
-_GROWTH = 2.9
-_SCAN_RUNS = 4  # min over this many; it was 2 when the CI run above flaked
+# Two shapes, each QUADRUPLED on one axis only: line length (few long lines) and line count
+# (many short lines). A cost quadratic in either axis shows as a ratio near 16 on that axis; a
+# linear one stays near 4.
+#
+# It used to be doubled (linear ~2, quadratic ~4), and that did not survive a busy runner: on
+# 2026-10-25 a GitHub runner put the linear side at 2.66 (macos 3.13) and the known quadratic
+# implementation at 2.74 (macos 3.11) -- a gap of 3 %, with no threshold that fits between them.
+# Quadrupling is not a bigger number for its own sake: it is what puts the two apart far enough
+# that the runner's noise cannot close the gap.
+#
+# The sizes are chosen so this costs no more than before: the long-line axis keeps its small
+# side and grows the large one, the line-count axis keeps its large side and halves the small
+# one. Both measurements stay above 0.2 s locally, which the ratio needs (the 0.05 s overhead
+# subtracted below swamps anything smaller).
+_LONG_LINES, _MANY_LINES = (12500, 8), (60, 2000)
+_AXIS = 4  # how much each axis is multiplied by
+# The usable window, measured on one machine (M1, Python 3.13, 2026-10-25, runs=4):
+#   linear      - 3.72 over all nine bodies on the long-line axis, 3.85 on the line-count axis
+#   quadratic   - 14.2 (long-line) and 10.1 (line-count) for the known slow implementations that
+#                 test_speed_check_fails_known_slow_implementations restores
+# So locally the two are 2.6x apart and the threshold sits between them with 69 % of room above
+# the linear side and 36 % below the quadratic one.
+#
+# These are both LOCAL numbers, and that matters: the previous threshold was set from a window
+# whose upper end came from a GitHub runner and whose lower end came from this Mac. Mixing the
+# two produced a window that did not exist (see past_mistakes 2026-10-25). On the one runner
+# measurement available, the linear side read 1.40x its local value and the quadratic side 0.82x;
+# applying those here puts the runner's window at roughly [5.4, 8.3], which still holds 6.5. The
+# safeguard is the 2.6x separation, not the exactness of that extrapolation.
+_GROWTH = 6.5
+_SCAN_RUNS = 4  # min over this many; it was 2 when the first CI run flaked
+_MAX_CALIBRATED = 450  # ceiling for the slower scan, in units of the calibration (144x measured)
 
 
 def _scan_time(d: Path, line: str, n: int, runs: int = _SCAN_RUNS) -> float:
@@ -359,16 +373,16 @@ def _scan_time(d: Path, line: str, n: int, runs: int = _SCAN_RUNS) -> float:
 
 
 def _longer(d: Path, body: str, runs: int = _SCAN_RUNS, n: int = _LONG_LINES[1]) -> tuple[float, float]:
-    """(time ratio when the lines get twice as long, the slower time)."""
+    """(time ratio when the lines get _AXIS times as long, the slower time)."""
     L = _LONG_LINES[0]
-    a, b = _scan_time(d / "a", body[:L], n, runs), _scan_time(d / "b", body[:2 * L], n, runs)
+    a, b = _scan_time(d / "a", body[:L], n, runs), _scan_time(d / "b", body[:_AXIS * L], n, runs)
     return (b - 0.05) / a, b
 
 
 def _more(d: Path, body: str, runs: int = _SCAN_RUNS) -> tuple[float, float]:
-    """(time ratio when there are twice as many lines, the slower time)."""
+    """(time ratio when there are _AXIS times as many lines, the slower time)."""
     L, n = _MANY_LINES
-    a, b = _scan_time(d / "c", body[:L], n, runs), _scan_time(d / "e", body[:L], 2 * n, runs)
+    a, b = _scan_time(d / "c", body[:L], n, runs), _scan_time(d / "e", body[:L], _AXIS * n, runs)
     return (b - 0.05) / a, b
 
 
@@ -376,12 +390,20 @@ def _more(d: Path, body: str, runs: int = _SCAN_RUNS) -> tuple[float, float]:
 @pytest.mark.parametrize("body", _ADVERSARIAL, ids=[f"adv{i}" for i in range(len(_ADVERSARIAL))])
 def test_adversarial_lines_stay_fast(tmp_path, body):
     # What this guards is the growth, not the machine: runner speed varies, a ratio does not.
-    # The absolute cap is a backstop at about 4x the local slowest tree (1.5 s); GitHub runners
-    # took 1.25-2.1x the local time on the previous version of this test (2026-10-20).
+    # The backstop catches the slowdown a ratio cannot see -- one that makes everything slower by
+    # the same factor -- and it is expressed against a calibration run on this same machine rather
+    # than in seconds, so it does not fail on a slow runner. Measured 2026-10-25 (M1, 3.13): the
+    # slowest of the two large scans was 1.37 s against a 9.5 ms calibration = 144x, so the
+    # ceiling below fires past about 3.1x.
     _scan_time(tmp_path / "warm", body[:1000], 1, 1)
     (longer, t1), (more, t2) = _longer(tmp_path, body), _more(tmp_path, body)
     assert longer < _GROWTH and more < _GROWTH, (longer, more)
-    assert max(t1, t2) < 6.0
+    cal = calibration()
+    assert max(t1, t2) < cal * _MAX_CALIBRATED, (
+        f"{max(t1, t2):.2f}s is {max(t1, t2) / cal:.0f}x the calibration ({cal * 1000:.1f}ms); "
+        f"the ceiling is {_MAX_CALIBRATED}x. The growth ratios were {longer:.1f} and {more:.1f}, "
+        f"so this is a constant-factor slowdown, not a slower machine."
+    )
 
 
 # This calibration must not be measured with a single run. A cold first run
