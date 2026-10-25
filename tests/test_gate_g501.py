@@ -11,9 +11,10 @@ HIGH. Positives pi01-pi08 mirror the resilience round-1 fixtures
 from __future__ import annotations
 
 import json
-import time
 
 import pytest
+
+from ._timing import assert_linear, best_of
 
 from zee.gate.inspector import inspect_source
 from zee.gate.model import RiskLevel, Severity
@@ -134,14 +135,31 @@ _BIG = {
 }
 
 
+# A budget in seconds measured the runner, not the stripper: 1.99 s here
+# against runners about 2.9x slower (2026-10-25) left no room under the old
+# 5 s. What the quadratic regression this guards actually did was grow faster
+# than the input, so that is what gets measured -- the same input at half size
+# and at full size. Both sizes stay under the 2 MiB read cap; a file above it
+# is reported as G910 and never scanned, which tests/_timing.py fails on.
+#   measured 2026-10-25 (M1, Python 3.13): every case grew x1.99-2.00, and the
+#   slowest full-size scan (cue_prefix_flood, 2.01 s) was 210x the calibration
+#   (9.5 ms), so the detection boundary is 600 / 210 = about 2.9x: a
+#   constant-factor slowdown above that fails, while a slower machine
+#   (which slows the calibration too) still passes.
+_MAX_CALIBRATED = 600
+
+
 @pytest.mark.parametrize("name", sorted(_BIG))
-def test_g501_pathological_input_is_fast(tmp_path, name):
-    (tmp_path / "SKILL.md").write_text(_BIG[name], encoding="utf-8")
-    t = time.perf_counter()
-    flags = scan_tree(tmp_path)
-    elapsed = time.perf_counter() - t
-    assert not any(f.code == "G910" for f in flags)  # really scanned
-    assert elapsed < 5.0, f"{name}: {elapsed:.2f}s"  # quadratic blow-up shows as minutes; 5s tolerates slow CI
+def test_g501_pathological_input_stays_linear(tmp_path, name):
+    body = _BIG[name]
+
+    def scan(text: str) -> float:
+        (tmp_path / "SKILL.md").write_text(text, encoding="utf-8")
+        return best_of(lambda: scan_tree(tmp_path))
+
+    half = len(body) // 2
+    t1, t2 = scan(body[:half]), scan(body)
+    assert_linear(name, t1, t2, half, len(body), max_calibrated=_MAX_CALIBRATED)
 
 
 def test_g501_medium_flags_can_add_up_to_high(tmp_path):

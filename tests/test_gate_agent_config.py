@@ -325,10 +325,25 @@ _ADVERSARIAL = [
 # short lines). A cost quadratic in either axis shows as a ratio near 4 on that axis; a linear
 # one stays near 2 (measured on a 2021 MacBook Pro: 1.89-2.06 on every body and axis).
 _LONG_LINES, _MANY_LINES = (12500, 8), (60, 4000)
-_GROWTH = 2.6  # calibrated by test_speed_check_fails_known_slow_implementations (3.4-3.7 there)
+# The usable window, both ends measured:
+#   upper end - what a linear implementation produces. Locally 1.93 over all
+#     nine bodies and both axes (2026-10-25, M1, Python 3.13, runs=4; the
+#     slowest single scan was 1.53 s). A GitHub runner produced 2.66
+#     (macos-latest, Python 3.13, runs=2, 2026-10-25), which failed the old
+#     2.6 ceiling on a commit that changed documentation only.
+#   lower end - what the known quadratic implementations produce. The
+#     calibration test below asserts they exceed this constant and passes, and
+#     a standalone probe the same day put their minimum at 3.27 (runs=2) and
+#     3.33 (runs=4) over five trials.
+# So the threshold sits inside [2.66, 3.27] with about 9 % of room below and
+# 13 % above. More runs is what makes the window trustworthy: the spread comes
+# from the runner being busy, and a minimum over more runs is closer to the
+# true cost at both ends.
+_GROWTH = 2.9
+_SCAN_RUNS = 4  # min over this many; it was 2 when the CI run above flaked
 
 
-def _scan_time(d: Path, line: str, n: int, runs: int = 2) -> float:
+def _scan_time(d: Path, line: str, n: int, runs: int = _SCAN_RUNS) -> float:
     d.mkdir(parents=True)
     (d / "p.yaml").write_text("network_policies:\n" + (line + "\n") * n, encoding="utf-8")
     (d / "s.js").write_text(("const { exec } = require('child_process'); exec(`" + line + "\n") * n,
@@ -343,14 +358,14 @@ def _scan_time(d: Path, line: str, n: int, runs: int = 2) -> float:
     return best
 
 
-def _longer(d: Path, body: str, runs: int = 2, n: int = _LONG_LINES[1]) -> tuple[float, float]:
+def _longer(d: Path, body: str, runs: int = _SCAN_RUNS, n: int = _LONG_LINES[1]) -> tuple[float, float]:
     """(time ratio when the lines get twice as long, the slower time)."""
     L = _LONG_LINES[0]
     a, b = _scan_time(d / "a", body[:L], n, runs), _scan_time(d / "b", body[:2 * L], n, runs)
     return (b - 0.05) / a, b
 
 
-def _more(d: Path, body: str, runs: int = 2) -> tuple[float, float]:
+def _more(d: Path, body: str, runs: int = _SCAN_RUNS) -> tuple[float, float]:
     """(time ratio when there are twice as many lines, the slower time)."""
     L, n = _MANY_LINES
     a, b = _scan_time(d / "c", body[:L], n, runs), _scan_time(d / "e", body[:L], 2 * n, runs)
