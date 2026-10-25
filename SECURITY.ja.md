@@ -218,6 +218,12 @@ PyPI／npm のような配布サイト経由の自動アラートは届きませ
 uv tool install --force "git+https://github.com/KAMANOI/zee@<新しいタグ>"
 ```
 
+## 端末側の更新のお願い（お知らせ）
+
+Zee 本体ではなく、**Zee を入れる道具（`pip`・`uv`）の側**で更新が必要になった件があります。
+
+- [emSign（eMudhra）証明書事案：端末側の更新のお願い（日本語・2026-10）](./docs/notices/2026-10_emsign_pip_certifi.ja.md)
+
 ## 脆弱性修正の記載方法
 
 脆弱性を修正したリリースは、[CHANGELOG.md](./CHANGELOG.md) とリリースノートに

@@ -146,6 +146,10 @@ pip install -e .
 > 別の作者による無関係なパッケージです（2026-09-05 実測）。Zee はこのリポジトリからのみ
 > 配布しています。
 
+> 📣 **2026-10：`pip`・`uv`・`certifi` の更新をお願いします。** 証明書を発行する事業者の
+> 鍵漏えい（emSign／eMudhra）に伴い、Zee を入れる道具の側に更新が必要です。手順は
+> [docs/notices/2026-10_emsign_pip_certifi.ja.md](./docs/notices/2026-10_emsign_pip_certifi.ja.md)。
+
 ### 起動
 
 ```bash
