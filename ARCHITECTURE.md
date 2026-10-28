@@ -142,10 +142,10 @@ responder の `cut_full` / `cut_egress` と recovery（`zee restore`）は OS �
 - **Windows interface 列挙のロケール対応**：v0.3 から PowerShell `Get-NetAdapter`（構造化 JSON 出力・ロケール非依存）を主経路に。`netsh interface show interface` のパースはフォールバックとして保持。
 - **events.jsonl の decoy_path 平文記録**：v0.3 から `decoy_ref`（`<asset_id>#<index>`）を記録します。ログを読まれても囮位置を一括列挙できません（対応関係は `assets.toml` 経由でのみ復元可能）。
 
-### 設計意図として将来フェーズに引き継ぐもの
+### 設計意図と、現在の到達点
 
-- **権限分離**：watcher / policy / responder を別プロセス（または別ユーザー）に分け、最小権限で動かす。watcher は遮断権限を持たず、responder は囮イベントだけを契機に動く。設計と段階は [docs/design/self-defense.md](./docs/design/self-defense.md)。現時点で入っているのは第一段（遮断要求の形を3項目に固定して検証する `responder/blocker.py`。同じプロセス・同じユーザーで動くため、まだ権限分離にはなっていません）。
-- **ログ改竄検知**：イベントログを追記専用ファイルシステム機能（macOS の SIP / Linux の append-only attribute）で守るか、定期的にハッシュチェーンを取って改ざんを検知できる構造にする。
+- **権限分離**：watcher / policy / responder を別プロセス（または別ユーザー）に分け、最小権限で動かす。watcher は遮断権限を持たず、responder は囮イベントだけを契機に動く。設計と段階は [docs/design/self-defense.md](./docs/design/self-defense.md)。第一段（遮断要求の形を3項目に固定して検証する `responder/blocker.py`）に加え、root の遮断部と業務ユーザーの `zee watch` を分ける試作が v0.14.0 から入っています。**既定オフ**で、`[privsep]` を書いた時だけ有効になります。確認は GitHub の使い捨てランナーに限り、作者の実機には適用していません。root を取られると守れず、成熟した標準保護と同一視できません。範囲と限界は [docs/design/privsep.md](./docs/design/privsep.md)。
+- **ログ改竄検知**：イベントログには鍵なしのハッシュチェーンがあり、途中の書き換え・削除と先頭の欠落を検知します（`zee export` の `chain_verification`）。**末尾の切り詰めと、ホスト上の攻撃者による全ハッシュの再計算は検知できません。** 追記専用のファイルシステム機能（macOS の SIP / Linux の append-only attribute）による保護は入っていません（将来）。
 - **PAM / FIDO2 認証**：マルチユーザー / エンタープライズ用途では restore_token に加えて PAM や公開鍵 / FIDO2 を経由した強い認証層を入れる。MVP のスコープには含めず、operator が `sudo` で `zee restore` を囲う運用で代替できます。
 
 ---

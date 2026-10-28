@@ -128,9 +128,12 @@ on an attacker's machine.
 
 ## What this document is not
 
-No outside expert or organization has independently evaluated Zee, and a real cut against the OS firewall
-(`dry_run: false`) has not been tested. What has been checked, and under which
-conditions, is in [verification/README.en.md](./verification/README.en.md).
+No outside expert or organization has independently evaluated Zee. A real cut against the OS firewall
+(`dry_run: false`) has been run on GitHub's hosted runners (Linux in a network namespace, macOS, Windows
+in English) and on one physical Mac. Physical Linux and Windows machines, non-English Windows, and
+connections that were already open before the cut have not been tried. What has been checked, and under
+which conditions, is in [verification/README.en.md](./verification/README.en.md) and
+[verification/real-cut.md](./verification/real-cut.md).
 Verify its behavior in your own environment before production use.
 
 ### 日本語要約
@@ -146,4 +149,4 @@ Zee は PyPI・npm・Homebrew では配布されておらず、同名パッケ�
 証跡ログは鍵なしのハッシュチェーンで、途中の書き換え・削除と先頭の欠落は検知しますが、末尾の切り詰めとホスト上の攻撃者による全ハッシュの再計算は検知できません。`zee export` は 0600・既存ファイルやリンクを上書きしない形で書き出し、何も送信しません。証跡の書き込み失敗は通知・遮断を止めません。`zee incident-report` は入力の export を非信頼として扱い（欠落・型違いは Z1004 で拒否、未知の項目は転記しない、改行などの制御文字は見える形にエスケープ）、0600 で書き出し、入力と同じパスには `--force` でも書きません。`--no-redact` の export を使うと生のパスが報告書に載ります（報告書と標準エラーで明示）。
 Zee は既知 CVE のデータベースを持たず、AI アーティファクト固有の脅威（指示のすり込み・過剰な権限要求・Rug Pull）だけを見ます。
 既知脆弱性は Snyk、振る舞いベースのサプライチェーン検知は Socket と役割が異なり、併用が前提です（詳細は gate.md）。
-専門家・第三者機関による独立評価は受けておらず、OS のファイアウォールに対する実遮断（`dry_run: false`）の試験も未実施です。実施した検証は [verification/README.md](./verification/README.md) にあります。本番前に利用環境で確認してください。
+専門家・第三者機関による独立評価は受けておらず、OS のファイアウォールに対する実遮断（`dry_run: false`）は、GitHub の仮想ランナー（Linux はネットワーク名前空間、macOS、英語版 Windows）と macOS 実機1台で行いました。Linux・Windows の実機、英語以外の Windows、遮断前から開いていた接続は試していません。実施した検証は [verification/README.md](./verification/README.md) と [verification/real-cut.md](./verification/real-cut.md) にあります。本番前に利用環境で確認してください。

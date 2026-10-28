@@ -9,7 +9,7 @@ releases.
 
 ### Added
 
-- **AI model file checks in `zee gate` (G221–G229, branch only, not released)**: model files are
+- **AI model file checks in `zee gate` (G221–G229, on `main`, not yet in a tagged release)**: model files are
   judged by their first bytes and never loaded. Pickle-based models are always MEDIUM (a person
   decides; a lone MEDIUM blocks `--promote-to`), dangerous pickle imports are HIGH, a pickle that is
   cut off after importing is HIGH + partial, safetensors / GGUF format breaks are HIGH, `auto_map`
