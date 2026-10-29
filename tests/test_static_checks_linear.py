@@ -104,7 +104,7 @@ _UNIT = {
 #   regression above that fails, while a slower machine (which slows both
 #   numbers) still passes. Stated this way because the ratio, not the
 #   ceiling, is what the boundary follows (ASTRA 2026-10-25, 1dc26ff).
-_MAX_CALIBRATED = 600
+_MAX_CALIBRATED = 400  # 2026-10-29 実測（M1・新しい校正＝split_join）: 最大 154x。上限は実測の約2.5倍。10環境の校正の振れは1.4倍（CI run 40801299304）
 
 
 @pytest.mark.parametrize("name", sorted(_UNIT))

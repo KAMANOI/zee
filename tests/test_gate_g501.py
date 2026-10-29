@@ -146,7 +146,7 @@ _BIG = {
 #   (9.5 ms), so the detection boundary is 600 / 210 = about 2.9x: a
 #   constant-factor slowdown above that fails, while a slower machine
 #   (which slows the calibration too) still passes.
-_MAX_CALIBRATED = 600
+_MAX_CALIBRATED = 300  # 2026-10-29 実測（M1・新しい校正＝split_join）: 最大 120x。上限は実測の約2.5倍。10環境の校正の振れは1.4倍（CI run 40801299304）
 
 
 @pytest.mark.parametrize("name", sorted(_BIG))
