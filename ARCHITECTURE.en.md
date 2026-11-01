@@ -225,18 +225,23 @@ can make Zee miss real attacks or roll back containment.
   instead. An attacker reading the log alone cannot enumerate every
   decoy's filesystem location.
 
-### Design intent retained for future phases
+### Design intent and where it stands
 
 - **Privilege separation** — split watcher / policy / responder into
   separate processes (or users) under least privilege. The watcher
   should not hold cut privilege; the responder reacts only to decoy
   events. Design and stages: [docs/design/self-defense.md](./docs/design/self-defense.md)
-  (Japanese). Only stage one is in place: `responder/blocker.py` fixes the
-  cut request to three fields and re-validates it. It still runs in the
-  same process as the same user, so it is not privilege separation yet.
-- **Tamper-evident logs** — protect the event log with an append-only
-  filesystem feature (Linux append-only attribute, macOS SIP) or take
-  periodic hash chains so post-hoc tampering can be detected.
+  (Japanese). Stage one is `responder/blocker.py`, which fixes the cut request to
+  three fields and re-validates it. Since v0.14.0 there is also a prototype that splits a root
+  cut service from the business user's `zee watch`. It is **off by default** (active only when a
+  `[privsep]` section is written), has been exercised only on disposable GitHub runners and was not
+  applied to the author's own machine. It cannot hold against an attacker who gets root, and should
+  not be equated with a mature standard protection. Scope and limits:
+  [docs/design/privsep.md](./docs/design/privsep.md) (Japanese).
+- **Tamper-evident logs** — the event log carries a keyless hash chain that detects edits or
+  deletions in the middle and a missing head (`chain_verification` in `zee export`). It does **not**
+  detect truncation of the tail, or a host attacker recomputing every hash. Protection by an
+  append-only filesystem feature (Linux append-only attribute, macOS SIP) is not implemented (future).
 - **PAM / FIDO2 for multi-user deployments** — restore_token plus
   hardware-key or PAM auth where same-user-attacker resistance is
   required. The MVP does not bundle this; `sudo`-wrapping `zee

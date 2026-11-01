@@ -354,7 +354,7 @@ _AXIS = 4  # how much each axis is multiplied by
 # safeguard is the 2.6x separation, not the exactness of that extrapolation.
 _GROWTH = 6.5
 _SCAN_RUNS = 4  # min over this many; it was 2 when the first CI run flaked
-_MAX_CALIBRATED = 450  # ceiling for the slower scan, in units of the calibration (144x measured)
+_MAX_CALIBRATED = 210  # 2026-10-29 実測（M1・新しい校正＝split_join）: 最大 84x。上限は実測の約2.5倍。10環境の校正の振れは1.4倍（CI run 40801299304）
 
 
 def _scan_time(d: Path, line: str, n: int, runs: int = _SCAN_RUNS) -> float:

@@ -104,14 +104,14 @@ zee gate audit
 
 This is static inspection and cannot catch every malicious payload (honestly). It does not replace Semgrep / Snyk / Socket — it is **a layer to run alongside them**, and can be wired into CI / pre-install as a GitHub Action. See [docs/gate.md](./docs/gate.md); the threat-list format is documented in [docs/threat-list.md](./docs/threat-list.md).
 
-v0.16.0 adds three groups of checks (all read-only, nothing is run; each flag marks a `file:line` for a person to read, not proof of safety or of harm):
+v0.16.0 adds the first three groups of checks in the table below (all read-only, nothing is run; each flag marks a `file:line` for a person to read, not proof of safety or of harm):
 
 | Group | Codes | What gets flagged |
 |---|---|---|
 | Agent tool and sandbox configuration | G205–G211, G602 | values passed to a shell without quoting, a custom-defined screen tool, schema / handler mismatch, interpreters in a command allowlist, log-only network policy, passwordless sudo / VNC, procedures that read a secret file's contents |
 | Tampering plugins | G212–G216 | writing into another package (HIGH), re-applying on every start, a prompt set next to a decrypt call, a long encoded string, an encrypted file or a network fetch (HIGH; a plain prompt can be flagged too), patching another plugin's folder, documentation addressed to an AI assistant |
 | Procedures that change the AI's own setup | G217–G220 | instructions to register a remote MCP server, instructions to write to an AI / developer tool config file, a plugin definition declaring a remote server, a browser started with its sandbox off |
-| AI model files | G221–G229 | pickle-based models (always a person's call), pickle imports that run code or fall outside an allow-list, broken safetensors / GGUF, `auto_map` and companion code loaded with the model, GGUF chat templates, Keras Lambda. Read without loading |
+| AI model files (**on `main`, not in the v0.16.0 tag; unreleased**) | G221–G229 | pickle-based models (always a person's call), pickle imports that run code or fall outside an allow-list, broken safetensors / GGUF, `auto_map` and companion code loaded with the model, GGUF chat templates, Keras Lambda. Read without loading |
 
 Everything that is not HIGH is MEDIUM (G206 and G207 are LOW). One MEDIUM flag blocks `--promote-to`, and three MEDIUM flags add up to HIGH. The checks read line layout and names, so a deliberate rewrite gets past them; the limits of each group are in [docs/gate.md](./docs/gate.md). **Something that passed on v0.15.0 can be MEDIUM or HIGH after upgrading** (for example, a patch-package style tool that writes into `node_modules` is flagged G212, and an agent that loads its system prompt over the network at run time is flagged G214; both are HIGH by design. A sentence in your own `CLAUDE.md` / `AGENTS.md` such as "append new permission rules to `.claude/settings.json`" is G218 (MEDIUM), which stops `--promote-to`).
 

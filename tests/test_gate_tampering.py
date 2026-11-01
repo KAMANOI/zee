@@ -301,7 +301,7 @@ def test_g214_template_literal_text_is_not_a_call(tmp_path):
 #   because it depends on how much work the input is: the boundary is
 #   170 / 56 = about 3.0x, where the 600 used for the 2 MB inputs in
 #   test_gate_g501.py would only fire past 10x here.
-_MAX_CALIBRATED = 170
+_MAX_CALIBRATED = 80  # 2026-10-29 実測（M1・新しい校正＝split_join）: 最大 30x。上限は実測の約2.5倍。10環境の校正の振れは1.4倍（CI run 40801299304）
 
 
 def test_g212_many_copy_lines_stay_linear(tmp_path):

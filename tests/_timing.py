@@ -24,10 +24,17 @@ from collections.abc import Callable
 MAX_GROWTH = 3.0      # linear is ~2.0, quadratic ~4.0
 REPEATS = 3           # other load can only make a run slower, so take the min
 
-# The calibration workload: a plain regex sweep over 2 MB that cannot
-# backtrack. Same engine, same process, no dependence on the code under test.
-_CAL_RE = re.compile(r"zzzz")   # never matches
-_CAL_TEXT = "ab" * 1_000_000    # 2 MB
+# The calibration workload: splitting and rejoining 200 kB of text, twenty
+# times. Same process, stdlib only, no dependence on the code under test.
+#
+# It used to be a literal-only regex sweep (re.search("zzzz") over 2 MB). That
+# took a C fast path whose speed does not move with the Python-level work the
+# gate actually does, so the ratio measured the gap between two engines rather
+# than the machine. Measured over ten environments on 2026-10-29 (CI run
+# 40801299304 plus the development Mac), scan_tree over the same 2 MB input
+# came to 104x-4864x the literal sweep -- a 47-fold spread that no ceiling can
+# sit above and still catch a regression -- against 93x-132x for this one.
+_CAL_TEXT = "ab" * 100_000      # 200 kB
 _CAL_SWEEPS = 20
 
 
@@ -37,7 +44,7 @@ def calibration(repeats: int = REPEATS) -> float:
     for _ in range(repeats):
         t = time.perf_counter()
         for _ in range(_CAL_SWEEPS):
-            _CAL_RE.search(_CAL_TEXT)
+            "\n".join(_CAL_TEXT.split("ab"))
         best = min(best, time.perf_counter() - t)
     return best
 
