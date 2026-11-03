@@ -1,0 +1,40 @@
+{
+  "product": "zee",
+  "_doc": "公開・配布の実動作の関門の台帳。段: 1=仮想環境で確認 / 2=実機で一部まで確認（観測まで） / 3=実機で実動作まで確認。合格は3のみ。説明は scripts/release-gate.mjs の先頭と docs/security/RELEASE_GATE.md。",
+  "channels": {
+    "git-tag": {
+      "required": [
+        {
+          "env": "macOS",
+          "steps": [
+            "real-cut",
+            "restore"
+          ]
+        }
+      ]
+    }
+  },
+  "records": [
+    {
+      "artifact": "v0.13.0 (7c70c9d)",
+      "content_id": "content:48cbd742d80721afc3e6178e0390ebd7896c578266cc8d0b6640dbb994cec138",
+      "channel": "git-tag",
+      "env": "macOS",
+      "tier": 3,
+      "exercised": [
+        "real-cut",
+        "restore"
+      ],
+      "built_by": "maker",
+      "by": "independent-reviewer",
+      "at": "2026-10-28",
+      "evidence": "evidence/real-macos-v0.13.0-20261015-233822.txt",
+      "evidence_sha256": "c63eb7cabbc18b214f880b0fb92931c04ab800a32a43288da8525a4322ae04e7",
+      "note": "実機（macOS）で実遮断と復旧まで通した記録。操作はプロジェクトの持ち主（本人申告）で、コードを書いた側とは別。(1) 実行されたコードが v0.13.0 だったことは実測していない（試験スクリプトは作業ツリーの src を使う）。そのため、この記録は v0.13.0 の公開許可には使わない。(2) 到達の測定は単一URLで、full の失敗はDNSエラーであり、全通信の遮断を直接は示さない。(1)(2) は、版・読込先・複数URLを記録する形で実機試験をやり直せば閉じる。",
+      "operated_by": "プロジェクトの持ち主（本人申告）。コードを書いた側とは別",
+      "usable_for_release": false,
+      "unusable_reason": "実行されたコードの版を実測していない",
+      "evidence_edited": "公開リポジトリのため、証拠本文の操作者の記載を役割名に置き換え、試験後の追記を簡潔にし、冒頭の説明に「実行されたコードの版は実測していない」と書いた。試験ログの本体・数値は変えていない。指紋は取り直した。"
+    }
+  ]
+}

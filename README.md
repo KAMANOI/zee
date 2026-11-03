@@ -126,7 +126,7 @@ HIGH 以外はすべて MEDIUM（G206・G207 は LOW）です。MEDIUM が1つ�
 
 `src/zee/` に MVP の実装があります。**既定では dry_run で動き、実際の遮断は行いません。** 資産プロファイルで `response_mode: auto` を明示し `dry_run: false` にしたときだけ、自動遮断（contain）が走ります。
 
-> **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも v0.13.0 の規則で確認）。**v0.13.0 以降に更新してください。**
+> **v0.12.0 以前で `cut_method: egress` を macOS・Windows でお使いの方へ（2026-10-15）** — v0.12.0 以前の外向き遮断は、macOS では規則を入れるアンカーが標準の `/etc/pf.conf` から参照されず、Windows では `netsh` が規則を受け付けず、**どちらも通信を止めていませんでした**（Windows は遮断を「失敗」と表示していました）。v0.13.0 で修正し、GitHub の仮想ランナー（macOS・英語版 Windows）で通信が止まって復旧で戻ることを確認しました（macOS は実機1台でも通信が止まって復旧で戻ることを確認・その実機試験で動いたコードの版は実測していません）。**v0.13.0 以降に更新してください。**
 
 > **外向き遮断と IPv6（v0.13.1・2026-10-16）** — v0.13.0 までは、iptables の経路（nft の無い Linux）と Windows の経路が IPv4 の規則だけを入れ、**IPv6 の外向き通信を止めていませんでした**（遮断の結果に `IPv6 NOT blocked` と出ていました）。v0.13.1 で、iptables の経路は同じバックエンドの ip6tables にも規則を入れ（入れられなければ遮断は「失敗」）、Windows は同じ規則に IPv6 の範囲を足しました。どちらの経路も、ループバック・リンクローカル（`fe80::/10`）・ULA（`fc00::/7`）・リンク内マルチキャスト（`ff02::/16`）以外の IPv6 を止めます。Linux（名前空間内の nft・iptables nf_tables 版・legacy 版）では IPv6 の通信が止まって復旧で戻ることを実測しました。**Windows は規則が入り読み直しで一致することまでを確認し、IPv6 の通信が止まることは未確認です**（ランナーに IPv6 の外向き経路が無いため）。**v0.13.1 以降（最新は v0.16.0）に更新してください。** **VPN・オーバーレイの注意**：Tailscale（`fd7a:115c:a1e0::/48`）・ZeroTier などのオーバーレイや VPN が、私用アドレス（IPv4 の RFC 1918）や ULA（`fc00::/7`）で遠くの相手につながっている場合、egress 遮断はそこへの通信を止めません（その宛先は「ローカル」として通すため）。そうした端末で確実に止めたい場合は `cut_method: full` を使ってください。なお IPv6 のリンクローカル・ULA は、iptables・Windows の経路では通し、nft・pf の経路では止めます（経路で扱いが違います）。
 
@@ -227,7 +227,7 @@ ZEE_RESTORE_TOKEN=<TOKEN> zee restore <asset_id>
 - **自前 webhook 受信器**（Cloudflare Worker / AWS Lambda / Vercel Edge Function 等）
 - **Slack / Discord / メール転送**は webhook 受信器の先に operator が組み立てる
 
-macOS では実機で動作を確認しています。テストスイートとスモークテストは CI（Ubuntu / macOS / Windows）で通っています。Linux・Windows の実機での連続稼働の検証は未実施です（詳細は [docs/verification/](./docs/verification/README.md)）。
+**検証の段：macOS は実機で実動作まで確認（実遮断と復旧・2026-10-15・プロジェクトの持ち主が操作）、Linux・Windows は仮想環境で確認。** この実機試験で動いたコードの版は実測していないため、特定の版の実機試験としては数えていません。 テストスイートとスモークテストは CI（Ubuntu / macOS / Windows）で通っています。Linux・Windows の実機での連続稼働の検証は未実施です（詳細は [docs/verification/](./docs/verification/README.md)）。
 
 ### 誤検知対策（プロセス allowlist は採用していません・正直に）
 
@@ -302,7 +302,7 @@ Zee は誠実に範囲を区切ります。
 - **権限分離は試作** — 試作を v0.14.0 に同梱（既定オフ・[privsep] を書いた時だけ有効）。作者の実機には未適用、確認は GitHub Actions の使い捨てランナーのみ。遮断部を root の常駐に分け、復旧・設定変更・停止に別端末の署名を求める構成です（[docs/design/privsep.md](./docs/design/privsep.md)、導入手順は [docs/maintenance/privsep_install.md](./docs/maintenance/privsep_install.md)）。`[privsep]` を書かなければ従来どおり同じユーザーで動きます
 - **イベントログは `decoy_ref`（asset_id#index）で記録** — v0.3 から、events.jsonl には絶対パスではなく `decoy_ref` を書きます。ログを読めた攻撃者が囮の位置を一覧化することはできなくなりました（対応関係は `assets.toml` 経由）
 - **限界がある** — 機械の速度で完全自動完結する相手や、ごく小さく具体的な秘密（単一の API キーなど）の保全は、Zee の範囲を超えます。Zee が時間を稼げる対象は「人間〜半自動の侵入後活動」（侵入が成功した後、攻撃者が偵察・横移動・データ持ち出しに進む段階）です
-- **検証の範囲** — 入口ゲートの判定ロジックは、合成検体による社内の再現試験とテストスイートで確認しています（自然文の言い換えによる指示すり込みは、未知の検体の盲検試験で検出できていません）。囮・封じ込めは、テストスイートと、隔離した macOS 環境での dry_run の実演（v0.10.1 付近の版で実施）で確認しています。専門家・第三者機関による独立評価は受けていません。実際の遮断（`dry_run: false`）の試験は、GitHub Actions の仮想ランナー（Linux はネットワーク名前空間の中、macOS、Windows は英語版のみ）と macOS 実機1台（MacBookPro17,1／macOS 26.6.2）で行い、いずれも通信が止まって復旧で戻ることを確認しました（2026-10-15）。**範囲：IPv4 は全経路で実測、IPv6 は Linux の名前空間で実測（v0.13.1。macOS・Windows のランナーは IPv6 の外向き経路が無く未測定）／新しい接続のみ（遮断前から開いていた接続は測っていません）／Windows は英語版の仮想ランナーのみで実機なし／Linux も仮想ランナーのみで実機なし／全面遮断（full）は Linux ランナーと macOS 実機1台のみ／macOS 実機では v0.13.0 の規則で、Zee 自身の復旧だけで pf の状態・ネットワークサービスが実行前と同一に戻ることも確認**。手順と結果は [docs/verification/real-cut.md](./docs/verification/real-cut.md)。結果と条件は [docs/verification/](./docs/verification/README.md) にあります。本番運用の前に、ご自身の環境でも確認してください
+- **検証の範囲** — 入口ゲートの判定ロジックは、合成検体による社内の再現試験とテストスイートで確認しています（自然文の言い換えによる指示すり込みは、未知の検体の盲検試験で検出できていません）。囮・封じ込めは、テストスイートと、隔離した macOS 環境での dry_run の実演（v0.10.1 付近の版で実施）で確認しています。専門家・第三者機関による独立評価は受けていません。実際の遮断（`dry_run: false`）の試験は、GitHub Actions の仮想ランナー（Linux はネットワーク名前空間の中、macOS、Windows は英語版のみ）と macOS 実機1台（MacBookPro17,1／macOS 26.6.2）で行い、いずれも通信が止まって復旧で戻ることを確認しました（2026-10-15）。**範囲：IPv4 は全経路で実測、IPv6 は Linux の名前空間で実測（v0.13.1。macOS・Windows のランナーは IPv6 の外向き経路が無く未測定）／新しい接続のみ（遮断前から開いていた接続は測っていません）／Windows は英語版の仮想ランナーのみで実機なし／Linux も仮想ランナーのみで実機なし／全面遮断（full）は Linux ランナーと macOS 実機1台のみ／macOS 実機では、Zee 自身の復旧だけで pf の状態・ネットワークサービスが実行前と同一に戻ることも確認（その実機試験で動いたコードの版は実測していません）**。手順と結果は [docs/verification/real-cut.md](./docs/verification/real-cut.md)。結果と条件は [docs/verification/](./docs/verification/README.md) にあります。本番運用の前に、ご自身の環境でも確認してください
 
 これは床であって天井ではありません。安全だと言う前に、失敗条件を先に書きました。
 

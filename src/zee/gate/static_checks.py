@@ -25,6 +25,8 @@ Flag codes:
           host's AI setup: register an outside MCP server, write into an
           AI-tool config file, declare an outside connection, start a
           browser with its sandbox off (instructions.py)
+    G230  code / command that switches off TLS certificate verification
+          (tlsverify.py)
     (G6xx denylist lives in denylist.py)
     G7xx  symlinks (G701 escapes the tree = HIGH, G702 in-tree = LOW)
     G91x  gaps: not inspected / unreadable (G910 too large, G911 unreadable;
@@ -44,7 +46,7 @@ import sys
 import unicodedata
 from pathlib import Path
 
-from . import agent_config, modelfiles, tampering, textfile
+from . import agent_config, modelfiles, tampering, textfile, tlsverify
 from .model import Flag, Severity
 
 # Suffixes that must NOT contain a binary executable signature.
@@ -545,4 +547,5 @@ def scan_tree(root: Path) -> list[Flag]:
     flags += agent_config.scan_tree(root, files)
     flags += tampering.scan_tree(root, files)
     flags += modelfiles.scan_tree(root, files)
+    flags += tlsverify.scan_tree(root, files)
     return flags

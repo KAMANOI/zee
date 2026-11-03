@@ -1,0 +1,33 @@
+name: Release Gate
+
+# タグ（配布物）は、実機で実動作まで確かめた記録が docs/security/release-verification.json に無ければ不合格にする。
+# タグ push の後に動くため、不合格でも公開済みのタグは取り消されない（公開を止める仕組みではない）。
+# 公開前に止めるには、タグを打つ前に手元で check を通す（docs/security/RELEASE_GATE.md）。
+# 公開READMEの「検証済み」表記も台帳と突き合わせる。記録の作り方は scripts/release-gate.mjs の先頭を参照。
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths: ["README*.md", "docs/**", "scripts/release-gate.mjs"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+      - run: node scripts/release-gate.mjs --selftest
+      # 公開文面: 「検証済み」「動作確認済み」は台帳に実機3段目の記録がある環境にだけ書ける
+      - run: node scripts/release-gate.mjs claims README.md README.en.md docs/index.html docs/verification/real-cut.md
+      # タグ push のときだけ: 出す物そのもの（タグ）の実動作の記録を要求する（公開後の検査。タグの公開自体は止めない）
+      - name: Gate the tagged artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/release-gate.mjs check --channel git-tag --artifact "$GITHUB_REF_NAME"

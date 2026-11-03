@@ -1,0 +1,217 @@
+# 実機(MacBookPro17,1 / macOS 26.6.2)での Zee の実遮断と復旧の記録（2026-10-15・v0.13.0 のタグ 7c70c9d の時期に実施。実行されたコードの版は実測していない＝この記録は特定の版の実機確認ではない）。出典: docs/verification/real-macos-20261015-233822 (origin/main に公開済みの同一ファイルの連結)
+
+=== summary.json
+{"mac": "MacBookPro17,1", "macos": "26.6.2",
+ "pf_status_before": "Disabled",
+ "after_zee_restore": {"pf_status_unchanged": true, "pf_main_rules_unchanged": true,
+                       "network_services_unchanged": true, "zee_anchors_empty": true},
+ "after_script_cleanup": {"pf_status_unchanged": true, "pf_main_rules_unchanged": true,
+                          "network_services_unchanged": true, "zee_anchors_empty": true},
+ "all_cut_checks_passed": true,
+ "exit_code": 0}
+
+=== egress.json
+{
+  "label": "macos-real",
+  "method": "egress",
+  "url": "https://www.apple.com/library/test/success.html",
+  "host": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "machine": "arm64",
+    "mac_ver": "26.6.2"
+  },
+  "started_at": "2026-10-15T14:38:22.500104+00:00",
+  "before": {
+    "reachable": true,
+    "detail": "HTTP 200"
+  },
+  "cut": {
+    "ok": true,
+    "detail": "pfctl anchor com.apple/zee-egress-cut loaded (new connections only: connections already open keep their pf state)",
+    "seconds": 0.05
+  },
+  "during": {
+    "reachable": false,
+    "detail": "URLError: <urlopen error timed out>"
+  },
+  "restore": {
+    "by": "finally",
+    "ok": true,
+    "detail": "darwin restore: pfctl com.apple/zee-egress-cut:ok, pfctl zee-egress-cut:ok, pf enable reference 11563860712516298238:ok; readback: no interface in the record (egress cut)"
+  },
+  "after": {
+    "reachable": true,
+    "detail": "HTTP 200"
+  },
+  "stopped": true,
+  "came_back": true,
+  "passed": true,
+  "finished_at": "2026-10-15T14:38:30.332607+00:00"
+}
+
+=== full.json
+{
+  "label": "macos-real",
+  "method": "full",
+  "url": "https://www.apple.com/library/test/success.html",
+  "host": {
+    "platform": "darwin",
+    "release": "25.6.0",
+    "machine": "arm64",
+    "mac_ver": "26.6.2"
+  },
+  "started_at": "2026-10-15T14:38:33.446534+00:00",
+  "before": {
+    "reachable": true,
+    "detail": "HTTP 200"
+  },
+  "cut": {
+    "ok": true,
+    "detail": "networksetup -setnetworkserviceenabled off: Wi-Fi:ok, Thunderbolt Bridge:ok, VPN (name withheld):ok",
+    "seconds": 0.2
+  },
+  "during": {
+    "reachable": false,
+    "detail": "URLError: <urlopen error [Errno 8] nodename nor servname provided, or not known>"
+  },
+  "restore": {
+    "by": "finally",
+    "ok": true,
+    "detail": "darwin restore: Wi-Fi:ok, Thunderbolt Bridge:ok, VPN (name withheld):ok, pfctl com.apple/zee-egress-cut:ok, pfctl zee-egress-cut:ok; readback: recorded targets enabled"
+  },
+  "after": {
+    "reachable": true,
+    "detail": "HTTP 200"
+  },
+  "stopped": true,
+  "came_back": true,
+  "passed": true,
+  "finished_at": "2026-10-15T14:38:43.859866+00:00"
+}
+
+=== pf-info.before.txt
+No ALTQ support in kernel
+ALTQ related functions disabled
+Status: Disabled for 0 days 01:19:30          Debug: Urgent
+
+State Table                          Total             Rate
+  current entries                        0               
+  searches                            6560            1.4/s
+  inserts                                0            0.0/s
+  removals                               0            0.0/s
+Counters
+  match                               3254            0.7/s
+  bad-offset                             0            0.0/s
+  fragment                               0            0.0/s
+  short                                  0            0.0/s
+  normalize                              0            0.0/s
+  memory                                 0            0.0/s
+  bad-timestamp                          0            0.0/s
+  congestion                             0            0.0/s
+  ip-option                              0            0.0/s
+  proto-cksum                            0            0.0/s
+  state-mismatch                         0            0.0/s
+  state-insert                           0            0.0/s
+  state-limit                            0            0.0/s
+  src-limit                              0            0.0/s
+  synproxy                               0            0.0/s
+  dummynet                               0            0.0/s
+  invalid-port                           0            0.0/s
+
+=== pf-info.after-zee.txt
+No ALTQ support in kernel
+ALTQ related functions disabled
+Status: Disabled for 0 days 00:00:18          Debug: Urgent
+
+State Table                          Total             Rate
+  current entries                        0               
+  searches                            6865          381.4/s
+  inserts                                0            0.0/s
+  removals                               0            0.0/s
+Counters
+  match                               3467          192.6/s
+  bad-offset                             0            0.0/s
+  fragment                               0            0.0/s
+  short                                  0            0.0/s
+  normalize                              0            0.0/s
+  memory                                 0            0.0/s
+  bad-timestamp                          0            0.0/s
+  congestion                             0            0.0/s
+  ip-option                              0            0.0/s
+  proto-cksum                            0            0.0/s
+  state-mismatch                         0            0.0/s
+  state-insert                           0            0.0/s
+  state-limit                            0            0.0/s
+  src-limit                              0            0.0/s
+  synproxy                               0            0.0/s
+  dummynet                               0            0.0/s
+  invalid-port                           0            0.0/s
+
+=== pf-info.after.txt
+No ALTQ support in kernel
+ALTQ related functions disabled
+Status: Disabled for 0 days 00:00:19          Debug: Urgent
+
+State Table                          Total             Rate
+  current entries                        0               
+  searches                            6865          361.3/s
+  inserts                                0            0.0/s
+  removals                               0            0.0/s
+Counters
+  match                               3467          182.5/s
+  bad-offset                             0            0.0/s
+  fragment                               0            0.0/s
+  short                                  0            0.0/s
+  normalize                              0            0.0/s
+  memory                                 0            0.0/s
+  bad-timestamp                          0            0.0/s
+  congestion                             0            0.0/s
+  ip-option                              0            0.0/s
+  proto-cksum                            0            0.0/s
+  state-mismatch                         0            0.0/s
+  state-insert                           0            0.0/s
+  state-limit                            0            0.0/s
+  src-limit                              0            0.0/s
+  synproxy                               0            0.0/s
+  dummynet                               0            0.0/s
+  invalid-port                           0            0.0/s
+
+=== pf-rules.before.txt
+No ALTQ support in kernel
+ALTQ related functions disabled
+scrub-anchor "com.apple/*" all fragment reassemble
+anchor "com.apple/*" all
+
+=== pf-rules.after-zee.txt
+No ALTQ support in kernel
+ALTQ related functions disabled
+scrub-anchor "com.apple/*" all fragment reassemble
+anchor "com.apple/*" all
+
+=== services.before.txt
+An asterisk (*) denotes that a network service is disabled.
+Wi-Fi
+Thunderbolt Bridge
+VPN (name withheld)
+
+=== services.after-zee.txt
+An asterisk (*) denotes that a network service is disabled.
+Wi-Fi
+Thunderbolt Bridge
+VPN (name withheld)
+
+=== services.after.txt
+An asterisk (*) denotes that a network service is disabled.
+Wi-Fi
+Thunderbolt Bridge
+VPN (name withheld)
+
+=== zee-anchors.after-zee.txt
+
+
+=== 誰が操作したか（2026-10-28 追記）
+この実機試験（2026-10-15 23:38 JST 開始）は、プロジェクトの持ち主が実機で操作した（本人申告）。
+コードを書いた側と、実機で走らせた側は別。
+`scripts/verify-real-macos.sh` は root 権限が無いと exit 2 で止まるが、これは root であることを確かめるだけで、人が操作したことの証明ではない。
+この追記は試験の後に書いた。試験そのものの日時・内容・数値は上の記録のとおりで、変えていない。
