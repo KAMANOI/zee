@@ -379,4 +379,5 @@ Zee は無料です。もし役に立ったら、GitHub Sponsors からの支援
 - Zee は **万能ではありません** — 侵入そのものを防ぐものでも、すべての攻撃を検知できるものでもありません
 - 機械速度の攻撃能力は進化を続けます。新世代モデルが広く使えるようになる局面では、**Zee 自体の脆弱性チェックとパッチ適用が必要** になります
 - Zee は入口防御・修正運用を **置き換えるものではなく、補完する一層** です
+
 Related research and services by HDR (Human Driven Reality): https://hdr-ai.com/#research
